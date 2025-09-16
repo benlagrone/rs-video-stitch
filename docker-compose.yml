@@ -4,6 +4,8 @@ services:
     build: ./render-api
     image: render-api:latest
     container_name: render-api
+    networks:
+      - fortress-phronesis-net
     environment:
       - RENDER_STORAGE=/data
       - DB_URL=sqlite:////data/db.sqlite3
@@ -18,7 +20,7 @@ services:
     volumes:
       - ./data:/data
     ports:
-      - "8080:8080"
+      - "8082:8080"
     restart: unless-stopped
 
   render-worker:
@@ -26,6 +28,8 @@ services:
     container_name: render-worker
     entrypoint: ["/usr/bin/tini","--"]
     command: ["python","-m","app.worker"]
+    networks:
+      - fortress-phronesis-net
     environment:
       - RENDER_STORAGE=/data
       - DB_URL=sqlite:////data/db.sqlite3
@@ -35,3 +39,7 @@ services:
     depends_on:
       - render-api
     restart: unless-stopped
+
+networks:
+  fortress-phronesis-net:
+    external: true
