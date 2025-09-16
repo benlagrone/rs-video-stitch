@@ -1,0 +1,37 @@
+version: "3.9"
+services:
+  render-api:
+    build: ./render-api
+    image: render-api:latest
+    container_name: render-api
+    environment:
+      - RENDER_STORAGE=/data
+      - DB_URL=sqlite:////data/db.sqlite3
+      - AUTH_TOKEN=${AUTH_TOKEN:-change-me}
+      - ALLOW_ORIGINS=${ALLOW_ORIGINS:-http://localhost:5173}
+      - DEFAULT_FPS=30
+      - DEFAULT_MIN_SHOT=2.5
+      - DEFAULT_MAX_SHOT=8.0
+      - DEFAULT_XFADE=0.5
+      - DEFAULT_CRF=18
+      - DEFAULT_PRESET=medium
+    volumes:
+      - ./data:/data
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  render-worker:
+    image: render-api:latest
+    container_name: render-worker
+    entrypoint: ["/usr/bin/tini","--"]
+    command: ["python","-m","app.worker"]
+    environment:
+      - RENDER_STORAGE=/data
+      - DB_URL=sqlite:////data/db.sqlite3
+      - AUTH_TOKEN=${AUTH_TOKEN:-change-me}
+    volumes:
+      - ./data:/data
+    depends_on:
+      - render-api
+    restart: unless-stopped
