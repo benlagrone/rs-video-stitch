@@ -272,3 +272,9 @@ curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/v1/projects/$PID/outputs/video
 ## License
 
 This repository currently has no explicit license. Add one if you plan to distribute or share the project.
+ download and check:
+ scp -r master-benjamin@192.168.86.23:~/Videos/projects/p_9642-meadowglen-ln-houston-tx-77063-3259638/ \
+    ~/Downloads/p_9642-meadowglen-ln-houston-tx-77063-3259638
+
+    scp -r master-benjamin@192.168.86.23:/home/master-benjamin/Projects/rs-video-stitch/data/projects/p_9642-meadowglen-ln-houston-tx-77063-3259638/ \
+    ~/Downloads/p_9642-meadowglen-ln-houston-tx-77063-3259638/
