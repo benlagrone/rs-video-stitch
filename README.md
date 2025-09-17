@@ -76,15 +76,19 @@ Docker Compose reads values from a local `.env` file automatically. Generate a r
 
 ```bash
 TOKEN=$(openssl rand -hex 32)
-printf "AUTH_TOKEN=%s\n" "$TOKEN" > .env
-echo "Wrote AUTH_TOKEN to .env (value: $TOKEN)"
+cat > .env <<EOT
+AUTH_TOKEN=${TOKEN}
+XTTS_API_URL=http://xtts:5002
+XTTS_LANGUAGE=en
+EOT
+echo "Wrote .env (AUTH_TOKEN=${TOKEN})"
 ```
 
-Keep `.env` out of version control (`echo '.env' >> .gitignore`) and share the token with any client that calls the API.
+Edit the file afterwards if you want to pin a different xTTS URL (for example `http://192.168.86.23:5002`). Keep `.env` out of version control (`echo '.env' >> .gitignore`) and share the token with any client that calls the API.
 
 #### Optional helper script
 
-Drop this script into the project root (for example `scripts/make-env.sh`) to generate `.env` with sensible defaults in one step:
+Drop this script into the project root (for example `scripts/make-env.sh`) to regenerate `.env` with sensible defaults. It overwrites any existing `.env`, so back up first if needed:
 
 ```bash
 mkdir -p scripts
@@ -98,8 +102,6 @@ XTTS_LANG=${3:-${XTTS_LANGUAGE:-en}}
 
 cat > .env <<EOT
 AUTH_TOKEN=${TOKEN}
-RENDER_STORAGE=/videos
-DB_URL=sqlite:////videos/db.sqlite3
 XTTS_API_URL=${XTTS_URL}
 XTTS_LANGUAGE=${XTTS_LANG}
 EOT
@@ -110,7 +112,7 @@ SH
 chmod +x scripts/make-env.sh
 ```
 
-Then run `./scripts/make-env.sh` (optionally passing `AUTH_TOKEN`, `XTTS_API_URL`, and `XTTS_LANGUAGE` as the first three arguments) whenever you need to recreate the `.env` file.
+Then run `./scripts/make-env.sh [AUTH_TOKEN] [XTTS_API_URL] [XTTS_LANGUAGE]` whenever you need to recreate the `.env` file. For example, `./scripts/make-env.sh abc123 http://192.168.86.23:5002 en` will mirror the sample `.env` you shared.
 
 ### Optional xTTS Voice Synthesis
 
