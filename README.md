@@ -59,6 +59,18 @@ Mounted host directory `./data` is used as `/data` inside containers:
 | `DEFAULT_CRF` | `18` | Default H.264 CRF quality. |
 | `DEFAULT_PRESET` | `medium` | Default encoder preset. |
 
+### Generate `.env` with AUTH_TOKEN
+
+Docker Compose reads values from a local `.env` file automatically. Generate a random bearer token and save it before launching the stack:
+
+```bash
+TOKEN=$(openssl rand -hex 32)
+printf "AUTH_TOKEN=%s\n" "$TOKEN" > .env
+echo "Wrote AUTH_TOKEN to .env (value: $TOKEN)"
+```
+
+Keep `.env` out of version control (`echo '.env' >> .gitignore`) and share the token with any client that calls the API.
+
 ## Running with Docker Compose
 
 1. Ensure Docker Desktop or compatible engine is available.
