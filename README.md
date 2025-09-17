@@ -66,10 +66,13 @@ Mounted host directory `./data` is used as `/data` inside containers:
 3. Build and launch:
 
    ```bash
+   docker compose down
    docker compose up -d --build
    ```
 
-4. API is available on `http://localhost:8080` by default. Worker container shares the same image and consumes render jobs automatically.
+   Bringing the stack down first ensures any containers bound to the old port are removed before relaunch.
+
+4. API is available on `http://192.168.86.23:8082` by default. Worker container shares the same image and consumes render jobs automatically. Interactive docs live at `http://192.168.86.23:8082/docs`.
 
 To stop the stack:
 
@@ -122,7 +125,7 @@ Replace placeholders with your host/IP, project ID, token, and asset paths.
 ```bash
 TOKEN=change-me
 PID=p_example
-BASE=http://localhost:8080
+BASE=http://192.168.86.23:8082
 
 curl -sS -X PUT "$BASE/v1/projects/$PID/scenes" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \

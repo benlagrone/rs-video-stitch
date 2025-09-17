@@ -10,7 +10,7 @@ class Scene(BaseModel):
     title: str
     description: Optional[str] = None
     VO: str = Field(alias="VO")
-    images: conlist(str, min_items=1, max_items=3)
+    images: conlist(str, min_length=1, max_length=3)
 
     class Config:
         populate_by_name = True
