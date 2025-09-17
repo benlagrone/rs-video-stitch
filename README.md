@@ -1,12 +1,12 @@
 # Render API
 
-Headless FastAPI service plus worker that renders narrated slideshows into 1080p MP4 files using FFmpeg. The API accepts scene specifications, assets, and render options, queues jobs in SQLite, and a companion worker container pulls jobs and produces artifacts on a shared `/data` volume.
+Headless FastAPI service plus worker that renders narrated slideshows into 1080p MP4 files using FFmpeg. The API accepts scene specifications, assets, and render options, queues jobs in SQLite, and a companion worker container pulls jobs and produces artifacts on a shared `/videos` volume.
 
 ## Architecture
 
 - **render-api service** – FastAPI app handling authentication, project + asset management, render job creation, job status, and artifact streaming.
 - **render-worker service** – Python worker loop that polls queued jobs, runs the FFmpeg pipeline, emits progress/logs, and records artifacts.
-- **Shared storage** – Docker volume mounted at `/data` inside both containers for SQLite, logs, input, work, and output media.
+- **Shared storage** – Docker volume mounted at `/videos` inside both containers for SQLite, logs, input, work, and output media.
 
 ```
 render-api/
@@ -17,7 +17,7 @@ render-api/
     models.py      # Project/Job/Artifact tables
     renderer.py    # FFmpeg-based render pipeline
     schemas.py     # Pydantic request contracts
-    storage.py     # Helpers for /data layout
+    storage.py     # Helpers for /videos layout
     worker.py      # Polls jobs and renders outputs
   Dockerfile
 
@@ -27,10 +27,12 @@ README.md
 
 ## Storage Layout
 
-Mounted host directory `./data` is used as `/data` inside containers:
+Mounted host directory `~/Videos` is mapped to `/videos` inside both containers:
 
 ```
-/data/
+~/Videos/
+  db.sqlite3
+  logs/
   projects/<projectId>/
     input/
       scenes.json
@@ -40,16 +42,22 @@ Mounted host directory `./data` is used as `/data` inside containers:
     output/
       video.mp4
       scene_00.mp4 ...
-  db.sqlite3
-  logs/
+```
+
+Rendered videos are written to `~/Videos/projects/<projectId>/output/` on the host. Final MP4s arrive alongside any per-scene intermediates the worker leaves behind for debugging.
+
+Create the base directories before starting the stack:
+
+```bash
+mkdir -p ~/Videos/{logs,projects}
 ```
 
 ## Environment Variables
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RENDER_STORAGE` | `/data` | Root for shared storage volume. |
-| `DB_URL` | `sqlite:////data/db.sqlite3` | SQLAlchemy connection string. |
+| `RENDER_STORAGE` | `/videos` | Root for shared storage volume inside the containers (bound to `~/Videos`). |
+| `DB_URL` | `sqlite:////videos/db.sqlite3` | SQLAlchemy connection string. |
 | `AUTH_TOKEN` | `change-me` | Bearer token required by all API routes. |
 | `ALLOW_ORIGINS` | `http://localhost:5173` | Comma-delimited origins allowed by CORS. |
 | `DEFAULT_FPS` | `30` | Default frames per second if request omits it. |
@@ -58,6 +66,9 @@ Mounted host directory `./data` is used as `/data` inside containers:
 | `DEFAULT_XFADE` | `0.5` | Default cross-fade length in seconds. |
 | `DEFAULT_CRF` | `18` | Default H.264 CRF quality. |
 | `DEFAULT_PRESET` | `medium` | Default encoder preset. |
+| `XTTS_API_URL` | — | Base URL for xTTS HTTP endpoint (e.g. `http://xtts:5002`). |
+| `XTTS_API_KEY` | — | Optional bearer token for the xTTS service. |
+| `XTTS_LANGUAGE` | — | Optional language code passed to xTTS (default depends on service). |
 
 ### Generate `.env` with AUTH_TOKEN
 
@@ -71,10 +82,17 @@ echo "Wrote AUTH_TOKEN to .env (value: $TOKEN)"
 
 Keep `.env` out of version control (`echo '.env' >> .gitignore`) and share the token with any client that calls the API.
 
+### Optional xTTS Voice Synthesis
+
+- Set `XTTS_API_URL` (and optionally `XTTS_API_KEY`, `XTTS_LANGUAGE`) to point at your xTTS server.
+- Provide a `tts` value in `renderOptions` (for example the voice ID exposed by your service). Optionally include `ttsLanguage` if you need per-job overrides.
+- When a scene lacks a matching audio file under `voiceDir`, the worker will call xTTS with the scene’s script and drop the generated WAV into the work directory.
+- If xTTS is not configured or the request fails, the render job aborts so you know narration is missing.
+
 ## Running with Docker Compose
 
 1. Ensure Docker Desktop or compatible engine is available.
-2. Place your project inputs under `data/projects/<projectId>/input/` or use the API.
+2. Place your project inputs under `~/Videos/projects/<projectId>/input/` (create the directories if needed) or use the API to upload them.
 3. Build and launch:
 
    ```bash
@@ -91,6 +109,90 @@ To stop the stack:
 ```bash
 docker compose down
 ```
+
+## Companion xTTS Service (Optional)
+
+If you want the renderer to synthesize narration automatically, stand up an xTTS server on the same Docker network and point `XTTS_API_URL` at it.
+
+### 1. Scaffold a new project
+
+```bash
+mkdir -p ~/Projects/xtts-service
+cd ~/Projects/xtts-service
+```
+
+Create `Dockerfile`:
+
+```Dockerfile
+FROM python:3.11-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg git \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir TTS==0.22.0
+
+ENV MODEL_NAME=tts_models/multilingual/multi-dataset/xtts_v2
+ENV TTS_PORT=5002
+
+EXPOSE ${TTS_PORT}
+
+CMD ["tts-server", "--model_name", "${MODEL_NAME}", "--port", "${TTS_PORT}", "--use_cuda", "0", "--host", "0.0.0.0"]
+```
+
+Create `docker-compose.yml`:
+
+```yaml
+version: "3.9"
+services:
+  xtts:
+    build: .
+    image: local-xtts:latest
+    container_name: xtts
+    environment:
+      - MODEL_NAME=${MODEL_NAME:-tts_models/multilingual/multi-dataset/xtts_v2}
+      - TTS_PORT=${TTS_PORT:-5002}
+    volumes:
+      - ./cache:/root/.local/share/tts
+    networks:
+      - fortress-phronesis-net
+    restart: unless-stopped
+    ports:
+      - "5002:5002"
+
+networks:
+  fortress-phronesis-net:
+    external: true
+```
+
+First boot downloads the model into `./cache`, so keep that directory around for subsequent runs.
+
+### 2. Launch xTTS
+
+```bash
+docker compose up -d --build
+```
+
+Once healthy, the API lives at `http://192.168.86.23:5002/api/tts` (adjust the host/port if you expose it differently).
+
+### 3. Point the render stack at xTTS
+
+Back in your render project directory:
+
+```bash
+echo "XTTS_API_URL=http://xtts:5002" >> .env
+# optional overrides
+echo "XTTS_LANGUAGE=en" >> .env
+```
+
+Redeploy the render stack so it reads the updated `.env`:
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+Any render job that supplies `"tts": "${MODEL_NAME}"` (or another speaker ID supported by your server) now triggers automatic narration when no matching voiceover file exists.
 
 ## API Endpoints
 
@@ -119,6 +221,7 @@ All endpoints require `Authorization: Bearer <AUTH_TOKEN>`.
     "crf": 18,
     "preset": "medium",
     "tts": null,
+    "ttsLanguage": null,
     "voiceDir": "voiceovers",
     "music": null,
     "ducking": false
@@ -128,7 +231,7 @@ All endpoints require `Authorization: Bearer <AUTH_TOKEN>`.
 
 ## Job Lifecycle
 
-`QUEUED → RUNNING → (SUCCEEDED | FAILED | CANCELLED)` with stages typically stepping through `VALIDATE`, `AUDIO_PREP`, `SCENE_BUILD[n]`, `CONCAT`, `FINALIZE`. The worker writes progress updates into the database and streams detailed logs to `/data/logs/<jobId>.log`, which the API tails for the status endpoint.
+`QUEUED → RUNNING → (SUCCEEDED | FAILED | CANCELLED)` with stages typically stepping through `VALIDATE`, `AUDIO_PREP`, `SCENE_BUILD[n]`, `CONCAT`, `FINALIZE`. The worker writes progress updates into the database and streams detailed logs to `/videos/logs/<jobId>.log`, which the API tails for the status endpoint.
 
 ## Smoke Test
 
@@ -163,7 +266,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/v1/projects/$PID/outputs/video
 
 - The Docker image installs `ffmpeg`, `jq`, and `tini`; additional build deps can be added in `render-api/Dockerfile` if needed.
 - `render-api/app/renderer.py` is the FFmpeg orchestration point; extend it for music beds, ducking, or additional effects.
-- Logs and intermediates remain in `/data/projects/<projectId>/work` on failure for debugging. Successful runs leave outputs in `/output` and trace logs in `/data/logs`.
+- Logs and intermediates remain in `/videos/projects/<projectId>/work` on failure for debugging. Successful runs leave outputs in `/videos/projects/<projectId>/output` and trace logs in `/videos/logs`.
 - Rotate `AUTH_TOKEN`, restrict network exposure, and front with a reverse proxy if deploying beyond your LAN.
 
 ## License

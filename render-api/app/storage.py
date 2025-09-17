@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Iterable, List
 
-ROOT = Path(os.getenv("RENDER_STORAGE", "/data"))
+ROOT = Path(os.getenv("RENDER_STORAGE", "/videos"))
 
 
 def proj_root(pid: str) -> Path:

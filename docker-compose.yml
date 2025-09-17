@@ -7,8 +7,8 @@ services:
     networks:
       - fortress-phronesis-net
     environment:
-      - RENDER_STORAGE=/data
-      - DB_URL=sqlite:////data/db.sqlite3
+      - RENDER_STORAGE=/videos
+      - DB_URL=sqlite:////videos/db.sqlite3
       - AUTH_TOKEN=${AUTH_TOKEN:-change-me}
       - ALLOW_ORIGINS=${ALLOW_ORIGINS:-http://localhost:5173}
       - DEFAULT_FPS=30
@@ -18,7 +18,7 @@ services:
       - DEFAULT_CRF=18
       - DEFAULT_PRESET=medium
     volumes:
-      - ./data:/data
+      - ~/Videos:/videos
     ports:
       - "8082:8080"
     restart: unless-stopped
@@ -31,11 +31,11 @@ services:
     networks:
       - fortress-phronesis-net
     environment:
-      - RENDER_STORAGE=/data
-      - DB_URL=sqlite:////data/db.sqlite3
+      - RENDER_STORAGE=/videos
+      - DB_URL=sqlite:////videos/db.sqlite3
       - AUTH_TOKEN=${AUTH_TOKEN:-change-me}
     volumes:
-      - ./data:/data
+      - ~/Videos:/videos
     depends_on:
       - render-api
     restart: unless-stopped

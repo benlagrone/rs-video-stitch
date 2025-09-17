@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
-DB_URL = os.getenv("DB_URL", "sqlite:////data/db.sqlite3")
+DB_URL = os.getenv("DB_URL", "sqlite:////videos/db.sqlite3")
 engine = create_engine(DB_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, future=True, expire_on_commit=False)
 Base = declarative_base()

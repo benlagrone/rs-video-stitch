@@ -9,8 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app /srv/app
 ENV PYTHONUNBUFFERED=1
-ENV RENDER_STORAGE=/data
-ENV DB_URL=sqlite:////data/db.sqlite3
+ENV RENDER_STORAGE=/videos
+ENV DB_URL=sqlite:////videos/db.sqlite3
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8080"]

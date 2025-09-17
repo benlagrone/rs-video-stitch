@@ -14,7 +14,7 @@ from app.models import Artifact, Job
 from app.renderer import render_project
 from app.storage import job_log_path
 
-STORAGE_ROOT = Path(os.getenv("RENDER_STORAGE", "/data"))
+STORAGE_ROOT = Path(os.getenv("RENDER_STORAGE", "/videos"))
 POLL_INTERVAL = 1.0
 
 

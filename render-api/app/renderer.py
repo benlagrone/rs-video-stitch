@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from app.tts import TTSConfigurationError, synthesize_xtts
+
 DEFAULT_PRESET = os.getenv("DEFAULT_PRESET", "medium")
 DEFAULT_CRF = int(os.getenv("DEFAULT_CRF", "18"))
 DEFAULT_FPS = int(os.getenv("DEFAULT_FPS", "30"))
@@ -98,6 +100,8 @@ def render_project(
     crf = str(opts.get("crf", DEFAULT_CRF))
     xfade = float(opts.get("xfade", DEFAULT_XFADE))
     voice_dir = opts.get("voiceDir")
+    tts_voice = opts.get("tts")
+    tts_language = opts.get("ttsLanguage")
 
     update("VALIDATE", 0.05)
 
@@ -123,21 +127,35 @@ def render_project(
         audio_wav = work_dir / f"scene_{idx}.wav"
         update("AUDIO_PREP", 0.1 + index * 0.02)
         if voice_path is None:
-            duration = estimate_seconds(voice_text)
-            run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "anullsrc=r=48000:cl=stereo",
-                    "-t",
-                    f"{duration:.3f}",
-                    str(audio_wav),
-                ],
-                log,
-            )
+            if tts_voice and voice_text.strip():
+                try:
+                    synthesize_xtts(
+                        voice_text,
+                        audio_wav,
+                        voice=tts_voice,
+                        language=tts_language,
+                        log=log,
+                    )
+                except TTSConfigurationError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    raise RuntimeError(f"xTTS synthesis failed for scene {idx}: {exc}") from exc
+            else:
+                duration = estimate_seconds(voice_text)
+                run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "anullsrc=r=48000:cl=stereo",
+                        "-t",
+                        f"{duration:.3f}",
+                        str(audio_wav),
+                    ],
+                    log,
+                )
         else:
             run(
                 [

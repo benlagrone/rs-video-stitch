@@ -29,6 +29,7 @@ class RenderOptions(BaseModel):
     crf: int = Field(default=18, ge=0, le=51)
     preset: str = Field(default="medium")
     tts: Optional[str] = None
+    ttsLanguage: Optional[str] = None
     voiceDir: Optional[str] = None
     music: Optional[str] = None
     ducking: bool = Field(default=False)
