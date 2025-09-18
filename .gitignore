@@ -1,0 +1,10 @@
+venv/   
+.env
+render-api/cache/
+render-api/videos/
+render-api/db.sqlite3
+render-api/logs/
+render-api/venv/
+render-api/.env
+render-api/app/cache/
+render-api/app/__pycache/
