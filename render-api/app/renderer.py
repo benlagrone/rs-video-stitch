@@ -220,6 +220,19 @@ def render_project(
                 ],
                 log,
             )
+            _log(
+                log,
+                (
+                    "Scene {idx}: added segment {name} from {image} "
+                    "({seconds:.3f}s, {frames} frames)"
+                ).format(
+                    idx=idx,
+                    name=segment.name,
+                    image=image_name,
+                    seconds=per_image,
+                    frames=frames,
+                ),
+            )
             segment_paths.append(segment)
 
         update(f"SCENE_BUILD[{idx}]", 0.2 + (index / max(1, len(scenes))) * 0.6)
