@@ -6,12 +6,39 @@ import shutil
 from pathlib import Path
 from typing import Iterable, List
 
+
+def _prepare_storage_dir(path: Path) -> Path | None:
+    """Ensure *path* exists and is writable, returning it on success."""
+
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        if not path.is_dir():
+            return None
+        probe = path / ".write-test"
+        probe.touch(exist_ok=True)
+        probe.unlink(missing_ok=True)
+    except OSError:
+        return None
+
+    return path
+
+
+
 def resolve_storage_root() -> Path:
     """Return a writable storage root for local or container execution."""
 
     env_root = os.getenv("RENDER_STORAGE")
     if env_root:
-        return Path(env_root).expanduser()
+
+        expanded = Path(env_root).expanduser().resolve()
+        prepared = _prepare_storage_dir(expanded)
+        if prepared is None:
+            raise RuntimeError(
+                f"RENDER_STORAGE path '{expanded}' is not writable. "
+                "Set it to a directory the process can create and modify."
+            )
+        return prepared
+
 
     candidates = [
         Path.home() / "Videos",
@@ -20,14 +47,16 @@ def resolve_storage_root() -> Path:
     ]
 
     for candidate in candidates:
-        try:
-            candidate.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            continue
-        return candidate
 
-    # Final fallback if none of the candidates could be created.
-    return candidates[0]
+        prepared = _prepare_storage_dir(candidate)
+        if prepared is not None:
+            return prepared
+
+    raise RuntimeError(
+        "Unable to determine a writable storage directory. "
+        "Set the RENDER_STORAGE environment variable to a writable path."
+    )
+
 
 
 ROOT = resolve_storage_root()

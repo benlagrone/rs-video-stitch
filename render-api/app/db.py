@@ -30,7 +30,14 @@ def _ensure_sqlite_directory(url: str) -> None:
     db_path = Path(parsed.database).expanduser()
     if not db_path.is_absolute():
         db_path = db_path.resolve()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Unable to create SQLite directory '{db_path.parent}' for DB_URL '{url}': {exc}"
+        ) from exc
+
 
 
 _ensure_sqlite_directory(DB_URL)
