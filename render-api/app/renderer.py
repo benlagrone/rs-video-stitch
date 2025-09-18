@@ -222,24 +222,24 @@ def render_project(
             )
             segment_paths.append(segment)
 
-        concat_list = temp_dir / "list.txt"
-        concat_list.write_text(
-            "".join(f"file '{path.as_posix()}'\n" for path in segment_paths),
-            encoding="utf-8",
-        )
-
         update(f"SCENE_BUILD[{idx}]", 0.2 + (index / max(1, len(scenes))) * 0.6)
         silent_scene = temp_dir / "scene_silent.mp4"
+        concat_inputs: List[str] = []
+        for seg in segment_paths:
+            concat_inputs.extend(["-i", str(seg)])
+
+        concat_filter = "".join(f"[{i}:v]" for i in range(len(segment_paths)))
+        concat_filter += f"concat=n={len(segment_paths)}:v=1:a=0[v]"
+
         run(
             [
                 "ffmpeg",
                 "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(concat_list),
+                *concat_inputs,
+                "-filter_complex",
+                concat_filter,
+                "-map",
+                "[v]",
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -275,36 +275,40 @@ def render_project(
         )
         scene_files.append(scene_file)
 
-    master_list = work_dir / "master.txt"
-    master_list.write_text(
-        "".join(f"file '{path.as_posix()}'\n" for path in scene_files),
-        encoding="utf-8",
-    )
-
     update("CONCAT", 0.9)
     final_path = output_dir / output_name
+    concat_inputs: List[str] = []
+    for scene_file in scene_files:
+        concat_inputs.extend(["-i", str(scene_file)])
+
+    concat_filter = "".join(f"[{i}:v][{i}:a]" for i in range(len(scene_files)))
+    concat_filter += f"concat=n={len(scene_files)}:v=1:a=1[v][a]"
+
     run(
         [
             "ffmpeg",
             "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(master_list),
+            *concat_inputs,
+            "-filter_complex",
+            concat_filter,
+            "-map",
+            "[v]",
+            "-map",
+            "[a]",
             "-c:v",
             "libx264",
             "-preset",
             preset,
             "-crf",
             crf,
+            "-pix_fmt",
+            "yuv420p",
             "-c:a",
             "aac",
             "-b:a",
             "192k",
-            "-pix_fmt",
-            "yuv420p",
+            "-movflags",
+            "+faststart",
             str(final_path),
         ],
         log,
