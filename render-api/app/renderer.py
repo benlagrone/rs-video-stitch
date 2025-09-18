@@ -242,6 +242,18 @@ def render_project(
         for seg in segment_paths:
             escaped = str(seg.resolve()).replace("'", "'\\''")
             concat_lines.append(f"file '{escaped}'")
+            duration = ffprobe_duration(seg)
+            _log(
+                log,
+                (
+                    "Scene {idx}: appending {name} to concat list "
+                    "({seconds:.3f}s)"
+                ).format(
+                    idx=idx,
+                    name=seg.name,
+                    seconds=duration,
+                ),
+            )
         concat_list.write_text("\n".join(concat_lines), encoding="utf-8")
 
         run(

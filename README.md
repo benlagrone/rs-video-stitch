@@ -142,6 +142,13 @@ To stop the stack:
 docker compose down
 ```
 
+### Streaming live logs while using Docker
+
+- Follow the worker in real time with `docker compose logs -f render-worker` (swap `render-worker` for `render-api` to inspect the API service).
+- Inspect a specific render job’s file from inside the container with `docker compose exec render-worker tail -f /videos/logs/<jobId>.log`.
+- Because `/videos` is bind-mounted to `~/Videos` on the host, you can also run `tail -f ~/Videos/logs/<jobId>.log` without entering the container.
+
+
 ## Running Locally Without Docker
 
 You can develop against the API and worker directly on your laptop without Docker. The steps below assume macOS/Linux, but they translate to Windows (PowerShell) with minor path syntax tweaks.
@@ -228,6 +235,12 @@ python -m app.worker
 ```
 
 Use the same environment variables as the API process so both processes share the SQLite database and storage paths. The worker streams logs to `~/Videos/logs/<jobId>.log` as it renders.
+
+Tail the file for live updates while rendering:
+
+```bash
+tail -f ~/Videos/logs/<jobId>.log
+```
 
 ### 7. Queue a test job (optional)
 
