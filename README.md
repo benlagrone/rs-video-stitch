@@ -142,6 +142,125 @@ To stop the stack:
 docker compose down
 ```
 
+## Running Locally Without Docker
+
+You can develop against the API and worker directly on your laptop without Docker. The steps below assume macOS/Linux, but they translate to Windows (PowerShell) with minor path syntax tweaks.
+
+### Prerequisites
+
+- Python **3.11** (matches the Docker image). Verify with `python3 --version`.
+- `ffmpeg` installed and available on your `PATH`. On macOS: `brew install ffmpeg`. On Ubuntu/Debian: `sudo apt install ffmpeg`.
+- A working directory on disk that can hold render inputs/outputs. The examples below use `~/Videos` to mirror the Docker volume.
+
+### 1. Check out the repository
+
+Clone or pull the latest code on your development machine and `cd` into the repo root:
+
+```bash
+git clone https://github.com/<your-org>/rs-video-stitch.git
+cd rs-video-stitch
+```
+
+If you already have the repo, just `git pull` and `cd` into it.
+
+### 2. Create the storage layout
+
+The services expect the same directory hierarchy Docker would mount at `/videos`.
+
+```bash
+mkdir -p ~/Videos/{logs,projects}
+```
+
+Each project will create its own subdirectories under `~/Videos/projects/<projectId>/` as it runs.
+
+### 3. Create and activate a virtual environment
+
+All Python code lives under `render-api/`. Create a virtual environment there so `PYTHONPATH` lines up with module imports.
+
+```bash
+cd render-api
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r app/requirements.txt
+```
+
+You should now see `(.venv)` in your shell prompt. Keep this virtual environment active in any terminal that runs the API or worker.
+
+### 4. Configure environment variables
+
+Export the same settings the Docker containers rely on. Adjust the paths/tokens to suit your workstation.
+
+```bash
+export RENDER_STORAGE=${RENDER_STORAGE:-$HOME/Videos}
+export DB_URL=${DB_URL:-sqlite:////$RENDER_STORAGE/db.sqlite3}
+export AUTH_TOKEN=${AUTH_TOKEN:-change-me}
+export PYTHONPATH=$(pwd)
+export ALLOW_ORIGINS=${ALLOW_ORIGINS:-http://localhost:5173}
+```
+
+Tips:
+
+- Keep these exports in `render-api/.env.local` (or similar) and `source` it whenever you open a new terminal.
+- Point `AUTH_TOKEN` to the same value clients use when authenticating.
+- `PYTHONPATH=$(pwd)` must reference the `render-api` directory so modules like `app.renderer` resolve correctly.
+
+### 5. Start the FastAPI server
+
+With the virtual environment active and variables exported:
+
+```bash
+uvicorn app.api:app --host 0.0.0.0 --port 8082 --reload
+```
+
+`--reload` enables auto-reloading when you edit files. Visit `http://localhost:8082/docs` to confirm the API is up.
+
+### 6. Start the worker loop
+
+Open a second terminal for the worker:
+
+```bash
+cd rs-video-stitch/render-api
+source .venv/bin/activate
+source ./env.local  # optional helper if you created one in step 4
+export PYTHONPATH=$(pwd)
+python -m app.worker
+```
+
+Use the same environment variables as the API process so both processes share the SQLite database and storage paths. The worker streams logs to `~/Videos/logs/<jobId>.log` as it renders.
+
+### 7. Queue a test job (optional)
+
+Once both processes are running you can exercise the pipeline with cURL:
+
+```bash
+TOKEN=${AUTH_TOKEN:-change-me}
+BASE_URL=http://localhost:8082
+PROJECT=p_local
+
+# Upload scene spec
+curl -X PUT "${BASE_URL}/v1/projects/${PROJECT}/scenes" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  --data-binary @/path/to/scenes.json
+
+# Upload image assets
+curl -X POST "${BASE_URL}/v1/projects/${PROJECT}/assets?subdir=images" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -F "file=@/path/to/slide01.png"
+
+# Kick off a render
+curl -X POST "${BASE_URL}/v1/projects/${PROJECT}/render" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  --data '{"outputName":"video.mp4","renderOptions":{}}'
+
+# Poll status
+curl -H "Authorization: Bearer ${TOKEN}" "${BASE_URL}/v1/jobs/<jobId>"
+```
+
+Finished videos appear under `~/Videos/projects/${PROJECT}/output/`. Stop the API/worker with `Ctrl+C` when done.
+
 ## Companion xTTS Service (Optional)
 
 If you want the renderer to synthesize narration automatically, stand up an xTTS server on the same Docker network and point `XTTS_API_URL` at it.
