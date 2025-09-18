@@ -2,19 +2,16 @@
 from __future__ import annotations
 
 import datetime as dt
-import os
 import time
 import traceback
-from pathlib import Path
 
 from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models import Artifact, Job
 from app.renderer import render_project
-from app.storage import job_log_path
+from app.storage import ROOT as STORAGE_ROOT, job_log_path
 
-STORAGE_ROOT = Path(os.getenv("RENDER_STORAGE", "/videos"))
 POLL_INTERVAL = 1.0
 
 

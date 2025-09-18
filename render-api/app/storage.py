@@ -6,7 +6,31 @@ import shutil
 from pathlib import Path
 from typing import Iterable, List
 
-ROOT = Path(os.getenv("RENDER_STORAGE", "/videos"))
+def resolve_storage_root() -> Path:
+    """Return a writable storage root for local or container execution."""
+
+    env_root = os.getenv("RENDER_STORAGE")
+    if env_root:
+        return Path(env_root).expanduser()
+
+    candidates = [
+        Path.home() / "Videos",
+        Path.cwd() / "videos",
+        Path(__file__).resolve().parents[2] / "videos",
+    ]
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        return candidate
+
+    # Final fallback if none of the candidates could be created.
+    return candidates[0]
+
+
+ROOT = resolve_storage_root()
 
 
 def proj_root(pid: str) -> Path:
