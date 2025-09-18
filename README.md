@@ -148,6 +148,7 @@ docker compose down
 - Inspect a specific render job’s file from inside the container with `docker compose exec render-worker tail -f /videos/logs/<jobId>.log`.
 - Because `/videos` is bind-mounted to `~/Videos` on the host, you can also run `tail -f ~/Videos/logs/<jobId>.log` without entering the container.
 
+
 ## Running Locally Without Docker
 
 You can develop against the API and worker directly on your laptop without Docker. The steps below assume macOS/Linux, but they translate to Windows (PowerShell) with minor path syntax tweaks.
