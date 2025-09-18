@@ -220,6 +220,19 @@ def render_project(
                 ],
                 log,
             )
+            _log(
+                log,
+                (
+                    "Scene {idx}: added segment {name} from {image} "
+                    "({seconds:.3f}s, {frames} frames)"
+                ).format(
+                    idx=idx,
+                    name=segment.name,
+                    image=image_name,
+                    seconds=per_image,
+                    frames=frames,
+                ),
+            )
             segment_paths.append(segment)
 
         update(f"SCENE_BUILD[{idx}]", 0.2 + (index / max(1, len(scenes))) * 0.6)
@@ -229,6 +242,18 @@ def render_project(
         for seg in segment_paths:
             escaped = str(seg.resolve()).replace("'", "'\\''")
             concat_lines.append(f"file '{escaped}'")
+            duration = ffprobe_duration(seg)
+            _log(
+                log,
+                (
+                    "Scene {idx}: appending {name} to concat list "
+                    "({seconds:.3f}s)"
+                ).format(
+                    idx=idx,
+                    name=seg.name,
+                    seconds=duration,
+                ),
+            )
         concat_list.write_text("\n".join(concat_lines), encoding="utf-8")
 
         run(
