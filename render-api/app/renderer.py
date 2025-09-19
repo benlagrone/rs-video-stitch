@@ -14,7 +14,6 @@ DEFAULT_CRF = int(os.getenv("DEFAULT_CRF", "18"))
 DEFAULT_FPS = int(os.getenv("DEFAULT_FPS", "30"))
 DEFAULT_MIN_SHOT = float(os.getenv("DEFAULT_MIN_SHOT", "2.5"))
 DEFAULT_MAX_SHOT = float(os.getenv("DEFAULT_MAX_SHOT", "8.0"))
-DEFAULT_XFADE = float(os.getenv("DEFAULT_XFADE", "0.5"))
 
 LogFunc = Callable[[str], None]
 ProgressFunc = Callable[[str, float], None]
@@ -98,7 +97,6 @@ def render_project(
     max_shot = float(opts.get("maxShot", DEFAULT_MAX_SHOT))
     preset = opts.get("preset", DEFAULT_PRESET)
     crf = str(opts.get("crf", DEFAULT_CRF))
-    xfade = float(opts.get("xfade", DEFAULT_XFADE))
     voice_dir = opts.get("voiceDir")
     tts_voice = opts.get("tts")
     tts_language = opts.get("ttsLanguage")
@@ -190,9 +188,7 @@ def render_project(
             segment = temp_dir / f"seg_{img_index:02d}.mp4"
             filter_complex = (
                 f"[0:v]scale=1920:1080,format=yuv420p,"
-                f"zoompan=z='min(zoom+0.0008,1.05)':d={frames}:s=1920x1080:fps={fps}"
-                f"[z];[z]fade=t=in:st=0:d=0.4,"
-                f"fade=t=out:st={max(0.0, per_image - xfade):.3f}:d={xfade:.3f}[v]"
+                f"zoompan=z='min(zoom+0.0008,1.05)':d={frames}:s=1920x1080:fps={fps}[v]"
             )
             run(
                 [
