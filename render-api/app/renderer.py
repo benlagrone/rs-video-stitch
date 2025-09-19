@@ -63,6 +63,24 @@ def estimate_seconds(text: str, wpm: int = 165, floor: float = 5.0) -> float:
     return max(floor, (words / wpm) * 60.0)
 
 
+def _resolve_project_root(pid: str, storage_root: Path) -> Path:
+    """Locate the on-disk project directory, honoring meta indirection."""
+
+    projects_root = storage_root / "projects"
+    meta_path = projects_root / f"{pid}.meta.json"
+
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text("utf-8"))
+        except (json.JSONDecodeError, OSError):
+            meta = {}
+        directory = meta.get("directory")
+        if directory:
+            return projects_root / directory
+
+    return projects_root / pid
+
+
 def render_project(
     pid: str,
     storage_root: Path,
@@ -77,10 +95,11 @@ def render_project(
         if progress:
             progress(stage, value)
 
-    project_root = storage_root / "projects" / pid
+    project_root = _resolve_project_root(pid, storage_root)
     input_dir = project_root / "input"
     work_dir = project_root / "work"
     output_dir = project_root / "output"
+    project_root.mkdir(parents=True, exist_ok=True)
     work_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
