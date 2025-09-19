@@ -111,9 +111,14 @@ async def upsert_scenes(
     spec: ProjectSpec,
     db: Session = Depends(get_db),
 ) -> dict:
-    ensure_dirs(pid)
+    project_name = None
+    if spec.info and isinstance(spec.info, dict):
+        name_value = spec.info.get("name")
+        if name_value is not None:
+            project_name = str(name_value)
+
     payload = json.dumps(spec.model_dump(mode="json", by_alias=True), indent=2)
-    save_scenes(pid, payload)
+    save_scenes(pid, payload, project_name=project_name)
 
     project = db.get(Project, pid)
     if project is None:
