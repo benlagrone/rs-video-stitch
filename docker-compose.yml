@@ -9,6 +9,7 @@ services:
     environment:
       - RENDER_STORAGE=/videos
       - DB_URL=sqlite:////videos/db.sqlite3
+      - INLINE_WORKER=0
       - AUTH_TOKEN=${AUTH_TOKEN:-change-me}
       - ALLOW_ORIGINS=${ALLOW_ORIGINS:-http://localhost:5173}
       - DEFAULT_FPS=30

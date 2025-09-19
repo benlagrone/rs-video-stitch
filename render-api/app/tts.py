@@ -70,13 +70,32 @@ def synthesize_xtts(
 
     url = resolved_url.rstrip("/") + "/api/tts"
     if log:
-        log(f"[xtts] POST {url} voice={voice!r} language={resolved_lang!r}")
+        preview = text.strip().splitlines()[0] if text.strip() else ""
+        preview = (preview[:60] + "…") if len(preview) > 60 else preview
+        log(
+            "[xtts] POST %s voice=%r language=%r body_preview=%r"
+            % (url, voice, resolved_lang, preview)
+        )
 
-    response = requests.post(url, json=payload, headers=headers, timeout=timeout)
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=timeout)
+    except requests.RequestException as exc:
+        message = f"xTTS request failed to reach {url}: {exc}"
+        if log:
+            log(f"[xtts] error: {message}")
+        raise RuntimeError(message) from exc
+
     try:
         response.raise_for_status()
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"xTTS request failed: {exc} ({response.text[:200]})") from exc
+        snippet = response.text[:200] if hasattr(response, "text") else ""
+        if log:
+            log(
+                f"[xtts] HTTP {response.status_code} error. Response snippet: {snippet!r}"
+            )
+        raise RuntimeError(
+            f"xTTS request failed: {exc} (status={response.status_code}, body={snippet})"
+        ) from exc
 
     data = response.json()
     audio_b64 = data.get("audio") or data.get("wav") or data.get("audio_base64")

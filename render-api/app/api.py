@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
+import threading
 import uuid
 from typing import Iterator, Optional
 
@@ -12,18 +14,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.auth import bearer_auth
 from app.db import SessionLocal, init_db
 from app.models import Job, Project
 from app.schemas import ProjectSpec, RenderRequest
 from app.storage import ensure_dirs, job_log_path, list_outputs, p_input, p_output, save_scenes
+from app.worker import loop as worker_loop
 
-AUTH_TOKEN = os.getenv("AUTH_TOKEN", "change-me")
 ALLOW_ORIGINS = (
     os.getenv("ALLOW_ORIGINS", "").split(",")
     if os.getenv("ALLOW_ORIGINS")
     else ["*"]
 )
+
+logger = logging.getLogger(__name__)
+
+INLINE_WORKER = os.getenv("INLINE_WORKER", "1")
+INLINE_WORKER_ENABLED = INLINE_WORKER.lower() not in {"0", "false", "off", "no"}
+_worker_thread: threading.Thread | None = None
+_worker_stop: threading.Event | None = None
 
 app = FastAPI(title="Render API", version="1.0.0")
 app.add_middleware(
@@ -32,12 +40,52 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-RequireAuth = bearer_auth(AUTH_TOKEN)
+
+
+def _start_inline_worker() -> None:
+    global _worker_thread, _worker_stop
+
+    if not INLINE_WORKER_ENABLED:
+        return
+
+    if _worker_thread and _worker_thread.is_alive():
+        return
+
+    _worker_stop = threading.Event()
+
+    def _runner() -> None:
+        try:
+            logger.info("Inline worker thread starting")
+            worker_loop(stop_event=_worker_stop)
+        except Exception:  # noqa: BLE001
+            logger.exception("Inline worker thread crashed")
+        finally:
+            logger.info("Inline worker thread exiting")
+
+    _worker_thread = threading.Thread(target=_runner, name="inline-worker", daemon=True)
+    _worker_thread.start()
 
 
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+    _start_inline_worker()
+
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    global _worker_thread, _worker_stop
+
+    if _worker_stop is not None:
+        _worker_stop.set()
+
+    if _worker_thread is not None:
+        _worker_thread.join(timeout=5)
+        if _worker_thread.is_alive():
+            logger.warning("Inline worker thread did not stop cleanly")
+
+    _worker_thread = None
+    _worker_stop = None
 
 
 def get_db() -> Iterator[Session]:
@@ -62,7 +110,6 @@ async def readyz() -> dict:
 async def upsert_scenes(
     pid: str,
     spec: ProjectSpec,
-    _=Depends(RequireAuth),
     db: Session = Depends(get_db),
 ) -> dict:
     ensure_dirs(pid)
@@ -83,7 +130,6 @@ async def upload_assets(
     pid: str,
     files: list[UploadFile] = File(...),
     subdir: str = Form("images"),
-    _=Depends(RequireAuth),
 ) -> dict:
     allowed = {"images", "voiceovers"}
     if subdir not in allowed:
@@ -109,7 +155,6 @@ async def upload_assets(
 async def render(
     pid: str,
     req: RenderRequest,
-    _=Depends(RequireAuth),
     db: Session = Depends(get_db),
 ) -> dict:
     job_id = f"j_{uuid.uuid4().hex[:12]}"
@@ -148,7 +193,6 @@ def _tail_logs(job_id: str, limit_bytes: int = 4096) -> str:
 @app.get("/v1/jobs/{job_id}")
 async def job_status(
     job_id: str,
-    _=Depends(RequireAuth),
     db: Session = Depends(get_db),
 ) -> dict:
     job = db.get(Job, job_id)
@@ -167,7 +211,7 @@ async def job_status(
 
 
 @app.get("/v1/projects/{pid}/outputs")
-async def outputs(pid: str, _=Depends(RequireAuth)) -> dict:
+async def outputs(pid: str) -> dict:
     return {"projectId": pid, "files": list_outputs(pid)}
 
 
@@ -175,7 +219,6 @@ async def outputs(pid: str, _=Depends(RequireAuth)) -> dict:
 async def download_video(
     pid: str,
     filename: Optional[str] = None,
-    _=Depends(RequireAuth),
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     project = db.get(Project, pid)

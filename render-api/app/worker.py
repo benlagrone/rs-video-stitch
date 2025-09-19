@@ -2,19 +2,17 @@
 from __future__ import annotations
 
 import datetime as dt
-import os
 import time
 import traceback
-from pathlib import Path
+from threading import Event
 
 from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models import Artifact, Job
 from app.renderer import render_project
-from app.storage import job_log_path
+from app.storage import ROOT as STORAGE_ROOT, job_log_path
 
-STORAGE_ROOT = Path(os.getenv("RENDER_STORAGE", "/videos"))
 POLL_INTERVAL = 1.0
 
 
@@ -41,8 +39,17 @@ def _update_job(session, job: Job, **fields) -> None:
     session.commit()
 
 
-def loop() -> None:
+def _sleep(stop_event: Event | None, seconds: float) -> bool:
+    if stop_event is None:
+        time.sleep(seconds)
+        return False
+    return stop_event.wait(seconds)
+
+
+def loop(stop_event: Event | None = None) -> None:
     while True:
+        if stop_event and stop_event.is_set():
+            break
         with SessionLocal() as session:
             job = (
                 session.execute(
@@ -52,7 +59,8 @@ def loop() -> None:
                 .first()
             )
             if job is None:
-                time.sleep(POLL_INTERVAL)
+                if _sleep(stop_event, POLL_INTERVAL):
+                    break
                 continue
 
             job_id = job.id
@@ -107,7 +115,8 @@ def loop() -> None:
                 )
             finally:
                 log_file.close()
-        time.sleep(0.3)
+        if _sleep(stop_event, 0.3):
+            break
 
 
 if __name__ == "__main__":
