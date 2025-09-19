@@ -41,7 +41,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 def _start_inline_worker() -> None:
     global _worker_thread, _worker_stop
 

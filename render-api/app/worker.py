@@ -5,9 +5,7 @@ import datetime as dt
 import time
 import traceback
 from threading import Event
-
 from sqlalchemy import select
-
 from app.db import SessionLocal
 from app.models import Artifact, Job
 from app.renderer import render_project

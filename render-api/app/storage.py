@@ -52,7 +52,6 @@ def resolve_storage_root() -> Path:
         "Set the RENDER_STORAGE environment variable to a writable path."
     )
 
-
 ROOT = resolve_storage_root()
 
 

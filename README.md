@@ -5,7 +5,9 @@ Headless FastAPI service plus worker that renders narrated slideshows into 1080p
 ## Architecture
 
 - **render-api service** – FastAPI app handling project + asset management, render job creation, job status, and artifact streaming.
+
 - **render-worker service** – Python worker loop that polls queued jobs, runs the FFmpeg pipeline, emits progress/logs, and records artifacts. When the API runs outside Docker it can spawn the same worker in-process for convenience.
+
 - **Shared storage** – Docker volume mounted at `/videos` inside both containers for SQLite, logs, input, work, and output media.
 
 ```
