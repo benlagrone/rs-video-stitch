@@ -30,6 +30,7 @@ def _ensure_sqlite_directory(url: str) -> None:
     db_path = Path(parsed.database).expanduser()
     if not db_path.is_absolute():
         db_path = db_path.resolve()
+
     try:
         db_path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
