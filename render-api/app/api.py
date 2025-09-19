@@ -12,13 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.auth import bearer_auth
 from app.db import SessionLocal, init_db
 from app.models import Job, Project
 from app.schemas import ProjectSpec, RenderRequest
 from app.storage import ensure_dirs, job_log_path, list_outputs, p_input, p_output, save_scenes
 
-AUTH_TOKEN = os.getenv("AUTH_TOKEN", "change-me")
 ALLOW_ORIGINS = (
     os.getenv("ALLOW_ORIGINS", "").split(",")
     if os.getenv("ALLOW_ORIGINS")
@@ -32,7 +30,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-RequireAuth = bearer_auth(AUTH_TOKEN)
 
 
 @app.on_event("startup")
@@ -62,7 +59,6 @@ async def readyz() -> dict:
 async def upsert_scenes(
     pid: str,
     spec: ProjectSpec,
-    _=Depends(RequireAuth),
     db: Session = Depends(get_db),
 ) -> dict:
     ensure_dirs(pid)
@@ -83,7 +79,6 @@ async def upload_assets(
     pid: str,
     files: list[UploadFile] = File(...),
     subdir: str = Form("images"),
-    _=Depends(RequireAuth),
 ) -> dict:
     allowed = {"images", "voiceovers"}
     if subdir not in allowed:
@@ -109,7 +104,6 @@ async def upload_assets(
 async def render(
     pid: str,
     req: RenderRequest,
-    _=Depends(RequireAuth),
     db: Session = Depends(get_db),
 ) -> dict:
     job_id = f"j_{uuid.uuid4().hex[:12]}"
@@ -148,7 +142,6 @@ def _tail_logs(job_id: str, limit_bytes: int = 4096) -> str:
 @app.get("/v1/jobs/{job_id}")
 async def job_status(
     job_id: str,
-    _=Depends(RequireAuth),
     db: Session = Depends(get_db),
 ) -> dict:
     job = db.get(Job, job_id)
@@ -167,7 +160,7 @@ async def job_status(
 
 
 @app.get("/v1/projects/{pid}/outputs")
-async def outputs(pid: str, _=Depends(RequireAuth)) -> dict:
+async def outputs(pid: str) -> dict:
     return {"projectId": pid, "files": list_outputs(pid)}
 
 
@@ -175,7 +168,6 @@ async def outputs(pid: str, _=Depends(RequireAuth)) -> dict:
 async def download_video(
     pid: str,
     filename: Optional[str] = None,
-    _=Depends(RequireAuth),
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     project = db.get(Project, pid)

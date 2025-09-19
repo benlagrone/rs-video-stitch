@@ -4,7 +4,7 @@ Headless FastAPI service plus worker that renders narrated slideshows into 1080p
 
 ## Architecture
 
-- **render-api service** – FastAPI app handling authentication, project + asset management, render job creation, job status, and artifact streaming.
+- **render-api service** – FastAPI app handling project + asset management, render job creation, job status, and artifact streaming.
 - **render-worker service** – Python worker loop that polls queued jobs, runs the FFmpeg pipeline, emits progress/logs, and records artifacts.
 - **Shared storage** – Docker volume mounted at `/videos` inside both containers for SQLite, logs, input, work, and output media.
 
@@ -56,9 +56,8 @@ mkdir -p ~/Videos/{logs,projects}
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RENDER_STORAGE` | `/videos` | Root for shared storage volume inside the containers (bound to `~/Videos`). |
+| `RENDER_STORAGE` | `/videos` | Root for shared storage volume inside the containers. When unset locally the API falls back to `~/Videos` (and then `./videos`) automatically. |
 | `DB_URL` | `sqlite:////videos/db.sqlite3` | SQLAlchemy connection string. |
-| `AUTH_TOKEN` | `change-me` | Bearer token required by all API routes. |
 | `ALLOW_ORIGINS` | `http://localhost:5173` | Comma-delimited origins allowed by CORS. |
 | `DEFAULT_FPS` | `30` | Default frames per second if request omits it. |
 | `DEFAULT_MIN_SHOT` | `2.5` | Minimum per-image duration in seconds. |
@@ -69,50 +68,6 @@ mkdir -p ~/Videos/{logs,projects}
 | `XTTS_API_URL` | — | Base URL for xTTS HTTP endpoint (e.g. `http://xtts:5002`). |
 | `XTTS_API_KEY` | — | Optional bearer token for the xTTS service. |
 | `XTTS_LANGUAGE` | — | Optional language code passed to xTTS (default depends on service). |
-
-### Generate `.env` with AUTH_TOKEN
-
-Docker Compose reads values from a local `.env` file automatically. Generate a random bearer token and save it before launching the stack:
-
-```bash
-TOKEN=$(openssl rand -hex 32)
-cat > .env <<EOT
-AUTH_TOKEN=${TOKEN}
-XTTS_API_URL=http://xtts:5002
-XTTS_LANGUAGE=en
-EOT
-echo "Wrote .env (AUTH_TOKEN=${TOKEN})"
-```
-
-Edit the file afterwards if you want to pin a different xTTS URL (for example `http://192.168.86.23:5002`). Keep `.env` out of version control (`echo '.env' >> .gitignore`) and share the token with any client that calls the API.
-
-#### Optional helper script
-
-Drop this script into the project root (for example `scripts/make-env.sh`) to regenerate `.env` with sensible defaults. It overwrites any existing `.env`, so back up first if needed:
-
-```bash
-mkdir -p scripts
-cat <<'SH' > scripts/make-env.sh
-#!/usr/bin/env bash
-set -euo pipefail
-
-TOKEN=${1:-$(openssl rand -hex 32)}
-XTTS_URL=${2:-${XTTS_API_URL:-http://xtts:5002}}
-XTTS_LANG=${3:-${XTTS_LANGUAGE:-en}}
-
-cat > .env <<EOT
-AUTH_TOKEN=${TOKEN}
-XTTS_API_URL=${XTTS_URL}
-XTTS_LANGUAGE=${XTTS_LANG}
-EOT
-
-echo "Wrote .env (AUTH_TOKEN=${TOKEN})"
-SH
-
-chmod +x scripts/make-env.sh
-```
-
-Then run `./scripts/make-env.sh [AUTH_TOKEN] [XTTS_API_URL] [XTTS_LANGUAGE]` whenever you need to recreate the `.env` file. For example, `./scripts/make-env.sh abc123 http://192.168.86.23:5002 en` will mirror the sample `.env` you shared.
 
 ### Optional xTTS Voice Synthesis
 
@@ -170,9 +125,9 @@ cd rs-video-stitch
 
 If you already have the repo, just `git pull` and `cd` into it.
 
-### 2. Create the storage layout
+### 2. Create the storage layout (optional)
 
-The services expect the same directory hierarchy Docker would mount at `/videos`.
+The services will automatically create `~/Videos` (or `./videos`) the first time they run, but you can pre-create the structure if you prefer:
 
 ```bash
 mkdir -p ~/Videos/{logs,projects}
@@ -196,12 +151,11 @@ You should now see `(.venv)` in your shell prompt. Keep this virtual environment
 
 ### 4. Configure environment variables
 
-Export the same settings the Docker containers rely on. Adjust the paths/tokens to suit your workstation.
+Export the same settings the Docker containers rely on. Adjust the paths to suit your workstation.
 
 ```bash
 export RENDER_STORAGE=${RENDER_STORAGE:-$HOME/Videos}
 export DB_URL=${DB_URL:-sqlite:////$RENDER_STORAGE/db.sqlite3}
-export AUTH_TOKEN=${AUTH_TOKEN:-change-me}
 export PYTHONPATH=$(pwd)
 export ALLOW_ORIGINS=${ALLOW_ORIGINS:-http://localhost:5173}
 ```
@@ -209,7 +163,6 @@ export ALLOW_ORIGINS=${ALLOW_ORIGINS:-http://localhost:5173}
 Tips:
 
 - Keep these exports in `render-api/.env.local` (or similar) and `source` it whenever you open a new terminal.
-- Point `AUTH_TOKEN` to the same value clients use when authenticating.
 - `PYTHONPATH=$(pwd)` must reference the `render-api` directory so modules like `app.renderer` resolve correctly.
 
 ### 5. Start the FastAPI server
@@ -247,29 +200,25 @@ tail -f ~/Videos/logs/<jobId>.log
 Once both processes are running you can exercise the pipeline with cURL:
 
 ```bash
-TOKEN=${AUTH_TOKEN:-change-me}
 BASE_URL=http://localhost:8082
 PROJECT=p_local
 
 # Upload scene spec
 curl -X PUT "${BASE_URL}/v1/projects/${PROJECT}/scenes" \
-  -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   --data-binary @/path/to/scenes.json
 
 # Upload image assets
 curl -X POST "${BASE_URL}/v1/projects/${PROJECT}/assets?subdir=images" \
-  -H "Authorization: Bearer ${TOKEN}" \
   -F "file=@/path/to/slide01.png"
 
 # Kick off a render
 curl -X POST "${BASE_URL}/v1/projects/${PROJECT}/render" \
-  -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   --data '{"outputName":"video.mp4","renderOptions":{}}'
 
 # Poll status
-curl -H "Authorization: Bearer ${TOKEN}" "${BASE_URL}/v1/jobs/<jobId>"
+curl "${BASE_URL}/v1/jobs/<jobId>"
 ```
 
 Finished videos appear under `~/Videos/projects/${PROJECT}/output/`. Stop the API/worker with `Ctrl+C` when done.
@@ -360,7 +309,7 @@ Any render job that supplies `"tts": "${MODEL_NAME}"` (or another speaker ID sup
 
 ## API Endpoints
 
-All endpoints require `Authorization: Bearer <AUTH_TOKEN>`.
+All endpoints are currently unauthenticated.
 
 | Method & Path | Description |
 | --- | --- |
@@ -399,31 +348,29 @@ All endpoints require `Authorization: Bearer <AUTH_TOKEN>`.
 
 ## Smoke Test
 
-Replace placeholders with your host/IP, project ID, token, and asset paths.
+Replace placeholders with your host/IP, project ID, and asset paths.
 
 ```bash
-TOKEN=change-me
 PID=p_example
 BASE=http://192.168.86.23:8082
 
 curl -sS -X PUT "$BASE/v1/projects/$PID/scenes" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" \
   --data-binary @data/scenes.json
 
 curl -sS -X POST "$BASE/v1/projects/$PID/assets" \
-  -H "Authorization: Bearer $TOKEN" \
   -F "files=@assets/images/sample.jpg" \
   -F "subdir=images"
 
 JOB=$(curl -sS -X POST "$BASE/v1/projects/$PID/render" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" \
   -d '{"outputName":"demo.mp4","renderOptions":{"fps":30,"minShot":2.5,"maxShot":8.0,"xfade":0.5,"crf":18,"preset":"medium","tts":null,"voiceDir":"voiceovers","music":null,"ducking":false}}' | jq -r '.jobId')
 
 echo "Queued job: $JOB"
 
-curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/v1/jobs/$JOB"
+curl -sS "$BASE/v1/jobs/$JOB"
 
-curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/v1/projects/$PID/outputs/video" -o dist/demo.mp4
+curl -sS "$BASE/v1/projects/$PID/outputs/video" -o dist/demo.mp4
 ```
 
 ## Development Notes
@@ -431,7 +378,6 @@ curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/v1/projects/$PID/outputs/video
 - The Docker image installs `ffmpeg`, `jq`, and `tini`; additional build deps can be added in `render-api/Dockerfile` if needed.
 - `render-api/app/renderer.py` is the FFmpeg orchestration point; extend it for music beds, ducking, or additional effects.
 - Logs and intermediates remain in `/videos/projects/<projectId>/work` on failure for debugging. Successful runs leave outputs in `/videos/projects/<projectId>/output` and trace logs in `/videos/logs`.
-- Rotate `AUTH_TOKEN`, restrict network exposure, and front with a reverse proxy if deploying beyond your LAN.
 
 ## License
 

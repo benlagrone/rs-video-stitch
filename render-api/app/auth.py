@@ -3,7 +3,17 @@ from fastapi import Header, HTTPException, status
 
 
 def bearer_auth(auth_token: str):
-    """Return a dependency that enforces a static bearer token."""
+    """Return a dependency that enforces a static bearer token.
+
+    Passing an empty token disables authentication entirely, allowing local
+    development environments to opt out without modifying route definitions.
+    """
+
+    if not auth_token:
+        async def _noop_auth(authorization: str = Header(default=None)) -> None:  # noqa: ARG001
+            return None
+
+        return _noop_auth
 
     async def _auth(authorization: str = Header(default=None)) -> None:
         if not authorization or not authorization.lower().startswith("bearer "):
