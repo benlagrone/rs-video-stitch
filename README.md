@@ -56,9 +56,9 @@ mkdir -p ~/Videos/{logs,projects}
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RENDER_STORAGE` | `/videos` | Root for shared storage volume inside the containers (bound to `~/Videos`). |
+| `RENDER_STORAGE` | `/videos` | Root for shared storage volume inside the containers. When unset locally the API falls back to `~/Videos` (and then `./videos`) automatically. |
 | `DB_URL` | `sqlite:////videos/db.sqlite3` | SQLAlchemy connection string. |
-| `AUTH_TOKEN` | `change-me` | Bearer token required by all API routes. |
+| `AUTH_TOKEN` | `change-me` | Bearer token required by all API routes. Set to an empty string to disable auth (for local debugging only). |
 | `ALLOW_ORIGINS` | `http://localhost:5173` | Comma-delimited origins allowed by CORS. |
 | `DEFAULT_FPS` | `30` | Default frames per second if request omits it. |
 | `DEFAULT_MIN_SHOT` | `2.5` | Minimum per-image duration in seconds. |
@@ -170,9 +170,9 @@ cd rs-video-stitch
 
 If you already have the repo, just `git pull` and `cd` into it.
 
-### 2. Create the storage layout
+### 2. Create the storage layout (optional)
 
-The services expect the same directory hierarchy Docker would mount at `/videos`.
+The services will automatically create `~/Videos` (or `./videos`) the first time they run, but you can pre-create the structure if you prefer:
 
 ```bash
 mkdir -p ~/Videos/{logs,projects}
