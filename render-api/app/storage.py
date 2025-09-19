@@ -6,7 +6,6 @@ import shutil
 from pathlib import Path
 from typing import Iterable, List
 
-
 def _prepare_storage_dir(path: Path) -> Path | None:
     """Ensure *path* exists and is writable, returning it on success."""
 
@@ -28,7 +27,6 @@ def resolve_storage_root() -> Path:
 
     env_root = os.getenv("RENDER_STORAGE")
     if env_root:
-
         expanded = Path(env_root).expanduser().resolve()
         prepared = _prepare_storage_dir(expanded)
         if prepared is None:
@@ -45,7 +43,6 @@ def resolve_storage_root() -> Path:
     ]
 
     for candidate in candidates:
-
         prepared = _prepare_storage_dir(candidate)
         if prepared is not None:
             return prepared
@@ -54,8 +51,6 @@ def resolve_storage_root() -> Path:
         "Unable to determine a writable storage directory. "
         "Set the RENDER_STORAGE environment variable to a writable path."
     )
-
-
 
 ROOT = resolve_storage_root()
 

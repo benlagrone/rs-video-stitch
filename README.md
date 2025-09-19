@@ -5,7 +5,9 @@ Headless FastAPI service plus worker that renders narrated slideshows into 1080p
 ## Architecture
 
 - **render-api service** – FastAPI app handling project + asset management, render job creation, job status, and artifact streaming.
-- **render-worker service** – Python worker loop that polls queued jobs, runs the FFmpeg pipeline, emits progress/logs, and records artifacts.
+
+- **render-worker service** – Python worker loop that polls queued jobs, runs the FFmpeg pipeline, emits progress/logs, and records artifacts. When the API runs outside Docker it can spawn the same worker in-process for convenience.
+
 - **Shared storage** – Docker volume mounted at `/videos` inside both containers for SQLite, logs, input, work, and output media.
 
 ```
@@ -59,6 +61,7 @@ mkdir -p ~/Videos/{logs,projects}
 | `RENDER_STORAGE` | `/videos` | Root for shared storage volume inside the containers. When unset locally the API falls back to `~/Videos` (and then `./videos`) automatically. |
 | `DB_URL` | `sqlite:////videos/db.sqlite3` | SQLAlchemy connection string. |
 | `ALLOW_ORIGINS` | `http://localhost:5173` | Comma-delimited origins allowed by CORS. |
+| `INLINE_WORKER` | `1` | When truthy, the FastAPI process launches a background worker thread. Set to `0` when running a dedicated worker process (Docker Compose already handles this). |
 | `DEFAULT_FPS` | `30` | Default frames per second if request omits it. |
 | `DEFAULT_MIN_SHOT` | `2.5` | Minimum per-image duration in seconds. |
 | `DEFAULT_MAX_SHOT` | `8.0` | Maximum per-image duration in seconds. |
@@ -165,7 +168,7 @@ Tips:
 - Keep these exports in `render-api/.env.local` (or similar) and `source` it whenever you open a new terminal.
 - `PYTHONPATH=$(pwd)` must reference the `render-api` directory so modules like `app.renderer` resolve correctly.
 
-### 5. Start the FastAPI server
+### 5. Start the FastAPI server (spawns worker automatically)
 
 With the virtual environment active and variables exported:
 
@@ -173,11 +176,11 @@ With the virtual environment active and variables exported:
 uvicorn app.api:app --host 0.0.0.0 --port 8082 --reload
 ```
 
-`--reload` enables auto-reloading when you edit files. Visit `http://localhost:8082/docs` to confirm the API is up.
+`--reload` enables auto-reloading when you edit files. Visit `http://localhost:8082/docs` to confirm the API is up. The server starts a background worker thread automatically (controlled by `INLINE_WORKER`, which defaults to `1` outside Docker).
 
-### 6. Start the worker loop
+### 6. (Optional) Run the worker separately
 
-Open a second terminal for the worker:
+If you prefer to manage the worker manually—such as when benchmarking or running multiple workers—disable the inline thread with `export INLINE_WORKER=0` before launching Uvicorn. Then start the standalone worker in another terminal:
 
 ```bash
 cd rs-video-stitch/render-api
@@ -187,13 +190,7 @@ export PYTHONPATH=$(pwd)
 python -m app.worker
 ```
 
-Use the same environment variables as the API process so both processes share the SQLite database and storage paths. The worker streams logs to `~/Videos/logs/<jobId>.log` as it renders.
-
-Tail the file for live updates while rendering:
-
-```bash
-tail -f ~/Videos/logs/<jobId>.log
-```
+The standalone worker streams logs to `~/Videos/logs/<jobId>.log` while rendering. Tail the file for live updates with `tail -f ~/Videos/logs/<jobId>.log`.
 
 ### 7. Queue a test job (optional)
 
