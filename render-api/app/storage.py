@@ -23,7 +23,6 @@ def _prepare_storage_dir(path: Path) -> Path | None:
     return path
 
 
-
 def resolve_storage_root() -> Path:
     """Return a writable storage root for local or container execution."""
 
