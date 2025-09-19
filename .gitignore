@@ -7,4 +7,6 @@ render-api/logs/
 render-api/venv/
 render-api/.env
 render-api/app/cache/
-render-api/app/__pycache/
+render-api/app/__pycache__/
+launch.json
+.DS_Store
