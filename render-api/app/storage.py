@@ -39,7 +39,6 @@ def resolve_storage_root() -> Path:
             )
         return prepared
 
-
     candidates = [
         Path.home() / "Videos",
         Path.cwd() / "videos",

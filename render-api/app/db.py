@@ -39,7 +39,6 @@ def _ensure_sqlite_directory(url: str) -> None:
         ) from exc
 
 
-
 _ensure_sqlite_directory(DB_URL)
 engine = create_engine(DB_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, future=True, expire_on_commit=False)
