@@ -215,12 +215,15 @@ def render_project(
                     "-y",
                     "-loop",
                     "1",
-                    "-t",
-                    f"{per_image:.3f}",
                     "-i",
                     str(image_path),
                     "-filter_complex",
                     filter_complex,
+                    # Cap the output to the expected frame count; combining -t with
+                    # zoompan caused wildly inflated durations when the image input
+                    # looped forever.
+                    "-frames:v",
+                    str(frames),
                     "-map",
                     "[v]",
                     "-c:v",
