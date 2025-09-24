@@ -14,6 +14,12 @@ DEFAULT_CRF = int(os.getenv("DEFAULT_CRF", "18"))
 DEFAULT_FPS = int(os.getenv("DEFAULT_FPS", "30"))
 DEFAULT_MIN_SHOT = float(os.getenv("DEFAULT_MIN_SHOT", "2.5"))
 DEFAULT_MAX_SHOT = float(os.getenv("DEFAULT_MAX_SHOT", "8.0"))
+DEFAULT_TTS_VOICE = os.getenv("XTTS_VOICE") or os.getenv("DEFAULT_TTS_VOICE") or "p251"
+DEFAULT_TTS_LANGUAGE = (
+    os.getenv("XTTS_LANGUAGE")
+    or os.getenv("DEFAULT_TTS_LANGUAGE")
+    or "en"
+)
 
 LogFunc = Callable[[str], None]
 ProgressFunc = Callable[[str, float], None]
@@ -117,8 +123,8 @@ def render_project(
     preset = opts.get("preset", DEFAULT_PRESET)
     crf = str(opts.get("crf", DEFAULT_CRF))
     voice_dir = opts.get("voiceDir")
-    tts_voice = opts.get("tts")
-    tts_language = opts.get("ttsLanguage")
+    tts_voice = opts.get("tts") or DEFAULT_TTS_VOICE
+    tts_language = opts.get("ttsLanguage") or DEFAULT_TTS_LANGUAGE
 
     update("VALIDATE", 0.05)
 
@@ -158,6 +164,11 @@ def render_project(
                 except Exception as exc:  # noqa: BLE001
                     raise RuntimeError(f"xTTS synthesis failed for scene {idx}: {exc}") from exc
             else:
+                if voice_text.strip():
+                    _log(
+                        log,
+                        f"Scene {idx}: skipping TTS (voice text present but no voice configured)",
+                    )
                 duration = estimate_seconds(voice_text)
                 run(
                     [

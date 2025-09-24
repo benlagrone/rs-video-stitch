@@ -154,19 +154,21 @@ You should now see `(.venv)` in your shell prompt. Keep this virtual environment
 
 ### 4. Configure environment variables
 
-Export the same settings the Docker containers rely on. Adjust the paths to suit your workstation.
+Export the same settings the Docker containers rely on. Adjust the paths and TTS values to match your workstation:
 
 ```bash
 export RENDER_STORAGE=${RENDER_STORAGE:-$HOME/Videos}
+export XTTS_API_URL=${XTTS_API_URL:-http://xtts:5002}
 export DB_URL=${DB_URL:-sqlite:////$RENDER_STORAGE/db.sqlite3}
-export PYTHONPATH=$(pwd)
 export ALLOW_ORIGINS=${ALLOW_ORIGINS:-http://localhost:5173}
+export PYTHONPATH=$(pwd)
 ```
 
 Tips:
 
 - Keep these exports in `render-api/.env.local` (or similar) and `source` it whenever you open a new terminal.
 - `PYTHONPATH=$(pwd)` must reference the `render-api` directory so modules like `app.renderer` resolve correctly.
+- The renderer falls back to voice `p251` and language `en` out of the box; override them by exporting `XTTS_VOICE` / `XTTS_LANGUAGE` only if you need different defaults. If your xTTS service requires authentication, also export `XTTS_API_KEY` before starting the API.
 
 ### 5. Start the FastAPI server (spawns worker automatically)
 
