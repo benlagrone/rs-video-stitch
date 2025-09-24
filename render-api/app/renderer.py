@@ -205,9 +205,17 @@ def render_project(
                 raise FileNotFoundError(f"Missing image for scene {idx}: {image_name}")
             frames = max(1, round(per_image * fps))
             segment = temp_dir / f"seg_{img_index:02d}.mp4"
+            zoom_target = 1.05
+            if frames <= 1:
+                zoom_expr = "1"
+            else:
+                # Ramp zoom so motion spans the full segment length.
+                zoom_delta = zoom_target - 1.0
+                zoom_steps = frames - 1
+                zoom_expr = f"1+{zoom_delta:.6f}*(on/{zoom_steps})"
             filter_complex = (
-                f"[0:v]scale=1920:1080,format=yuv420p,"
-                f"zoompan=z='min(zoom+0.0008,1.05)':d={frames}:s=1920x1080:fps={fps}[v]"
+                "[0:v]scale=1920:1080,format=yuv420p,"
+                f"zoompan=z='{zoom_expr}':d={frames}:s=1920x1080:fps={fps}[v]"
             )
             run(
                 [
