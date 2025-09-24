@@ -51,7 +51,7 @@ def synthesize_xtts(
         Request timeout in seconds.
     """
 
-    resolved_url = (api_url or os.getenv("XTTS_API_URL"))
+    resolved_url = api_url or os.getenv("XTTS_API_URL") or "http://xtts:5002"
     if not resolved_url:
         raise TTSConfigurationError("XTTS_API_URL is not configured")
 
@@ -61,6 +61,7 @@ def synthesize_xtts(
     payload = {"text": text}
     if voice:
         payload["speaker"] = voice
+        payload.setdefault("voice", voice)
     if resolved_lang:
         payload["language"] = resolved_lang
 
@@ -97,14 +98,18 @@ def synthesize_xtts(
             f"xTTS request failed: {exc} (status={response.status_code}, body={snippet})"
         ) from exc
 
-    data = response.json()
-    audio_b64 = data.get("audio") or data.get("wav") or data.get("audio_base64")
-    if not audio_b64:
-        raise RuntimeError("xTTS response missing 'audio' field")
-
-    audio_bytes = base64.b64decode(audio_b64)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(audio_bytes)
+    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+
+    if content_type.startswith("audio/"):
+        destination.write_bytes(response.content)
+    else:
+        data = response.json()
+        audio_b64 = data.get("audio") or data.get("wav") or data.get("audio_base64")
+        if not audio_b64:
+            raise RuntimeError("xTTS response missing 'audio' field")
+        audio_bytes = base64.b64decode(audio_b64)
+        destination.write_bytes(audio_bytes)
 
     if log:
         log(f"[xtts] wrote {destination}")
