@@ -82,6 +82,31 @@ mkdir -p ~/Videos/{logs,projects}
 - When a scene lacks a matching audio file under `voiceDir`, the worker will call xTTS with the scene’s script and drop the generated WAV into the work directory.
 - If xTTS is not configured or the request fails, the render job aborts so you know narration is missing.
 
+### Project Spec JSON
+
+`PUT /v1/projects/{projectId}/scenes` expects a payload that contains metadata, scene entries, and optional video-level defaults. Example:
+
+```json
+{
+  "info": {
+    "address": "9642 Meadowglen Lane, Houston, TX 77063"
+  },
+  "vid": {
+    "voice": "p263",
+    "lang": "en"
+  },
+  "scenes": [
+    {
+      "title": "Welcome / Intro",
+      "VO": "Welcome to the property...",
+      "images": ["front.jpg", "yard.jpg"]
+    }
+  ]
+}
+```
+
+Fields under `vid` are optional. When present they become the default narration voice and language for subsequent renders (unless overridden in `renderOptions` or by explicit voiceover audio files).
+
 ## Running with Docker Compose
 
 1. Ensure Docker Desktop or compatible engine is available.
@@ -171,7 +196,7 @@ Tips:
 
 - Keep these exports in `render-api/.env.local` (or similar) and `source` it whenever you open a new terminal.
 - `PYTHONPATH=$(pwd)` must reference the `render-api` directory so modules like `app.renderer` resolve correctly.
-- The renderer falls back to voice `p251` and language `en` out of the box; override them by exporting `XTTS_VOICE` / `XTTS_LANGUAGE` only if you need different defaults. If your xTTS service requires authentication, also export `XTTS_API_KEY` before starting the API.
+- The renderer falls back to voice `p263` and language `en` out of the box; override them by exporting `XTTS_VOICE` / `XTTS_LANGUAGE` only if you need different defaults. If your xTTS service requires authentication, also export `XTTS_API_KEY` before starting the API.
 
 ### 5. Start the FastAPI server (spawns worker automatically)
 

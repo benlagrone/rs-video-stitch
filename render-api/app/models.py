@@ -21,6 +21,8 @@ class Project(Base):
         nullable=False,
     )
     last_output_name = Column(String, nullable=True)
+    voice = Column(String, nullable=True)
+    language = Column(String, nullable=True)
 
     jobs = relationship("Job", back_populates="project", cascade="all, delete-orphan")
     artifacts = relationship("Artifact", back_populates="project", cascade="all, delete-orphan")

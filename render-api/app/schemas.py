@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, conlist
+from pydantic import AliasChoices, BaseModel, Field, conlist
 
 
 class Scene(BaseModel):
@@ -16,9 +16,22 @@ class Scene(BaseModel):
         populate_by_name = True
 
 
+class VideoSettings(BaseModel):
+    voice: Optional[str] = None
+    language: Optional[str] = Field(default=None, alias="lang")
+
+    class Config:
+        populate_by_name = True
+
+
 class ProjectSpec(BaseModel):
     info: Optional[Dict[str, Any]] = None
     scenes: List[Scene]
+    video: Optional[VideoSettings] = Field(
+        default=None,
+        alias="vid",
+        validation_alias=AliasChoices("vid", "video"),
+    )
 
 
 class RenderOptions(BaseModel):

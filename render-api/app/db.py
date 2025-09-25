@@ -5,7 +5,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
@@ -50,6 +50,28 @@ def init_db() -> None:
     from app import models  # noqa: F401
 
     Base.metadata.create_all(engine)
+    _ensure_project_columns()
+
+
+def _ensure_project_columns() -> None:
+    inspector = inspect(engine)
+    if "projects" not in inspector.get_table_names():
+        return
+
+    existing = {column["name"] for column in inspector.get_columns("projects")}
+
+    statements = []
+    if "voice" not in existing:
+        statements.append("ALTER TABLE projects ADD COLUMN voice VARCHAR")
+    if "language" not in existing:
+        statements.append("ALTER TABLE projects ADD COLUMN language VARCHAR")
+
+    if not statements:
+        return
+
+    with engine.begin() as conn:
+        for stmt in statements:
+            conn.execute(text(stmt))
 
 
 @contextmanager

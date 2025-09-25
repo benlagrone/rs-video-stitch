@@ -123,6 +123,10 @@ async def upsert_scenes(
     project = db.get(Project, pid)
     if project is None:
         project = Project(id=pid)
+    if spec.video:
+        project.voice = spec.video.voice
+        project.language = spec.video.language
+
     db.add(project)
     db.commit()
 
@@ -168,6 +172,13 @@ async def render(
     if project is None:
         project = Project(id=pid)
     project.last_output_name = req.outputName
+
+    render_opts = payload.setdefault("renderOptions", {})
+    if project.voice and not render_opts.get("tts"):
+        render_opts["tts"] = project.voice
+    if project.language and not render_opts.get("ttsLanguage"):
+        render_opts["ttsLanguage"] = project.language
+
     db.add(project)
 
     job = Job(

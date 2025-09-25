@@ -15,7 +15,7 @@ DEFAULT_CRF = int(os.getenv("DEFAULT_CRF", "18"))
 DEFAULT_FPS = int(os.getenv("DEFAULT_FPS", "30"))
 DEFAULT_MIN_SHOT = float(os.getenv("DEFAULT_MIN_SHOT", "2.5"))
 DEFAULT_MAX_SHOT = float(os.getenv("DEFAULT_MAX_SHOT", "8.0"))
-DEFAULT_TTS_VOICE = os.getenv("XTTS_VOICE") or os.getenv("DEFAULT_TTS_VOICE") or "p251"
+DEFAULT_TTS_VOICE = os.getenv("XTTS_VOICE") or os.getenv("DEFAULT_TTS_VOICE") or "p263"
 DEFAULT_TTS_LANGUAGE = (
     os.getenv("XTTS_LANGUAGE")
     or os.getenv("DEFAULT_TTS_LANGUAGE")
@@ -144,9 +144,12 @@ def render_project(
     if not scenes_path.exists():
         raise FileNotFoundError(f"Scenes file missing: {scenes_path}")
 
-    scenes = json.loads(scenes_path.read_text("utf-8")).get("scenes", [])
+    scenes_doc = json.loads(scenes_path.read_text("utf-8"))
+    scenes = scenes_doc.get("scenes", [])
     if not scenes:
         raise ValueError("No scenes defined in scenes.json")
+
+    video_meta = scenes_doc.get("video") or scenes_doc.get("vid") or {}
 
     fps = int(opts.get("fps", DEFAULT_FPS))
     min_shot = float(opts.get("minShot", DEFAULT_MIN_SHOT))
@@ -154,8 +157,13 @@ def render_project(
     preset = opts.get("preset", DEFAULT_PRESET)
     crf = str(opts.get("crf", DEFAULT_CRF))
     voice_dir = opts.get("voiceDir")
-    tts_voice = opts.get("tts") or DEFAULT_TTS_VOICE
-    tts_language = opts.get("ttsLanguage") or DEFAULT_TTS_LANGUAGE
+    tts_voice = opts.get("tts") or video_meta.get("voice") or DEFAULT_TTS_VOICE
+    tts_language = (
+        opts.get("ttsLanguage")
+        or video_meta.get("language")
+        or video_meta.get("lang")
+        or DEFAULT_TTS_LANGUAGE
+    )
 
     update("VALIDATE", 0.05)
 
