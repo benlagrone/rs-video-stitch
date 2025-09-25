@@ -1,7 +1,9 @@
 version: "3.9"
 services:
   render-api:
-    build: ./render-api
+    build:
+      context: .
+      dockerfile: render-api/Dockerfile
     image: render-api:latest
     container_name: render-api
     networks:

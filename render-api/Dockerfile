@@ -4,10 +4,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg jq tini && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv
-COPY app/requirements.txt .
+COPY render-api/app/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app /srv/app
+COPY render-api/app /srv/app
+COPY media /srv/media
 ENV PYTHONUNBUFFERED=1
 ENV RENDER_STORAGE=/videos
 ENV DB_URL=sqlite:////videos/db.sqlite3

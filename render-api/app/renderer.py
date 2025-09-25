@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -20,6 +21,36 @@ DEFAULT_TTS_LANGUAGE = (
     or os.getenv("DEFAULT_TTS_LANGUAGE")
     or "en"
 )
+
+_FONT_ENV_VAR = "TITLE_FONT_FILE"
+_DEFAULT_FONT_RELATIVE = Path("media") / "EB_Garamond" / "EBGaramond-VariableFont_wght.ttf"
+
+
+@lru_cache(maxsize=1)
+def _resolve_title_font() -> Path:
+    """Locate the Garamond font used for scene titles."""
+
+    env_override = os.getenv(_FONT_ENV_VAR)
+    candidates: List[Path]
+    if env_override:
+        override_path = Path(env_override).expanduser().resolve()
+        candidates = [override_path]
+    else:
+        base = Path(__file__).resolve()
+        candidates = [
+            base.parents[2] / _DEFAULT_FONT_RELATIVE,
+            base.parents[1] / _DEFAULT_FONT_RELATIVE,
+        ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    searched = ", ".join(str(c) for c in candidates)
+    raise FileNotFoundError(
+        "Unable to locate Garamond font for scene titles. "
+        f"Checked: {searched}. Set {_FONT_ENV_VAR} to an accessible TTF file."
+    )
 
 LogFunc = Callable[[str], None]
 ProgressFunc = Callable[[str, float], None]
@@ -317,12 +348,57 @@ def render_project(
         )
 
         scene_file = work_dir / f"scene_{idx}.mp4"
+        title_text = str(scene.get("title", "")).strip()
+        titled_scene_source = silent_scene
+        if title_text:
+            font_path = _resolve_title_font()
+            title_file = temp_dir / "title.txt"
+            title_file.write_text(title_text, encoding="utf-8")
+            titled_scene = temp_dir / "scene_titled.mp4"
+            drawtext = (
+                "drawtext="
+                f"fontfile='{font_path}':"
+                f"textfile='{title_file}':"
+                "fontsize=72:"
+                "fontcolor=white:"
+                "line_spacing=6:"
+                "borderw=2:"
+                "bordercolor=black@0.65:"
+                "box=1:"
+                "boxcolor=black@0.35:"
+                "boxborderw=20:"
+                "x=(w-text_w)/2:"
+                "y=h*0.08"
+            )
+            _log(log, f"Scene {idx}: overlaying title '{title_text}'")
+            run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(silent_scene),
+                    "-vf",
+                    drawtext,
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    preset,
+                    "-crf",
+                    crf,
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(titled_scene),
+                ],
+                log,
+            )
+            titled_scene_source = titled_scene
+
         run(
             [
                 "ffmpeg",
                 "-y",
                 "-i",
-                str(silent_scene),
+                str(titled_scene_source),
                 "-i",
                 str(audio_wav),
                 "-c:v",

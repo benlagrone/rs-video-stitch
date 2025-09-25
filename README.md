@@ -2,6 +2,8 @@
 
 Headless FastAPI service plus worker that renders narrated slideshows into 1080p MP4 files using FFmpeg. The API accepts scene specifications, assets, and render options, queues jobs in SQLite, and a companion worker container pulls jobs and produces artifacts on a shared `/videos` volume.
 
+Each scene’s `title` is burned into the video frame using the bundled EB Garamond font so viewers see a consistent on-screen caption while that scene plays.
+
 ## Architecture
 
 - **render-api service** – FastAPI app handling project + asset management, render job creation, job status, and artifact streaming.
@@ -68,6 +70,7 @@ mkdir -p ~/Videos/{logs,projects}
 | `DEFAULT_XFADE` | `0.5` | Default cross-fade length in seconds. |
 | `DEFAULT_CRF` | `18` | Default H.264 CRF quality. |
 | `DEFAULT_PRESET` | `medium` | Default encoder preset. |
+| `TITLE_FONT_FILE` | — | Override the TTF used for scene title overlays (defaults to `media/EB_Garamond/EBGaramond-VariableFont_wght.ttf`). |
 | `XTTS_API_URL` | — | Base URL for xTTS HTTP endpoint (e.g. `http://xtts:5002`). |
 | `XTTS_API_KEY` | — | Optional bearer token for the xTTS service. |
 | `XTTS_LANGUAGE` | — | Optional language code passed to xTTS (default depends on service). |
