@@ -179,6 +179,11 @@ def render_project(
         or video_meta.get("lang")
         or DEFAULT_TTS_LANGUAGE
     )
+    _log(
+        log,
+        "Selected TTS api=%s voice=%s language=%s"
+        % (tts_api, tts_voice or "<auto>", tts_language or "<default>"),
+    )
 
     update("VALIDATE", 0.05)
 
