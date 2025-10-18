@@ -13,6 +13,10 @@ services:
       - INLINE_WORKER=0
       - AUTH_TOKEN=${AUTH_TOKEN:-change-me}
       - ALLOW_ORIGINS=${ALLOW_ORIGINS:-http://localhost:5173}
+      - AZURE_KEY=${AZURE_KEY}
+      - AZURE_REGION=${AZURE_REGION}
+      - XTTS_API_URL=${XTTS_API_URL}
+      - XTTS_LANGUAGE=${XTTS_LANGUAGE}
       - DEFAULT_FPS=30
       - DEFAULT_MIN_SHOT=2.5
       - DEFAULT_MAX_SHOT=8.0
@@ -36,6 +40,10 @@ services:
       - RENDER_STORAGE=/videos
       - DB_URL=sqlite:////videos/db.sqlite3
       - AUTH_TOKEN=${AUTH_TOKEN:-change-me}
+      - AZURE_KEY=${AZURE_KEY}
+      - AZURE_REGION=${AZURE_REGION}
+      - XTTS_API_URL=${XTTS_API_URL}
+      - XTTS_LANGUAGE=${XTTS_LANGUAGE}
     volumes:
       - ~/Videos:/videos
     depends_on:
