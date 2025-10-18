@@ -1,7 +1,14 @@
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg jq tini && rm -rf /var/lib/apt/lists/*
+    ffmpeg \
+    jq \
+    tini \
+    libasound2 \
+    libcurl4 \
+    libssl3 \
+    ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv
 COPY render-api/app/requirements.txt .
