@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bullseye
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
     libasound2 \
     libcurl4 \
-    libssl3 \
+    libssl1.1 \
     ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
