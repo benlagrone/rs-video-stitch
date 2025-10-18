@@ -1,8 +1,9 @@
-"""Helpers for synthesizing narration via an external xTTS service."""
+"""Helpers for synthesizing narration via external text-to-speech services."""
 from __future__ import annotations
 
 import base64
 import os
+import time
 from pathlib import Path
 from typing import Optional, Protocol
 
@@ -115,3 +116,103 @@ def synthesize_xtts(
         log(f"[xtts] wrote {destination}")
 
     return destination
+
+
+def synthesize_azure(
+    text: str,
+    destination: Path,
+    *,
+    voice: Optional[str] = None,
+    language: Optional[str] = None,
+    api_key: Optional[str] = None,
+    region: Optional[str] = None,
+    log: Optional[Logger] = None,
+    retries: int = 3,
+    backoff: float = 2.0,
+) -> Path:
+    """Synthesize narration using the Azure Cognitive Services Speech API."""
+
+    try:
+        import azure.cognitiveservices.speech as speechsdk
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise TTSConfigurationError(
+            "azure-cognitiveservices-speech is required for Azure TTS support"
+        ) from exc
+
+    resolved_key = (
+        api_key
+        or os.getenv("AZURE_KEY")
+        or os.getenv("AZURE_SPEECH_KEY")
+        or os.getenv("AZURE_TTS_KEY")
+    )
+    resolved_region = (
+        region
+        or os.getenv("AZURE_REGION")
+        or os.getenv("AZURE_SPEECH_REGION")
+        or os.getenv("AZURE_TTS_REGION")
+    )
+    if not resolved_key or not resolved_region:
+        raise TTSConfigurationError(
+            "Azure Speech credentials are not configured. "
+            "Set AZURE_KEY/AZURE_REGION or AZURE_SPEECH_KEY/AZURE_SPEECH_REGION."
+        )
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    speech_config = speechsdk.SpeechConfig(
+        subscription=resolved_key, region=resolved_region
+    )
+
+    resolved_voice = voice or os.getenv("AZURE_TTS_VOICE")
+    if resolved_voice:
+        speech_config.speech_synthesis_voice_name = resolved_voice
+    if language:
+        speech_config.speech_synthesis_language = language
+
+    try:
+        speech_config.set_speech_synthesis_output_format(
+            speechsdk.SpeechSynthesisOutputFormat.Riff48Khz16BitMonoPcm
+        )
+    except AttributeError:  # pragma: no cover - defensive when SDK changes
+        if log:
+            log("[azure-tts] unable to set output format; using SDK default")
+
+    audio_config = speechsdk.audio.AudioOutputConfig(filename=str(destination))
+    synthesizer = speechsdk.SpeechSynthesizer(
+        speech_config=speech_config, audio_config=audio_config
+    )
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            preview = text.strip().splitlines()[0] if text.strip() else ""
+            if log:
+                log(
+                    "[azure-tts] attempt %d voice=%r language=%r text=%r"
+                    % (attempt, resolved_voice, language, preview[:60])
+                )
+            result = synthesizer.speak_text_async(text).get()
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if log:
+                log(f"[azure-tts] request failed: {exc}")
+        else:
+            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                if log:
+                    log(f"[azure-tts] wrote {destination}")
+                return destination
+
+            cancellation = speechsdk.CancellationDetails(result)
+            message = (
+                f"Speech synthesis canceled: reason={cancellation.reason} "
+                f"details={cancellation.error_details}"
+            )
+            last_error = RuntimeError(message)
+            if log:
+                log(f"[azure-tts] {message}")
+
+        if attempt < retries:
+            time.sleep(backoff ** attempt)
+
+    assert last_error is not None  # mypy appeasement; loop always sets on failure
+    raise last_error

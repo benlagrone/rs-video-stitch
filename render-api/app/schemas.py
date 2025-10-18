@@ -19,6 +19,7 @@ class Scene(BaseModel):
 class VideoSettings(BaseModel):
     voice: Optional[str] = None
     language: Optional[str] = Field(default=None, alias="lang")
+    api: Optional[str] = Field(default=None, validation_alias=AliasChoices("api", "tts_api"))
 
     class Config:
         populate_by_name = True
@@ -43,6 +44,11 @@ class RenderOptions(BaseModel):
     preset: str = Field(default="medium")
     tts: Optional[str] = None
     ttsLanguage: Optional[str] = None
+    ttsApi: Optional[str] = Field(
+        default=None,
+        alias="ttsApi",
+        validation_alias=AliasChoices("ttsApi", "tts_api"),
+    )
     voiceDir: Optional[str] = None
     music: Optional[str] = None
     ducking: bool = Field(default=False)

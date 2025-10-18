@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from app.tts import TTSConfigurationError, synthesize_xtts
+from app.tts import TTSConfigurationError, synthesize_azure, synthesize_xtts
 
 DEFAULT_PRESET = os.getenv("DEFAULT_PRESET", "medium")
 DEFAULT_CRF = int(os.getenv("DEFAULT_CRF", "18"))
@@ -21,6 +21,7 @@ DEFAULT_TTS_LANGUAGE = (
     or os.getenv("DEFAULT_TTS_LANGUAGE")
     or "en"
 )
+DEFAULT_TTS_API = os.getenv("DEFAULT_TTS_API", "xtts").lower()
 
 _FONT_ENV_VAR = "TITLE_FONT_FILE"
 _DEFAULT_FONT_RELATIVE = Path("media") / "EB_Garamond" / "EBGaramond-VariableFont_wght.ttf"
@@ -157,7 +158,21 @@ def render_project(
     preset = opts.get("preset", DEFAULT_PRESET)
     crf = str(opts.get("crf", DEFAULT_CRF))
     voice_dir = opts.get("voiceDir")
-    tts_voice = opts.get("tts") or video_meta.get("voice") or DEFAULT_TTS_VOICE
+    tts_api = (
+        opts.get("ttsApi")
+        or opts.get("tts_api")
+        or video_meta.get("tts_api")
+        or video_meta.get("api")
+        or DEFAULT_TTS_API
+    )
+    tts_api = str(tts_api).lower() if tts_api else DEFAULT_TTS_API
+    if tts_api not in {"xtts", "azure"}:
+        _log(log, f"Unknown TTS api '{tts_api}', falling back to 'xtts'")
+        tts_api = "xtts"
+    tts_voice_default = (
+        os.getenv("AZURE_TTS_VOICE") if tts_api == "azure" else DEFAULT_TTS_VOICE
+    )
+    tts_voice = opts.get("tts") or video_meta.get("voice") or tts_voice_default
     tts_language = (
         opts.get("ttsLanguage")
         or video_meta.get("language")
@@ -189,24 +204,36 @@ def render_project(
         audio_wav = work_dir / f"scene_{idx}.wav"
         update("AUDIO_PREP", 0.1 + index * 0.02)
         if voice_path is None:
-            if tts_voice and voice_text.strip():
+            if voice_text.strip():
                 try:
-                    synthesize_xtts(
-                        voice_text,
-                        audio_wav,
-                        voice=tts_voice,
-                        language=tts_language,
-                        log=log,
-                    )
+                    if tts_api == "azure":
+                        synthesize_azure(
+                            voice_text,
+                            audio_wav,
+                            voice=tts_voice or None,
+                            language=tts_language,
+                            log=log,
+                        )
+                    else:
+                        synthesize_xtts(
+                            voice_text,
+                            audio_wav,
+                            voice=tts_voice or DEFAULT_TTS_VOICE,
+                            language=tts_language,
+                            log=log,
+                        )
                 except TTSConfigurationError:
                     raise
                 except Exception as exc:  # noqa: BLE001
-                    raise RuntimeError(f"xTTS synthesis failed for scene {idx}: {exc}") from exc
+                    api_label = tts_api.upper() if tts_api else "TTS"
+                    raise RuntimeError(
+                        f"{api_label} synthesis failed for scene {idx}: {exc}"
+                    ) from exc
             else:
                 if voice_text.strip():
                     _log(
                         log,
-                        f"Scene {idx}: skipping TTS (voice text present but no voice configured)",
+                        f"Scene {idx}: no TTS voice configured; generating silence",
                     )
                 duration = estimate_seconds(voice_text)
                 run(
