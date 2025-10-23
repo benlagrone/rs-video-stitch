@@ -6,14 +6,25 @@ from typing import Any, Dict, List, Optional
 from pydantic import AliasChoices, BaseModel, Field, conlist
 
 
+class SceneTimelineEntry(BaseModel):
+    image: str
+    duration: float
+
+    class Config:
+        extra = "allow"
+
+
 class Scene(BaseModel):
     title: str
     description: Optional[str] = None
     VO: str = Field(alias="VO")
     images: conlist(str, min_length=1, max_length=3)
+    timeline: Optional[List[SceneTimelineEntry]] = None
+    duration: Optional[float] = None
 
     class Config:
         populate_by_name = True
+        extra = "allow"
 
 
 class VideoSettings(BaseModel):
@@ -35,6 +46,17 @@ class ProjectSpec(BaseModel):
     )
 
 
+class TitleStyle(BaseModel):
+    fontFamily: Optional[str] = None
+    fill: Optional[str] = None
+    outline: Optional[str] = None
+    fontSize: Optional[float] = None
+    position: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
 class RenderOptions(BaseModel):
     fps: int = Field(default=30, ge=1)
     minShot: float = Field(default=2.5, gt=0)
@@ -52,6 +74,10 @@ class RenderOptions(BaseModel):
     voiceDir: Optional[str] = None
     music: Optional[str] = None
     ducking: bool = Field(default=False)
+    titleStyle: Optional[TitleStyle] = None
+
+    class Config:
+        extra = "allow"
 
 
 class RenderRequest(BaseModel):

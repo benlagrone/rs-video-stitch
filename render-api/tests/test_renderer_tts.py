@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -9,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import renderer
 
 
-def _setup_project(tmpdir: Path, api_value: str) -> Path:
+def _setup_project(tmpdir: Path, api_value: str, voice: str = "custom-voice") -> Path:
     storage_root = tmpdir
     pid = "pid123"
     project_root = storage_root / "projects" / pid
@@ -20,7 +21,7 @@ def _setup_project(tmpdir: Path, api_value: str) -> Path:
 
     scenes = {
         "vid": {
-            "voice": "custom-voice",
+            "voice": voice,
             "lang": "en",
             "api": api_value,
         },
@@ -109,7 +110,11 @@ class RendererTTSTest(TestCase):
     def test_azure_is_used_when_api_azure(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage_root = Path(tmp)
-            storage_root = _setup_project(storage_root, "azure")
+            storage_root = _setup_project(
+                storage_root,
+                "azure",
+                voice="en-US-AdamMultilingualNeural",
+            )
             xtts_calls = []
             azure_calls = []
 
@@ -128,6 +133,11 @@ class RendererTTSTest(TestCase):
             patches = self._common_patches() + [
                 mock.patch.object(renderer, "synthesize_xtts", side_effect=fake_xtts),
                 mock.patch.object(renderer, "synthesize_azure", side_effect=fake_azure),
+                mock.patch.dict(
+                    os.environ,
+                    {"AZURE_TTS_VOICE": "en-US-AriaNeural"},
+                    clear=False,
+                ),
             ]
 
             for patch in patches:
@@ -150,6 +160,6 @@ class RendererTTSTest(TestCase):
 
             text, destination, voice, language = azure_calls[0]
             self.assertEqual(text, "Hello world")
-            self.assertEqual(voice, "custom-voice")
+            self.assertEqual(voice, "en-US-AdamMultilingualNeural")
             self.assertEqual(language, "en")
             self.assertTrue(destination.exists())
