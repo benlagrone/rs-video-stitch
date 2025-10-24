@@ -672,8 +672,7 @@ def render_project(
             border_color = _normalize_color(title_style.get("outline"), default_alpha=0.65) or "black@0.65"
             x_expr, y_expr = _title_coordinates(title_style.get("position"))
             draw_segments = [
-                "drawtext",
-                f"fontfile='{_ffmpeg_escape(str(title_font_path))}'",
+                f"drawtext=fontfile='{_ffmpeg_escape(str(title_font_path))}'",
                 f"textfile='{_ffmpeg_escape(str(title_file))}'",
                 f"fontsize={font_size}",
                 f"fontcolor={font_color}",
