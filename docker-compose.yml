@@ -4,19 +4,25 @@ services:
       context: .
       dockerfile: render-api/Dockerfile
     image: render-api:latest
-    container_name: render-api
+    container_name: mediastudio-api
     networks:
-      - fortress-phronesis-net
+      - mediastudio-sextant-net
     environment:
       - RENDER_STORAGE=/videos
       - DB_URL=sqlite:////videos/db.sqlite3
       - INLINE_WORKER=0
-      - AUTH_TOKEN=${AUTH_TOKEN:-change-me}
-      - ALLOW_ORIGINS=${ALLOW_ORIGINS:-http://localhost:5173}
-      - AZURE_KEY=${AZURE_KEY}
-      - AZURE_REGION=${AZURE_REGION}
-      - XTTS_API_URL=${XTTS_API_URL}
-      - XTTS_LANGUAGE=${XTTS_LANGUAGE}
+      - MEDIASTUDIO_RUNTIME_HOST=fortress.sextant
+      - AUTH_TOKEN=${AUTH_TOKEN:?Set AUTH_TOKEN in the Sextant environment}
+      - ALLOW_ORIGINS=${ALLOW_ORIGINS:-http://fortress-sextant.local:8082}
+      - VOICE_GATEWAY_URL=${VOICE_GATEWAY_URL:-http://100.100.97.30:8133}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://100.100.97.30:11434}
+      - STABLE_DIFFUSION_API_URL=${STABLE_DIFFUSION_API_URL:-http://100.100.97.30:7861/sdapi/v1/txt2img}
+      - COMFYUI_MODEL_API_URL=${COMFYUI_MODEL_API_URL:-http://100.100.97.30:8188}
+      - BIBLE_TEXT_API_URL=${BIBLE_TEXT_API_URL:-https://bible-api.com}
+      - YOUTUBE_CLIENT_ID=${YOUTUBE_CLIENT_ID:-}
+      - YOUTUBE_CLIENT_SECRET=${YOUTUBE_CLIENT_SECRET:-}
+      - YOUTUBE_REFRESH_TOKEN=${YOUTUBE_REFRESH_TOKEN:-}
+      - YOUTUBE_TOKEN_FILE=/videos/youtube_token.json
       - DEFAULT_FPS=30
       - DEFAULT_MIN_SHOT=2.5
       - DEFAULT_MAX_SHOT=8.0
@@ -24,32 +30,34 @@ services:
       - DEFAULT_CRF=18
       - DEFAULT_PRESET=medium
     volumes:
-      - ~/Videos:/videos
+      - ${MEDIASTUDIO_RENDER_STORAGE:-/Users/benjaminlagrone/Videos/MediaStudio}:/videos
     ports:
       - "8082:8080"
     restart: unless-stopped
 
   render-worker:
     image: render-api:latest
-    container_name: render-worker
+    container_name: mediastudio-worker
     entrypoint: ["/usr/bin/tini","--"]
     command: ["python","-m","app.worker"]
     networks:
-      - fortress-phronesis-net
+      - mediastudio-sextant-net
     environment:
       - RENDER_STORAGE=/videos
       - DB_URL=sqlite:////videos/db.sqlite3
-      - AUTH_TOKEN=${AUTH_TOKEN:-change-me}
-      - AZURE_KEY=${AZURE_KEY}
-      - AZURE_REGION=${AZURE_REGION}
-      - XTTS_API_URL=${XTTS_API_URL}
-      - XTTS_LANGUAGE=${XTTS_LANGUAGE}
+      - MEDIASTUDIO_RUNTIME_HOST=fortress.sextant
+      - AUTH_TOKEN=${AUTH_TOKEN:?Set AUTH_TOKEN in the Sextant environment}
+      - VOICE_GATEWAY_URL=${VOICE_GATEWAY_URL:-http://100.100.97.30:8133}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://100.100.97.30:11434}
+      - STABLE_DIFFUSION_API_URL=${STABLE_DIFFUSION_API_URL:-http://100.100.97.30:7861/sdapi/v1/txt2img}
+      - COMFYUI_MODEL_API_URL=${COMFYUI_MODEL_API_URL:-http://100.100.97.30:8188}
+      - BIBLE_TEXT_API_URL=${BIBLE_TEXT_API_URL:-https://bible-api.com}
     volumes:
-      - ~/Videos:/videos
+      - ${MEDIASTUDIO_RENDER_STORAGE:-/Users/benjaminlagrone/Videos/MediaStudio}:/videos
     depends_on:
       - render-api
     restart: unless-stopped
 
 networks:
-  fortress-phronesis-net:
-    external: true
+  mediastudio-sextant-net:
+    name: mediastudio-sextant-net

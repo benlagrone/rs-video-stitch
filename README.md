@@ -1,5 +1,11 @@
 # Render API
 
+Bible Video Studio now provides a passage-first UI at `/media-studio`: enter a
+Bible reference, choose `Still` or `Motion`, select translation/style/voice,
+and queue the complete video workflow. YouTube publishing remains a separate,
+explicit review action. The runtime is locked to `fortress.sextant`; see
+[`docs/sextant-bible-video-deployment.md`](docs/sextant-bible-video-deployment.md).
+
 Headless FastAPI service plus worker that renders narrated slideshows into 1080p MP4 files using FFmpeg. The API accepts scene specifications, assets, and render options, queues jobs in SQLite, and a companion worker container pulls jobs and produces artifacts on a shared `/videos` volume.
 
 Each scene’s `title` is burned into the video frame using the bundled EB Garamond font so viewers see a consistent on-screen caption while that scene plays.
@@ -107,25 +113,26 @@ mkdir -p ~/Videos/{logs,projects}
 
 Fields under `vid` are optional. When present they become the default narration voice and language for subsequent renders (unless overridden in `renderOptions` or by explicit voiceover audio files).
 
-## Running with Docker Compose
+## Running the locked Sextant deployment
 
-1. Ensure Docker Desktop or compatible engine is available.
-2. Place your project inputs under `~/Videos/projects/<projectId>/input/` (create the directories if needed) or use the API to upload them.
-3. Build and launch:
+The persistent MediaStudio service runs only on `fortress.sextant`; laptop
+Docker is for development tests, not the application runtime. On Sextant,
+after the approved Colima preflight, build and launch with the locked project:
 
    ```bash
-   docker compose down
-   docker compose up -d --build
+   docker compose -p mediastudio-sextant -f docker-compose.yml up -d --build
    ```
 
-   Bringing the stack down first ensures any containers bound to the old port are removed before relaunch.
-
-4. API is available on `http://192.168.86.23:8082` by default. Worker container shares the same image and consumes render jobs automatically. Interactive docs live at `http://192.168.86.23:8082/docs`.
+The UI is available privately at
+`http://fortress-sextant.local:8082/media-studio`. The worker shares the API
+image and consumes render jobs. Model inference stays on Fortress Phronesis;
+workflow state, provider adapters, rendering, publishing gates, and the UI run
+on Sextant.
 
 To stop the stack:
 
 ```bash
-docker compose down
+docker compose -p mediastudio-sextant -f docker-compose.yml down
 ```
 
 ### Streaming live logs while using Docker

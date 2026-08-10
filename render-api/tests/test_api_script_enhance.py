@@ -1,0 +1,101 @@
+import asyncio
+import sys
+from pathlib import Path
+from unittest import TestCase, mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app import api
+from app.schemas import ScriptEnhanceRequest, YouTubeDescriptionRequest
+
+
+class _FakeOllamaResponse:
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"response": "A tighter narrated script."}
+
+
+class ScriptEnhanceApiTest(TestCase):
+    def test_parse_byte_range_supports_open_ended_range(self):
+        self.assertEqual(api._parse_byte_range("bytes=100-", 1000), (100, 999))
+
+    def test_parse_byte_range_supports_suffix_range(self):
+        self.assertEqual(api._parse_byte_range("bytes=-250", 1000), (750, 999))
+
+    def test_parse_byte_range_rejects_out_of_bounds_range(self):
+        self.assertIsNone(api._parse_byte_range("bytes=1000-1200", 1000))
+
+    def test_enhance_script_calls_ollama_model(self):
+        with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(
+            api,
+            "OLLAMA_MODEL",
+            "mixtral:latest",
+        ), mock.patch.object(api.requests, "post", return_value=_FakeOllamaResponse()) as post:
+            response = asyncio.run(
+                api.enhance_script(
+                    ScriptEnhanceRequest(script="Original narration.", targetSeconds=45)
+                )
+            )
+
+        self.assertEqual(response.script, "A tighter narrated script.")
+        post.assert_called_once()
+        url = post.call_args.args[0]
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(url, "http://ollama.local:11434/api/generate")
+        self.assertEqual(payload["model"], "mixtral:latest")
+        self.assertIn("45 seconds", payload["prompt"])
+        self.assertIn("Original narration.", payload["prompt"])
+
+    def test_enhance_script_includes_room_info_when_supplied(self):
+        with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(
+            api.requests,
+            "post",
+            return_value=_FakeOllamaResponse(),
+        ) as post:
+            asyncio.run(
+                api.enhance_script(
+                    ScriptEnhanceRequest(
+                        script="Original narration.",
+                        targetSeconds=30,
+                        roomInfo=[
+                            {
+                                "filename": "GK-1.jpg",
+                                "header": "Chef kitchen",
+                                "roomDescription": "Oversized island and new appliances",
+                                "label": "kitchen",
+                            }
+                        ],
+                    )
+                )
+            )
+
+        payload = post.call_args.kwargs["json"]
+        self.assertIn("Chef kitchen", payload["prompt"])
+        self.assertIn("kitchen", payload["prompt"])
+        self.assertIn("Oversized island", payload["prompt"])
+
+    def test_enhance_youtube_description_calls_ollama_with_listing_prompt(self):
+        with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(
+            api,
+            "OLLAMA_MODEL",
+            "mixtral:latest",
+        ), mock.patch.object(api.requests, "post", return_value=_FakeOllamaResponse()) as post:
+            response = asyncio.run(
+                api.enhance_youtube_description(
+                    YouTubeDescriptionRequest(
+                        title="2223 Dorrington Drive",
+                        script="Commercial property near the Texas Medical Center.",
+                        currentDescription="",
+                        roomInfo=[{"filename": "GK-1.jpg", "header": "Front Entrance"}],
+                    )
+                )
+            )
+
+        self.assertEqual(response.description, "A tighter narrated script.")
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["model"], "mixtral:latest")
+        self.assertIn("YouTube video description", payload["prompt"])
+        self.assertIn("2223 Dorrington Drive", payload["prompt"])
+        self.assertIn("Front Entrance", payload["prompt"])

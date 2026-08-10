@@ -1,0 +1,14 @@
+{
+  "3": {"class_type": "KSampler", "inputs": {"cfg": 4, "denoise": 1, "latent_image": ["55", 0], "model": ["48", 0], "negative": ["7", 0], "positive": ["6", 0], "sampler_name": "uni_pc", "scheduler": "simple", "seed": 898471028164125, "steps": 20}},
+  "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["38", 0], "text": "A stable image-to-video shot."}},
+  "7": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["38", 0], "text": "distortion, morphing, blur, jitter"}},
+  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["39", 0]}},
+  "37": {"class_type": "UNETLoader", "inputs": {"unet_name": "wan2.2_ti2v_5B_fp16.safetensors", "weight_dtype": "default"}},
+  "38": {"class_type": "CLIPLoader", "inputs": {"clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "device": "default", "type": "wan"}},
+  "39": {"class_type": "VAELoader", "inputs": {"vae_name": "wan2.2_vae.safetensors"}},
+  "48": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["37", 0], "shift": 8}},
+  "55": {"class_type": "Wan22ImageToVideoLatent", "inputs": {"batch_size": 1, "height": 320, "length": 81, "start_image": ["56", 0], "vae": ["39", 0], "width": 576}},
+  "56": {"class_type": "LoadImage", "inputs": {"image": "test-image.png", "upload": "image"}},
+  "57": {"class_type": "CreateVideo", "inputs": {"fps": 16, "images": ["8", 0]}},
+  "58": {"class_type": "SaveVideo", "inputs": {"codec": "auto", "filename_prefix": "video-capability/wan2_2_ti2v_5b", "format": "auto", "video": ["57", 0]}}
+}

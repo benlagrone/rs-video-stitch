@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models import Artifact, Job
 from app.renderer import render_project
+from app.bible_workflow import prepare_bible_project
 from app.storage import ROOT as STORAGE_ROOT, job_log_path
 
 POLL_INTERVAL = 1.0
@@ -74,13 +75,24 @@ def loop(stop_event: Event | None = None) -> None:
                 _update_job(session, job, stage=stage, progress=min(1.0, value))
 
             try:
+                is_bible_video = payload.get("workflow") == "bible-video"
+                if is_bible_video:
+                    prepare_bible_project(
+                        job.project_id,
+                        payload,
+                        progress=progress,
+                        log=log,
+                    )
+                def render_progress(stage: str, value: float) -> None:
+                    progress(stage, 0.5 + value * 0.49 if is_bible_video else value)
+
                 final_path = render_project(
                     job.project_id,
                     STORAGE_ROOT,
                     options,
                     output_name,
                     log=log,
-                    progress=progress,
+                    progress=render_progress,
                 )
                 size = final_path.stat().st_size if final_path.exists() else 0
                 if final_path.exists():

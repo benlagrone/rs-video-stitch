@@ -1,3 +1,11 @@
+FROM node:22-slim AS render-ui-build
+
+WORKDIR /ui
+COPY render-ui/package*.json ./
+RUN npm ci
+COPY render-ui ./
+RUN npm run build
+
 FROM python:3.11-slim-bullseye
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,6 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY render-api/app /srv/app
 COPY media /srv/media
+COPY --from=render-ui-build /ui/dist /srv/render-ui
 ENV PYTHONUNBUFFERED=1
 ENV RENDER_STORAGE=/videos
 ENV DB_URL=sqlite:////videos/db.sqlite3
