@@ -1,4 +1,10 @@
-# Bible Video Studio on Fortress Sextant
+# MediaStudio on Fortress Sextant
+
+The complete MediaStudio runtime belongs on `fortress.sextant`, including the
+generic project desk, real-estate video tooling, and Bible Video Studio. They
+share one API, worker, project store, render pipeline, thumbnail generator, and
+reviewed YouTube integration. Phronesis remains a protected model-serving host;
+it does not own MediaStudio workflow or project state.
 
 Bible Video Studio is a server workflow, not a laptop CLI. Its locked runtime
 host is `fortress.sextant`. The browser calls the MediaStudio same-origin API;
@@ -26,7 +32,7 @@ and keep YouTube publishing behind a separate confirmation dialog.
 - Compose file: `docker-compose.yml`
 - Network: `mediastudio-sextant-net`
 - Private UI: `http://fortress-sextant.local:8082/media-studio`
-- Storage: `~/Videos/MediaStudio`
+- Storage: `~/Videos/MediaStudio` for Bible, real-estate, and generic projects
 
 The host must pass the Colima/Docker preflight before deployment. Stable
 Diffusion, Ollama, Wan/ComfyUI, and the central voice gateway are reached at
@@ -46,11 +52,29 @@ while making the declared private LAN UI reachable.
 Run from the checked-out repository on Sextant after deployment:
 
 ```bash
+bash scripts/verify-sextant-mediastudio.sh
 bash scripts/verify-sextant-bible-video.sh
 ```
 
-The smoke check verifies placement, API readiness, UI availability, and the
-reported health of MediaStudio, the image GPU, and the motion GPU.
+The full MediaStudio smoke check verifies placement, API readiness, UI
+availability, migrated real-estate project assets and outputs, and YouTube
+authorization. The Bible smoke check separately verifies image and motion
+provider health.
+
+## Full-project-store migration evidence
+
+Validated on 2026-08-10:
+
+- The stopped Phronesis project store was staged byte-for-byte on Sextant:
+  32 project directories, 2,647 files, and 3,616,225,327 bytes.
+- Sextant's existing Bible store was backed up before merging the staged
+  projects; the Phronesis source was retained unchanged for rollback.
+- The restarted Sextant runtime reported 35 projects: three Bible projects and
+  21 JHNG01 real-estate projects, plus other generic MediaStudio projects.
+- A migrated English real-estate MP4 validated as 1920x1080 H.264 with audio;
+  its generated thumbnail validated as a 1280x720 JPEG.
+- Sextant retained the newer YouTube credential and reported authenticated for
+  the upload scope.
 
 ## Live acceptance evidence
 

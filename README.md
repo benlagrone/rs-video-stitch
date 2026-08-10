@@ -1,9 +1,11 @@
-# Render API
+# MediaStudio Render API
 
-Bible Video Studio now provides a passage-first UI at `/media-studio`: enter a
-Bible reference, choose `Still` or `Motion`, select translation/style/voice,
-and queue the complete video workflow. YouTube publishing remains a separate,
-explicit review action. The runtime is locked to `fortress.sextant`; see
+MediaStudio provides one project desk at `/media-studio` for generic,
+real-estate, and Bible video workflows. Real-estate projects manage listing
+photos, bilingual scripts, branded renders, thumbnails, and reviewed YouTube
+uploads. Bible Video Studio adds a passage-first flow with `Still` and `Motion`
+modes. Public YouTube publishing remains a separate, explicit review action.
+The complete runtime and project store are locked to `fortress.sextant`; see
 [`docs/sextant-bible-video-deployment.md`](docs/sextant-bible-video-deployment.md).
 
 Headless FastAPI service plus worker that renders narrated slideshows into 1080p MP4 files using FFmpeg. The API accepts scene specifications, assets, and render options, queues jobs in SQLite, and a companion worker container pulls jobs and produces artifacts on a shared `/videos` volume.
@@ -37,10 +39,10 @@ README.md
 
 ## Storage Layout
 
-Mounted host directory `~/Videos` is mapped to `/videos` inside both containers:
+Mounted host directory `~/Videos/MediaStudio` is mapped to `/videos` inside both containers:
 
 ```
-~/Videos/
+~/Videos/MediaStudio/
   db.sqlite3
   logs/
   projects/<projectId>/
@@ -54,12 +56,12 @@ Mounted host directory `~/Videos` is mapped to `/videos` inside both containers:
       scene_00.mp4 ...
 ```
 
-Rendered videos are written to `~/Videos/projects/<projectId>/output/` on the host. Final MP4s arrive alongside any per-scene intermediates the worker leaves behind for debugging.
+Rendered videos are written to `~/Videos/MediaStudio/projects/<projectId>/output/` on the Sextant host. Final MP4s arrive alongside any per-scene intermediates the worker leaves behind for debugging.
 
 Create the base directories before starting the stack:
 
 ```bash
-mkdir -p ~/Videos/{logs,projects}
+mkdir -p ~/Videos/MediaStudio/{logs,projects}
 ```
 
 ## Environment Variables
@@ -115,7 +117,7 @@ Fields under `vid` are optional. When present they become the default narration 
 
 ## Running the locked Sextant deployment
 
-The persistent MediaStudio service runs only on `fortress.sextant`; laptop
+The persistent MediaStudio service and all production project storage run only on `fortress.sextant`; laptop
 Docker is for development tests, not the application runtime. On Sextant,
 after the approved Colima preflight, build and launch with the locked project:
 
@@ -123,7 +125,7 @@ after the approved Colima preflight, build and launch with the locked project:
    docker compose -p mediastudio-sextant -f docker-compose.yml up -d --build
    ```
 
-The UI is available privately at
+The Bible and real-estate tools share the private UI at
 `http://fortress-sextant.local:8082/media-studio`. The worker shares the API
 image and consumes render jobs. Model inference stays on Fortress Phronesis;
 workflow state, provider adapters, rendering, publishing gates, and the UI run
@@ -416,9 +418,3 @@ curl -sS "$BASE/v1/projects/$PID/outputs/video" -o dist/demo.mp4
 ## License
 
 This repository currently has no explicit license. Add one if you plan to distribute or share the project.
- download and check:
- scp -r master-benjamin@192.168.86.23:~/Videos/projects/ \
-    ~/Downloads/tmp
-
-    scp -r master-benjamin@192.168.86.23:/home/master-benjamin/Projects/rs-video-stitch/data/projects/ \
-    ~/Downloads/tmp
