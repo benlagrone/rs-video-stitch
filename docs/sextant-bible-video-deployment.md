@@ -50,5 +50,16 @@ bash scripts/verify-sextant-bible-video.sh
 ```
 
 The smoke check verifies placement, API readiness, UI availability, and the
-reported health of MediaStudio, the image GPU, and the motion GPU. A real
-motion-video acceptance run is still required before declaring Motion ready.
+reported health of MediaStudio, the image GPU, and the motion GPU.
+
+## Live acceptance evidence
+
+Validated on 2026-08-10 from commit `d7cd292`:
+
+- Still: `John 3:16`, completed as a 1920x1080 H.264/AAC MP4.
+- Motion: `Psalm 23:1`, completed with an 81-frame, 5.06-second Wan source clip
+  and a 1920x1080 H.264/AAC final MP4. Early and late frames were visually
+  inspected and confirmed actual motion.
+- The former `fortress-lan-mediastudio-1` application container was stopped
+  after both acceptance runs. Phronesis model and voice containers remained
+  running.
