@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse, urlunparse
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token"
-DEFAULT_REDIRECT_URI = "http://fortress.lan:8082/v1/youtube/auth/callback"
+DEFAULT_REDIRECT_URI = "http://fortress-sextant.local:8082/v1/youtube/auth/callback"
 
 
 class YouTubeUploadConfigurationError(RuntimeError):
@@ -213,10 +213,19 @@ def youtube_auth_status() -> dict:
     config = _client_secret_file_config() or _client_config()
     redirect_uri = _redirect_for_client_config(config)
     manual_callback = _oauth_client_kind(config) == "installed" and _is_loopback_redirect(redirect_uri)
+    configured = bool(
+        config
+        or _token_file_path().exists()
+        or (
+            os.getenv("YOUTUBE_CLIENT_ID")
+            and os.getenv("YOUTUBE_CLIENT_SECRET")
+            and os.getenv("YOUTUBE_REFRESH_TOKEN")
+        )
+    )
     try:
         credentials = _credentials_from_token_file(_token_file_path()) or _credentials_from_refresh_env()
         return {
-            "configured": True,
+            "configured": configured,
             "authenticated": bool(credentials),
             "redirectUri": redirect_uri,
             "serverCallbackUri": youtube_redirect_uri(),
@@ -224,7 +233,7 @@ def youtube_auth_status() -> dict:
         }
     except Exception as exc:  # noqa: BLE001
         return {
-            "configured": True,
+            "configured": configured,
             "authenticated": False,
             "redirectUri": redirect_uri,
             "serverCallbackUri": youtube_redirect_uri(),
