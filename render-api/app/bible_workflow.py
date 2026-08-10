@@ -20,6 +20,10 @@ STABLE_DIFFUSION_API_URL = os.getenv(
     "http://100.100.97.30:7861/sdapi/v1/txt2img",
 )
 STABLE_DIFFUSION_TIMEOUT_SECONDS = float(os.getenv("STABLE_DIFFUSION_TIMEOUT_SECONDS", "600"))
+STABLE_DIFFUSION_CHECKPOINT = os.getenv(
+    "STABLE_DIFFUSION_CHECKPOINT",
+    "Stable-diffusion/absolutereality_v181.safetensors",
+)
 MEDIASTUDIO_RUNTIME_HOST = os.getenv("MEDIASTUDIO_RUNTIME_HOST", "")
 SEXTANT_ORCHESTRATOR_URL = os.getenv("SEXTANT_ORCHESTRATOR_URL", "")
 
@@ -133,6 +137,8 @@ def _generate_still(prompt: str, destination: Path, *, session=requests) -> None
             "steps": 24,
             "cfg_scale": 7,
             "sampler_name": "DPM++ 2M Karras",
+            "override_settings": {"sd_model_checkpoint": STABLE_DIFFUSION_CHECKPOINT},
+            "override_settings_restore_afterwards": True,
         },
         timeout=STABLE_DIFFUSION_TIMEOUT_SECONDS,
     )
