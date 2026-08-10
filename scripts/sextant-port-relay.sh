@@ -17,6 +17,9 @@ fi
 exec /usr/bin/ssh \
   -F "$ssh_config" \
   -g \
+  -o ControlMaster=no \
+  -o ControlPath=none \
+  -o ControlPersist=no \
   -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=30 \
   -o ServerAliveCountMax=3 \
