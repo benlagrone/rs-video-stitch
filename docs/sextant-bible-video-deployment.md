@@ -36,6 +36,11 @@ tokens and provider-selection policy stay inside the Fortress voice gateway;
 YouTube credentials stay in the Sextant server environment. No credential is
 returned to the browser.
 
+Sextant keeps Colima's global `portForwarder` disabled. The launchd service
+`com.fortress.mediastudio-relay` publishes only locked port `8082` through
+Colima's authenticated SSH transport. This preserves fail-closed containers
+while making the declared private LAN UI reachable.
+
 ## Smoke check
 
 Run from the checked-out repository on Sextant after deployment:
