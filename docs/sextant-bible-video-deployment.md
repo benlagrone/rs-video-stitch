@@ -63,3 +63,8 @@ Validated on 2026-08-10 from commit `d7cd292`:
 - The former `fortress-lan-mediastudio-1` application container was stopped
   after both acceptance runs. Phronesis model and voice containers remained
   running.
+- The existing YouTube OAuth client and token were migrated server-to-server;
+  Sextant reports `authenticated: true` for the upload scope. No acceptance
+  video was uploaded. The upload-only scope does not permit a read-only channel
+  identity lookup, so the UI's explicit final publishing review remains the
+  channel confirmation gate.
