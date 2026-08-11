@@ -63,6 +63,7 @@ from app.youtube_upload import (
     youtube_authorization_url,
 )
 from app.bible_workflow import capability_health
+from app.art_styles import list_art_styles
 
 ALLOW_ORIGINS = (
     os.getenv("ALLOW_ORIGINS", "").split(",")
@@ -242,6 +243,12 @@ async def create_bible_video(req: BibleVideoRequest, db: Session = Depends(get_d
 @app.get("/v1/bible/health")
 async def bible_health() -> dict:
     return capability_health()
+
+
+@app.get("/v1/bible/styles")
+async def bible_styles() -> dict:
+    styles = list_art_styles()
+    return {"styles": styles, "count": len(styles)}
 
 
 @app.get("/v1/brand-assets")

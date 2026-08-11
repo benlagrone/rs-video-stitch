@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 import requests
 
+from app.art_styles import resolve_art_style
 from app.motion_provider import COMFYUI_MODEL_API_URL, generate_motion_clip
 from app.storage import ensure_dirs, p_input, save_project_state, save_scenes
 
@@ -89,9 +90,11 @@ def _verse_reference(verse: dict[str, Any], fallback: str) -> str:
 
 
 def _scene_prompt(reference: str, verse: str, visual_style: str) -> str:
+    style = resolve_art_style(visual_style)
     return (
         f"Biblically and historically grounded visual interpretation of {reference}: {verse}. "
-        f"{visual_style}. Ancient Near Eastern setting appropriate to the passage, natural human anatomy, "
+        f"Art direction: {style['name']}. {style['prompt']}. "
+        "Ancient Near Eastern setting appropriate to the passage, natural human anatomy, "
         "modest composition, expressive but restrained emotion, cinematic 16:9 framing, coherent lighting, "
         "no text, no lettering, no watermark, no modern objects."
     )

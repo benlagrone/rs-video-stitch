@@ -6,7 +6,7 @@ from unittest import TestCase, mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import bible_workflow, motion_provider
+from app import art_styles, bible_workflow, motion_provider
 
 
 class _Response:
@@ -25,6 +25,32 @@ class _Response:
 
 
 class BibleWorkflowTest(TestCase):
+    def test_catalog_exposes_every_legacy_and_current_style(self):
+        styles = art_styles.list_art_styles()
+
+        self.assertEqual(len(styles), 77)
+        self.assertEqual(len({style["id"] for style in styles}), 77)
+        self.assertIn("baroque", {style["id"] for style in styles})
+        self.assertIn("mortgage-family-haven", {style["id"] for style in styles})
+        self.assertIn("fortress-grid-illustration", {style["id"] for style in styles})
+
+    def test_storyboard_resolves_catalog_id_to_full_prompt(self):
+        session = mock.Mock()
+        session.get.return_value = _Response(
+            {
+                "reference": "Genesis 1:1",
+                "verses": [{"book_name": "Genesis", "chapter": 1, "verse": 1, "text": "In the beginning."}],
+            }
+        )
+        with mock.patch.object(bible_workflow.requests, "get", side_effect=session.get):
+            _, scenes = bible_workflow.build_storyboard(
+                {"passage": "Genesis 1:1", "translation": "kjv", "visualStyle": "baroque"}
+            )
+
+        prompt = scenes[0]["timeline"][0]["prompt"]
+        self.assertIn("Art direction: Baroque", prompt)
+        self.assertIn("chiaroscuro", prompt)
+
     def test_fetch_and_build_storyboard_preserves_each_verse(self):
         session = mock.Mock()
         session.get.return_value = _Response(

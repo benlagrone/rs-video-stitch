@@ -4,7 +4,10 @@ MediaStudio provides one project desk at `/media-studio` for generic,
 real-estate, and Bible video workflows. Real-estate projects manage listing
 photos, bilingual scripts, branded renders, thumbnails, and reviewed YouTube
 uploads. Bible Video Studio adds a passage-first flow with `Still` and `Motion`
-modes. Public YouTube publishing remains a separate, explicit review action.
+modes. Its searchable visual-style picker is populated by the Sextant-owned
+`GET /v1/bible/styles` catalog, so style names and prompt characteristics stay
+server-side and are shared by still and motion generation. Public YouTube
+publishing remains a separate, explicit review action.
 English and Mandarin projects use separate server-side YouTube publishing
 profiles; selecting a Chinese narration language defaults the project to the
 Mandarin channel without replacing the English channel authorization.

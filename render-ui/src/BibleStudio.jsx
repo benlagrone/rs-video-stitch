@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
-const STYLE_OPTIONS = [
-  'Cinematic natural light',
-  'Classical oil painting',
-  'Fortress Grid illustration',
-  'Historical documentary',
+const FALLBACK_STYLES = [
+  { id: 'cinematic-natural-light', name: 'Cinematic natural light', category: 'Sacred & historical', prompt: 'Cinematic natural light and grounded historical realism' },
+  { id: 'classical-oil-painting', name: 'Classical oil painting', category: 'Sacred & historical', prompt: 'Layered pigments and museum-quality composition' },
+  { id: 'fortress-grid-illustration', name: 'Fortress Grid illustration', category: 'General art & illustration', prompt: 'Clean geometric forms and a restrained palette' },
+  { id: 'historical-documentary', name: 'Historical documentary', category: 'Sacred & historical', prompt: 'Authentic material culture and natural available light' },
 ];
 
 function apiUrl(baseUrl, path) {
@@ -23,7 +23,9 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
   const [passage, setPassage] = useState('Genesis 3:1-6');
   const [translation, setTranslation] = useState('kjv');
   const [mode, setMode] = useState('motion');
-  const [visualStyle, setVisualStyle] = useState(STYLE_OPTIONS[0]);
+  const [visualStyle, setVisualStyle] = useState(FALLBACK_STYLES[0].id);
+  const [visualStyles, setVisualStyles] = useState(FALLBACK_STYLES);
+  const [styleQuery, setStyleQuery] = useState('');
   const [voice, setVoice] = useState('Carter');
   const [job, setJob] = useState(null);
   const [project, setProject] = useState(null);
@@ -56,6 +58,12 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
   }, [effectiveApiBase, authToken]);
 
   useEffect(() => {
+    request('/v1/bible/styles').then((result) => {
+      if (result.styles?.length) setVisualStyles(result.styles);
+    }).catch(() => {});
+  }, [effectiveApiBase, authToken]);
+
+  useEffect(() => {
     if (!job?.jobId || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(job.status)) return undefined;
     const timer = window.setInterval(async () => {
       try {
@@ -85,6 +93,19 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
     ['Fortress Image GPU', health.image],
     ['Fortress Wan / ComfyUI model', health.motion],
   ];
+  const selectedStyle = visualStyles.find((style) => style.id === visualStyle) || visualStyles[0];
+  const filteredStyles = useMemo(() => {
+    const query = styleQuery.trim().toLowerCase();
+    if (!query) return visualStyles;
+    return visualStyles.filter((style) => (
+      `${style.name} ${style.category} ${style.prompt}`.toLowerCase().includes(query)
+      || style.id === visualStyle
+    ));
+  }, [styleQuery, visualStyle, visualStyles]);
+  const styleGroups = useMemo(() => filteredStyles.reduce((groups, style) => {
+    const category = style.category || 'Other';
+    return { ...groups, [category]: [...(groups[category] || []), style] };
+  }, {}), [filteredStyles]);
 
   async function buildVideo(event) {
     event.preventDefault();
@@ -146,7 +167,7 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
         <aside className="bible-config">
           <section><h2>Scripture source</h2><label>Passage<input value={passage} onChange={(event) => setPassage(event.target.value)} required /></label></section>
           <section><h2>Video mode</h2><div className="mode-switch"><button type="button" className={mode === 'still' ? 'active' : ''} onClick={() => setMode('still')}>Still</button><button type="button" className={mode === 'motion' ? 'active' : ''} onClick={() => setMode('motion')}>Motion</button></div></section>
-          <section><label>Translation<select value={translation} onChange={(event) => setTranslation(event.target.value)}><option value="kjv">KJV</option><option value="web">World English Bible</option></select></label><label>Visual style<select value={visualStyle} onChange={(event) => setVisualStyle(event.target.value)}>{STYLE_OPTIONS.map((style) => <option key={style}>{style}</option>)}</select></label><label>Narrator voice<select value={voice} onChange={(event) => setVoice(event.target.value)}><option value="Carter">Carter · local</option><option value="en-US-AdamMultilingualNeural">Adam · warm</option><option value="en-US-AvaMultilingualNeural">Ava · clear</option></select></label></section>
+          <section><label>Translation<select value={translation} onChange={(event) => setTranslation(event.target.value)}><option value="kjv">KJV</option><option value="web">World English Bible</option></select></label><div className="style-picker"><label>Find a visual style<input type="search" value={styleQuery} onChange={(event) => setStyleQuery(event.target.value)} placeholder="Search all styles" /></label><label>Visual style<select value={visualStyle} onChange={(event) => setVisualStyle(event.target.value)}>{Object.entries(styleGroups).map(([category, styles]) => <optgroup label={category} key={category}>{styles.map((style) => <option value={style.id} key={style.id}>{style.name}</option>)}</optgroup>)}</select></label><p><strong>{visualStyles.length} styles</strong> available · {selectedStyle?.prompt}</p></div><label>Narrator voice<select value={voice} onChange={(event) => setVoice(event.target.value)}><option value="Carter">Carter · local</option><option value="en-US-AdamMultilingualNeural">Adam · warm</option><option value="en-US-AvaMultilingualNeural">Ava · clear</option></select></label></section>
           <button className="primary-action bible-build" type="submit" disabled={isSubmitting || (job && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(job.status))}>{isSubmitting ? 'Queuing' : `Generate ${mode === 'motion' ? 'Motion' : 'Still'} Video`}</button>
           {error && <div className="error-box">{error}</div>}
         </aside>
