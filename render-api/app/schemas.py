@@ -1,7 +1,7 @@
 """Pydantic schemas for API requests and responses."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, Field, conlist
 
@@ -202,6 +202,7 @@ class YouTubeUploadRequest(BaseModel):
     categoryId: str = Field(default="22")
     privacyStatus: str = Field(default="private")
     madeForKids: bool = Field(default=False)
+    profile: Literal["english", "mandarin"] = Field(default="english")
 
 
 class YouTubeUploadResponse(BaseModel):

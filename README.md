@@ -5,6 +5,9 @@ real-estate, and Bible video workflows. Real-estate projects manage listing
 photos, bilingual scripts, branded renders, thumbnails, and reviewed YouTube
 uploads. Bible Video Studio adds a passage-first flow with `Still` and `Motion`
 modes. Public YouTube publishing remains a separate, explicit review action.
+English and Mandarin projects use separate server-side YouTube publishing
+profiles; selecting a Chinese narration language defaults the project to the
+Mandarin channel without replacing the English channel authorization.
 The complete runtime and project store are locked to `fortress.sextant`; see
 [`docs/sextant-bible-video-deployment.md`](docs/sextant-bible-video-deployment.md).
 

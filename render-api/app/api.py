@@ -260,27 +260,30 @@ async def brand_assets() -> dict:
 
 
 @app.get("/v1/youtube/auth/status")
-async def youtube_status() -> dict:
-    return youtube_auth_status()
+async def youtube_status(profile: str = "english") -> dict:
+    try:
+        return youtube_auth_status(profile)
+    except YouTubeUploadConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/v1/youtube/auth/start")
-async def youtube_auth_start() -> dict:
+async def youtube_auth_start(profile: str = "english") -> dict:
     try:
-        return youtube_authorization_url()
+        return youtube_authorization_url(profile)
     except YouTubeUploadConfigurationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/v1/youtube/auth/complete")
-async def youtube_auth_complete(req: YouTubeAuthCompleteRequest) -> dict:
+async def youtube_auth_complete(req: YouTubeAuthCompleteRequest, profile: str = "english") -> dict:
     try:
-        complete_youtube_auth_from_callback_url(req.callbackUrl)
+        completed_profile = complete_youtube_auth_from_callback_url(req.callbackUrl, profile=profile)
     except YouTubeUploadConfigurationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return youtube_auth_status()
+    return youtube_auth_status(completed_profile)
 
 
 @app.get("/v1/youtube/auth/callback")
@@ -290,7 +293,7 @@ async def youtube_auth_callback(request: Request, code: str = "", state: str = "
         return HTMLResponse(_youtube_manual_callback_page(str(request.url)))
 
     try:
-        complete_youtube_auth(code, state)
+        completed_profile = complete_youtube_auth(code, state)
     except Exception as exc:  # noqa: BLE001
         return HTMLResponse(
             "<h1>YouTube authorization failed</h1>"
@@ -299,7 +302,7 @@ async def youtube_auth_callback(request: Request, code: str = "", state: str = "
             status_code=400,
         )
     return HTMLResponse(
-        "<h1>YouTube authorization complete</h1>"
+        f"<h1>{html.escape(completed_profile.title())} YouTube authorization complete</h1>"
         "<p>You can close this tab and return to MediaStudio.</p>"
     )
 
@@ -374,7 +377,7 @@ def _youtube_manual_callback_page(callback_url: str) -> str:
   <body>
     <main>
       <h1>Copy this YouTube callback URL</h1>
-      <p>Return to MediaStudio on fortress.lan, paste this full URL into the YouTube auth box, then click Save YouTube auth.</p>
+      <p>Return to MediaStudio on Fortress Sextant, paste this full URL into the YouTube auth box, then click Save YouTube auth.</p>
       <textarea id="callback-url" readonly>{escaped_url}</textarea>
       <button type="button" onclick="copyUrl()">Copy URL</button>
       <span id="copy-status" class="status"></span>
@@ -951,6 +954,7 @@ async def youtube_upload(
             category_id=req.categoryId,
             privacy_status=req.privacyStatus,
             made_for_kids=req.madeForKids,
+            profile=req.profile,
         )
     except YouTubeUploadConfigurationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

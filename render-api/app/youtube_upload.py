@@ -13,22 +13,48 @@ from urllib.parse import parse_qs, urlparse, urlunparse
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token"
 DEFAULT_REDIRECT_URI = "http://fortress-sextant.local:8082/v1/youtube/auth/callback"
+DEFAULT_PROFILE = "english"
+YOUTUBE_PROFILES = {
+    "english": "English channel",
+    "mandarin": "Mandarin channel",
+}
 
 
 class YouTubeUploadConfigurationError(RuntimeError):
     """Raised when the server is missing non-interactive YouTube credentials."""
 
 
-def _token_file_path() -> Path:
-    return Path(os.getenv("YOUTUBE_TOKEN_FILE", "/videos/youtube_token.json"))
+def normalize_youtube_profile(profile: str = DEFAULT_PROFILE) -> str:
+    normalized = str(profile or DEFAULT_PROFILE).strip().lower()
+    if normalized not in YOUTUBE_PROFILES:
+        raise YouTubeUploadConfigurationError(f"Unknown YouTube profile: {profile}")
+    return normalized
 
 
-def _state_file_path() -> Path:
-    return Path(os.getenv("YOUTUBE_STATE_FILE", "/videos/youtube_oauth_state.txt"))
+def _profile_env_name(profile: str, suffix: str) -> str:
+    return f"YOUTUBE_{normalize_youtube_profile(profile).upper()}_{suffix}"
 
 
-def _read_state() -> dict[str, str]:
-    state_file = _state_file_path()
+def _token_file_path(profile: str = DEFAULT_PROFILE) -> Path:
+    profile = normalize_youtube_profile(profile)
+    base = Path(os.getenv("YOUTUBE_TOKEN_FILE", "/videos/youtube_token.json"))
+    if profile == DEFAULT_PROFILE:
+        return base
+    default_path = base.with_name(f"youtube_token_{profile}.json")
+    return Path(os.getenv(_profile_env_name(profile, "TOKEN_FILE"), str(default_path)))
+
+
+def _state_file_path(profile: str = DEFAULT_PROFILE) -> Path:
+    profile = normalize_youtube_profile(profile)
+    base = Path(os.getenv("YOUTUBE_STATE_FILE", "/videos/youtube_oauth_state.txt"))
+    if profile == DEFAULT_PROFILE:
+        return base
+    default_path = base.with_name(f"youtube_oauth_state_{profile}.txt")
+    return Path(os.getenv(_profile_env_name(profile, "STATE_FILE"), str(default_path)))
+
+
+def _read_state(profile: str = DEFAULT_PROFILE) -> dict[str, str]:
+    state_file = _state_file_path(profile)
     if not state_file.exists():
         return {}
     raw = state_file.read_text(encoding="utf-8").strip()
@@ -41,8 +67,8 @@ def _read_state() -> dict[str, str]:
     return {key: str(value) for key, value in parsed.items()}
 
 
-def _write_state(*, state: str, redirect_uri: str, manual_callback: bool) -> None:
-    state_file = _state_file_path()
+def _write_state(*, profile: str, state: str, redirect_uri: str, manual_callback: bool) -> None:
+    state_file = _state_file_path(profile)
     state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text(
         json.dumps(
@@ -83,11 +109,15 @@ def _save_credentials(token_file: Path, credentials: Any) -> None:
     token_file.write_text(credentials.to_json(), encoding="utf-8")
 
 
-def _credentials_from_refresh_env() -> Optional[Any]:
+def _credentials_from_refresh_env(profile: str = DEFAULT_PROFILE) -> Optional[Any]:
     google = _google_modules()
     client_id = os.getenv("YOUTUBE_CLIENT_ID")
     client_secret = os.getenv("YOUTUBE_CLIENT_SECRET")
-    refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN")
+    profile = normalize_youtube_profile(profile)
+    refresh_token = os.getenv(
+        _profile_env_name(profile, "REFRESH_TOKEN"),
+        os.getenv("YOUTUBE_REFRESH_TOKEN") if profile == DEFAULT_PROFILE else None,
+    )
     token_uri = os.getenv("YOUTUBE_TOKEN_URI", DEFAULT_TOKEN_URI)
 
     if not (client_id and client_secret and refresh_token):
@@ -116,9 +146,10 @@ def _credentials_from_token_file(token_file: Path) -> Optional[Any]:
     return credentials
 
 
-def authenticate_youtube():
-    token_file = _token_file_path()
-    credentials = _credentials_from_refresh_env()
+def authenticate_youtube(profile: str = DEFAULT_PROFILE):
+    profile = normalize_youtube_profile(profile)
+    token_file = _token_file_path(profile)
+    credentials = _credentials_from_refresh_env(profile)
     if credentials:
         _save_credentials(token_file, credentials)
     else:
@@ -209,22 +240,28 @@ def _auth_flow(redirect_uri: Optional[str] = None) -> Any:
     return flow
 
 
-def youtube_auth_status() -> dict:
+def youtube_auth_status(profile: str = DEFAULT_PROFILE) -> dict:
+    profile = normalize_youtube_profile(profile)
     config = _client_secret_file_config() or _client_config()
     redirect_uri = _redirect_for_client_config(config)
     manual_callback = _oauth_client_kind(config) == "installed" and _is_loopback_redirect(redirect_uri)
     configured = bool(
         config
-        or _token_file_path().exists()
+        or _token_file_path(profile).exists()
         or (
             os.getenv("YOUTUBE_CLIENT_ID")
             and os.getenv("YOUTUBE_CLIENT_SECRET")
-            and os.getenv("YOUTUBE_REFRESH_TOKEN")
+            and (
+                os.getenv(_profile_env_name(profile, "REFRESH_TOKEN"))
+                or (profile == DEFAULT_PROFILE and os.getenv("YOUTUBE_REFRESH_TOKEN"))
+            )
         )
     )
     try:
-        credentials = _credentials_from_token_file(_token_file_path()) or _credentials_from_refresh_env()
+        credentials = _credentials_from_token_file(_token_file_path(profile)) or _credentials_from_refresh_env(profile)
         return {
+            "profile": profile,
+            "label": YOUTUBE_PROFILES[profile],
             "configured": configured,
             "authenticated": bool(credentials),
             "redirectUri": redirect_uri,
@@ -233,6 +270,8 @@ def youtube_auth_status() -> dict:
         }
     except Exception as exc:  # noqa: BLE001
         return {
+            "profile": profile,
+            "label": YOUTUBE_PROFILES[profile],
             "configured": configured,
             "authenticated": False,
             "redirectUri": redirect_uri,
@@ -242,13 +281,14 @@ def youtube_auth_status() -> dict:
         }
 
 
-def youtube_authorization_url() -> dict[str, Any]:
+def youtube_authorization_url(profile: str = DEFAULT_PROFILE) -> dict[str, Any]:
+    profile = normalize_youtube_profile(profile)
     config = _client_secret_file_config() or _client_config()
     redirect_uri = _redirect_for_client_config(config)
     manual_callback = _oauth_client_kind(config) == "installed" and _is_loopback_redirect(redirect_uri)
     flow = _auth_flow(redirect_uri=redirect_uri)
-    state = uuid.uuid4().hex
-    _write_state(state=state, redirect_uri=redirect_uri, manual_callback=manual_callback)
+    state = f"{profile}.{uuid.uuid4().hex}"
+    _write_state(profile=profile, state=state, redirect_uri=redirect_uri, manual_callback=manual_callback)
     authorization_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
@@ -256,23 +296,32 @@ def youtube_authorization_url() -> dict[str, Any]:
         state=state,
     )
     return {
+        "profile": profile,
+        "label": YOUTUBE_PROFILES[profile],
         "authUrl": authorization_url,
         "redirectUri": redirect_uri,
         "manualCallback": manual_callback,
     }
 
 
-def complete_youtube_auth(code: str, state: str) -> None:
-    state_payload = _read_state()
+def _profile_from_state(state: str) -> str:
+    prefix, separator, _ = state.partition(".")
+    return normalize_youtube_profile(prefix) if separator else DEFAULT_PROFILE
+
+
+def complete_youtube_auth(code: str, state: str, profile: Optional[str] = None) -> str:
+    profile = normalize_youtube_profile(profile or _profile_from_state(state))
+    state_payload = _read_state(profile)
     expected_state = state_payload.get("state", "")
     if not expected_state or state != expected_state:
         raise YouTubeUploadConfigurationError("YouTube OAuth state did not match")
     flow = _auth_flow(redirect_uri=state_payload.get("redirect_uri") or youtube_redirect_uri())
     flow.fetch_token(code=code)
-    _save_credentials(_token_file_path(), flow.credentials)
+    _save_credentials(_token_file_path(profile), flow.credentials)
+    return profile
 
 
-def complete_youtube_auth_from_callback_url(callback_url: str) -> None:
+def complete_youtube_auth_from_callback_url(callback_url: str, profile: Optional[str] = None) -> str:
     parsed = urlparse(callback_url)
     params = parse_qs(parsed.query)
     code = (params.get("code") or [""])[0]
@@ -282,7 +331,7 @@ def complete_youtube_auth_from_callback_url(callback_url: str) -> None:
         raise YouTubeUploadConfigurationError(f"YouTube OAuth returned an error: {error}")
     if not code or not state:
         raise YouTubeUploadConfigurationError("Paste the full YouTube callback URL containing code and state")
-    complete_youtube_auth(code=code, state=state)
+    return complete_youtube_auth(code=code, state=state, profile=profile)
 
 
 def upload_video_to_youtube(
@@ -294,12 +343,13 @@ def upload_video_to_youtube(
     category_id: str = "22",
     privacy_status: str = "private",
     made_for_kids: bool = False,
+    profile: str = DEFAULT_PROFILE,
 ) -> str:
     if not video_path.exists() or not video_path.is_file():
         raise FileNotFoundError(f"Video file not found: {video_path}")
 
     google = _google_modules()
-    youtube = authenticate_youtube()
+    youtube = authenticate_youtube(profile)
     request_body = {
         "snippet": {
             "title": title,

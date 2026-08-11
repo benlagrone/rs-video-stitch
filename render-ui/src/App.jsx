@@ -144,6 +144,10 @@ function apiUrl(baseUrl, path) {
   return `${baseUrl.replace(/\/+$/, '')}${path}`;
 }
 
+function youtubeProfileForLanguage(language) {
+  return /^zh(?:-|$)/i.test(String(language || '').trim()) ? 'mandarin' : 'english';
+}
+
 function fileItem(file) {
   return { name: file.name, file, persisted: false };
 }
@@ -237,6 +241,7 @@ function projectStateFromValues(values) {
     youtubeDescription: values.youtubeDescription,
     youtubeTags: values.youtubeTags,
     youtubePrivacy: values.youtubePrivacy,
+    youtubeProfile: values.youtubeProfile,
   };
 }
 
@@ -284,6 +289,7 @@ export function App() {
   const [isWritingYoutubeDescription, setIsWritingYoutubeDescription] = useState(false);
   const [youtubeTags, setYoutubeTags] = useState('');
   const [youtubePrivacy, setYoutubePrivacy] = useState('private');
+  const [youtubeProfile, setYoutubeProfile] = useState('english');
   const [youtubeResult, setYoutubeResult] = useState('');
   const [youtubeCallbackUrl, setYoutubeCallbackUrl] = useState('');
   const [isConnectingYoutube, setIsConnectingYoutube] = useState(false);
@@ -400,7 +406,7 @@ export function App() {
   }, [apiBase, authToken]);
   useEffect(() => {
     refreshYoutubeAuth().catch(() => {});
-  }, [apiBase, authToken]);
+  }, [apiBase, authToken, youtubeProfile]);
   useEffect(() => {
     const previews = images.map((image) => ({
       name: image.name,
@@ -501,6 +507,7 @@ export function App() {
     setYoutubeDescription('');
     setYoutubeTags('');
     setYoutubePrivacy('private');
+    setYoutubeProfile('english');
     setYoutubeResult('');
     setYoutubeCallbackUrl('');
     setJob(null);
@@ -564,12 +571,14 @@ export function App() {
       setLogoCorner(state.logoCorner || 'top-right');
       setLogoMargin(state.logoMargin ?? 24);
       setVoice(state.voice || voice);
-      setLanguage(state.language || language);
+      const savedLanguage = state.language || language;
+      setLanguage(savedLanguage);
       setTtsApi(state.ttsApi || ttsApi);
       setYoutubeTitle(state.youtubeTitle || '');
       setYoutubeDescription(state.youtubeDescription || '');
       setYoutubeTags(state.youtubeTags || '');
       setYoutubePrivacy(state.youtubePrivacy || 'private');
+      setYoutubeProfile(state.youtubeProfile || youtubeProfileForLanguage(savedLanguage));
       setOutputs(result.outputs || []);
       setVideoHref('');
       setJob(null);
@@ -841,6 +850,7 @@ export function App() {
             youtubeDescription,
             youtubeTags,
             youtubePrivacy,
+            youtubeProfile,
           }),
         }),
       });
@@ -860,7 +870,7 @@ export function App() {
   }
 
   async function refreshYoutubeAuth() {
-    const result = await request('/v1/youtube/auth/status');
+    const result = await request(`/v1/youtube/auth/status?profile=${encodeURIComponent(youtubeProfile)}`);
     setYoutubeAuth(result);
   }
 
@@ -896,14 +906,14 @@ export function App() {
     setError('');
     setIsConnectingYoutube(true);
     try {
-      const result = await request('/v1/youtube/auth/start', { method: 'POST' });
+      const result = await request(`/v1/youtube/auth/start?profile=${encodeURIComponent(youtubeProfile)}`, { method: 'POST' });
       setYoutubeAuth((current) => ({ ...(current || {}), ...result }));
       window.open(result.authUrl, '_blank', 'noopener,noreferrer');
       setStatus(result.manualCallback ? 'Authorize YouTube, then paste the callback URL' : 'Authorize YouTube in the new browser tab');
       if (!result.manualCallback) {
         for (let attempt = 0; attempt < 60; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 2000));
-          const statusResult = await request('/v1/youtube/auth/status');
+          const statusResult = await request(`/v1/youtube/auth/status?profile=${encodeURIComponent(youtubeProfile)}`);
           setYoutubeAuth(statusResult);
           if (statusResult.authenticated) {
             setStatus('YouTube connected');
@@ -922,7 +932,7 @@ export function App() {
   async function completeYoutubeAuth() {
     setError('');
     try {
-      const result = await request('/v1/youtube/auth/complete', {
+      const result = await request(`/v1/youtube/auth/complete?profile=${encodeURIComponent(youtubeProfile)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ callbackUrl: youtubeCallbackUrl.trim() }),
@@ -953,6 +963,7 @@ export function App() {
           privacyStatus: youtubePrivacy,
           categoryId: '22',
           madeForKids: false,
+          profile: youtubeProfile,
         }),
       });
       setYoutubeResult(result.url);
@@ -1199,7 +1210,7 @@ export function App() {
           <h2>Narration</h2>
           <label>Narration route<select value={ttsApi} onChange={(event) => setTtsApi(event.target.value)}><option value="voice-gateway">Fortress Voice Gateway</option><option value="flite">Built-in fallback voice</option><option value="none">None / timed silence</option></select></label>
           <label>Voice<input value={voice} onChange={(event) => setVoice(event.target.value)} /></label>
-          <label>Language<input value={language} onChange={(event) => setLanguage(event.target.value)} /></label>
+          <label>Language<input value={language} onChange={(event) => { setLanguage(event.target.value); setYoutubeProfile(youtubeProfileForLanguage(event.target.value)); }} /></label>
 
           <h2>Intro</h2>
           <label className="check-row"><input type="checkbox" checked={useIntro} onChange={(event) => setUseIntro(event.target.checked)} />Use 1 second leader card</label>
@@ -1522,6 +1533,7 @@ export function App() {
                   <button type="button" onClick={refreshYoutubeAuth}>Check auth</button>
                 </div>
                 <p>{youtubeAuth?.authenticated ? 'Connected on server' : 'Not connected on server'}</p>
+                <label>Publishing channel<select value={youtubeProfile} onChange={(event) => setYoutubeProfile(event.target.value)}><option value="english">English channel</option><option value="mandarin">Mandarin channel</option></select></label>
                 <div className="youtube-actions">
                   <button type="button" onClick={connectYoutube} disabled={isConnectingYoutube}>
                     {isConnectingYoutube ? 'Connecting' : 'Connect YouTube'}

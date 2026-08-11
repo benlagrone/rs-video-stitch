@@ -23,6 +23,7 @@ services:
       - YOUTUBE_CLIENT_SECRET=${YOUTUBE_CLIENT_SECRET:-}
       - YOUTUBE_REFRESH_TOKEN=${YOUTUBE_REFRESH_TOKEN:-}
       - YOUTUBE_TOKEN_FILE=/videos/youtube_token.json
+      - YOUTUBE_MANDARIN_TOKEN_FILE=/videos/youtube_token_mandarin.json
       - YOUTUBE_CLIENT_SECRET_FILE=/videos/youtube_client_secret.json
       - YOUTUBE_REDIRECT_URI=${YOUTUBE_REDIRECT_URI:-http://fortress-sextant.local:8082/v1/youtube/auth/callback}
       - DEFAULT_FPS=30

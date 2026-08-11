@@ -42,6 +42,14 @@ tokens and provider-selection policy stay inside the Fortress voice gateway;
 YouTube credentials stay in the Sextant server environment. No credential is
 returned to the browser.
 
+MediaStudio keeps independent `english` and `mandarin` YouTube publishing
+profiles. The existing `/videos/youtube_token.json` remains the English token;
+Mandarin authorization is stored separately at
+`/videos/youtube_token_mandarin.json`. Chinese-language real-estate projects
+default to the Mandarin profile, while the final upload remains an explicit
+review action. Connecting the Mandarin profile requires the user to choose the
+intended Google account and channel in Google's OAuth flow once.
+
 Sextant keeps Colima's global `portForwarder` disabled. The launchd service
 `com.fortress.mediastudio-relay` publishes only locked port `8082` through
 Colima's authenticated SSH transport. This preserves fail-closed containers
