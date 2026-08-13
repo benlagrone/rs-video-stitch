@@ -348,15 +348,18 @@ def build_storyboard(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]
     return canonical, scenes
 
 
-def _generate_still(prompt: str, destination: Path, *, session=requests) -> None:
+def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "", session=requests) -> None:
+    negative_prompt = (
+        "text, watermark, logo, modern clothing, modern architecture, deformed anatomy, extra limbs, "
+        "duplicate people, face morph, blur, low detail"
+    )
+    if negative_extra.strip():
+        negative_prompt = f"{negative_prompt}, {negative_extra.strip()}"
     response = session.post(
         STABLE_DIFFUSION_API_URL,
         json={
             "prompt": prompt,
-            "negative_prompt": (
-                "text, watermark, logo, modern clothing, modern architecture, deformed anatomy, extra limbs, "
-                "duplicate people, face morph, blur, low detail"
-            ),
+            "negative_prompt": negative_prompt,
             "width": 1024,
             "height": 576,
             "steps": 24,
@@ -379,13 +382,30 @@ def _title_card_prompt(canonical: str, scenes: list[dict[str, Any]], visual_styl
     style = resolve_art_style(visual_style)
     subject = " ".join(str(scene.get("VO") or scene.get("description") or "") for scene in scenes[:6])
     subject = re.sub(r"\s+", " ", subject).strip()[:1200]
+    if re.match(r"^genesis\s+1(?:\D|$)", canonical.strip(), flags=re.IGNORECASE):
+        visual_subject = (
+            "Primordial creation before human civilization: vast dark waters beneath a deep celestial expanse, "
+            "the first warm radiance separating light from darkness, newly forming land and vegetation only at the far edges. "
+            "There are no people, animals, buildings, towers, churches, castles, cities, boats, or constructed objects."
+        )
+    else:
+        visual_subject = f"Use only people, places, objects, and events directly supported by this passage: {subject}"
     return (
         f"Create a dedicated 16:9 Bible video title-card background for {canonical}. "
-        f"The subject matter is: {subject}. Art direction: {style['name']}. {style['prompt']}. "
+        f"Primary visual subject: {visual_subject} Art direction: {style['name']}. {style['prompt']}. "
         "Compose a reverent, visually specific interpretation of the passage with its principal subject and setting. "
-        "Keep a calm, lower-contrast central area for a separately rendered title while retaining meaningful imagery around it. "
+        "Keep the middle third open, calm, and lower contrast for a separately rendered title; place meaningful imagery around the perimeter. "
         "No words, letters, captions, logos, brokerage branding, real-estate marks, frames, badges, watermarks, or modern objects."
     )
+
+
+def _title_card_negative_prompt(canonical: str) -> str:
+    if re.match(r"^genesis\s+1(?:\D|$)", canonical.strip(), flags=re.IGNORECASE):
+        return (
+            "church, cathedral, chapel, castle, tower, house, building, city, village, bridge, boat, ship, road, "
+            "person, people, human, animal, decorative title frame, central monument, busy center"
+        )
+    return "brokerage logo, real estate sign, decorative title frame, busy center"
 
 
 def generate_bible_title_card(
@@ -408,7 +428,11 @@ def generate_bible_title_card(
     destination = p_input(project_id) / "leader" / "bible-title-card.png"
     progress("TITLE_CARD_GENERATION", 0.2)
     log(f"Generating passage-specific {visual_style} title card for {canonical}")
-    _generate_still(_title_card_prompt(canonical, scenes, visual_style), destination)
+    _generate_still(
+        _title_card_prompt(canonical, scenes, visual_style),
+        destination,
+        negative_extra=_title_card_negative_prompt(canonical),
+    )
     state["titleCardImageName"] = destination.name
     state["titleCardUpdatedAt"] = time.time()
     state["visualStyle"] = visual_style
@@ -448,7 +472,11 @@ def prepare_bible_project(
     title_card_name = "bible-title-card.png"
     title_card_path = leader_dir / title_card_name
     log(f"Generating passage-specific title card for {canonical}")
-    _generate_still(_title_card_prompt(canonical, scenes, str(payload.get("visualStyle") or "cinematic-natural-light")), title_card_path)
+    _generate_still(
+        _title_card_prompt(canonical, scenes, str(payload.get("visualStyle") or "cinematic-natural-light")),
+        title_card_path,
+        negative_extra=_title_card_negative_prompt(canonical),
+    )
     render_options = payload.setdefault("renderOptions", {})
     render_options.update({
         "introEnabled": True,

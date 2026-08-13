@@ -389,6 +389,8 @@ async def regenerate_bible_title_card(
         payload={
             "workflow": "bible-title-card",
             "visualStyle": req.visualStyle,
+            "regenerateImage": req.regenerateImage,
+            "renderVideo": req.renderVideo,
             "renderOptions": render_options,
             "outputName": state.get("outputName") or project.last_output_name or "video.mp4",
         },

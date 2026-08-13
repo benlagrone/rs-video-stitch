@@ -184,6 +184,8 @@ class SceneAnimationPromptResponse(BaseModel):
 
 class BibleTitleCardRequest(BaseModel):
     visualStyle: Optional[str] = Field(default=None, min_length=3, max_length=160)
+    regenerateImage: bool = True
+    renderVideo: bool = False
 
 
 class ScriptEnhanceRequest(BaseModel):
