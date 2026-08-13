@@ -39,6 +39,14 @@ def _setup_project(tmpdir: Path, api_value: str, voice: str = "custom-voice") ->
 
 
 class RendererTTSTest(TestCase):
+    def test_bundled_font_picker_resolves_exact_selected_face(self):
+        renderer._find_font_by_family.cache_clear()
+        bold = renderer._find_font_by_family("EB Garamond Bold")
+        cinzel = renderer._find_font_by_family("Cinzel Black")
+
+        self.assertEqual(bold.name, "EBGaramond-Bold.ttf")
+        self.assertEqual(cinzel.name, "Cinzel-Black.ttf")
+
     def test_bottom_scripture_caption_wraps_reference_and_verse(self):
         commands = []
         with tempfile.TemporaryDirectory() as tmp:
