@@ -39,6 +39,15 @@ def _setup_project(tmpdir: Path, api_value: str, voice: str = "custom-voice") ->
 
 
 class RendererTTSTest(TestCase):
+    def test_final_concat_normalizes_mixed_intro_and_scene_time_bases(self):
+        graph = renderer._normalized_concat_filter(2, 30)
+
+        self.assertIn("[0:v]fps=30,settb=AVTB,setpts=PTS-STARTPTS[v0]", graph)
+        self.assertIn("[1:v]fps=30,settb=AVTB,setpts=PTS-STARTPTS[v1]", graph)
+        self.assertIn("aresample=48000", graph)
+        self.assertIn("channel_layouts=stereo", graph)
+        self.assertTrue(graph.endswith("[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"))
+
     def test_vibevoice_preserves_named_english_presets(self):
         self.assertEqual(renderer._vibevoice_speaker_name("en-Emma_woman"), "en-Emma_woman")
         self.assertEqual(
