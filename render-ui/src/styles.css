@@ -108,6 +108,10 @@ button { font: inherit; }
 .bible-scene h3 { font-family: Georgia, serif; font-size: 15px; margin: 2px 0 7px; }
 .bible-scene p { color: var(--text); font-size: 13px; line-height: 1.45; margin: 0; }
 .bible-scene small { color: var(--muted); display: block; margin-top: 9px; }
+.motion-beat { background: var(--surface-strong); border-left: 3px solid var(--accent); display: grid; gap: 5px; margin: 10px 0 0; padding: 8px 10px; }
+.motion-beat div { display: grid; gap: 8px; grid-template-columns: 72px minmax(0, 1fr); }
+.motion-beat dt { color: var(--accent-strong); font-size: 10px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
+.motion-beat dd { color: var(--muted); font-size: 12px; line-height: 1.4; margin: 0; }
 .storyboard-empty { color: var(--muted); margin: 14vh auto; max-width: 460px; text-align: center; }
 .storyboard-empty h3 { color: var(--text); font-family: Georgia, serif; font-size: 22px; }
 .empty-frame { align-items: center; aspect-ratio: 16 / 9; border: 1px dashed var(--line-strong); display: flex; justify-content: center; margin: 0 auto; max-width: 250px; }

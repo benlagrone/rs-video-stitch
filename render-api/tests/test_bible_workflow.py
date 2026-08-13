@@ -1,4 +1,5 @@
 import base64
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -72,6 +73,62 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(scenes[0]["VO"], "For God so loved the world.")
         self.assertIn("no modern objects", scenes[0]["timeline"][0]["prompt"])
 
+    def test_motion_storyboard_has_visible_actions_and_locked_scene_handoffs(self):
+        session = mock.Mock()
+        session.get.return_value = _Response(
+            {
+                "reference": "Genesis 1:1-2",
+                "verses": [
+                    {"book_name": "Genesis", "chapter": 1, "verse": 1, "text": "In the beginning."},
+                    {"book_name": "Genesis", "chapter": 1, "verse": 2, "text": "Darkness was upon the deep."},
+                ],
+            }
+        )
+        raw_plan = json.dumps(
+            {
+                "scenes": [
+                    {"startState": "A dark empty sea", "action": "Light spreads across the water", "endState": "The water glows beneath a new light", "camera": "Track slowly forward", "continuity": "The same sea and horizon", "transition": "The glow reveals the waves"},
+                    {"startState": "An unrelated response", "action": "Wind drives ripples across the water", "endState": "Ordered waves fill the frame", "camera": "Glide above the surface", "continuity": "The same sea, horizon, and light", "transition": "The waves carry forward"},
+                ]
+            }
+        )
+        with mock.patch.object(bible_workflow.requests, "get", side_effect=session.get), mock.patch.object(
+            bible_workflow,
+            "plan_motion_sequence",
+            return_value=bible_workflow._parse_motion_plan(raw_plan, 2),
+        ):
+            _, scenes = bible_workflow.build_storyboard(
+                {"passage": "Genesis 1:1-2", "translation": "kjv", "visualStyle": "baroque", "mode": "motion"}
+            )
+
+        self.assertEqual(scenes[1]["startState"], scenes[0]["endState"])
+        self.assertEqual(scenes[0]["action"], "Light spreads across the water")
+        self.assertIn("The visible action is", scenes[0]["motionPrompt"])
+        self.assertIn("Connection to the next shot", scenes[0]["motionPrompt"])
+
+    def test_motion_planner_uses_fortress_ollama_for_whole_passage(self):
+        session = mock.Mock()
+        response_plan = {
+            "scenes": [
+                {"startState": "A dark sea", "action": "Light crosses the water", "endState": "A glowing sea", "camera": "Push forward", "continuity": "Same horizon", "transition": "Follow the glow"}
+            ]
+        }
+        session.post.return_value = _Response({"response": json.dumps(response_plan)})
+
+        plan = bible_workflow.plan_motion_sequence(
+            "Genesis 1:1",
+            [{"reference": "Genesis 1:1", "text": "In the beginning."}],
+            "baroque",
+            session=session,
+        )
+
+        self.assertEqual(plan[0]["action"], "Light crosses the water")
+        call = session.post.call_args
+        self.assertTrue(call.args[0].endswith("/api/generate"))
+        self.assertEqual(call.kwargs["json"]["model"], bible_workflow.OLLAMA_MODEL)
+        self.assertIn("exactly one shot per supplied verse", call.kwargs["json"]["prompt"])
+        self.assertEqual(call.kwargs["json"]["format"], "json")
+
     def test_generate_still_writes_first_image(self):
         session = mock.Mock()
         session.post.return_value = _Response({"images": [base64.b64encode(b"png-data").decode("ascii")]})
@@ -83,6 +140,30 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual((payload["width"], payload["height"]), (1024, 576))
         self.assertEqual(payload["override_settings"]["sd_model_checkpoint"], bible_workflow.STABLE_DIFFUSION_CHECKPOINT)
         self.assertTrue(payload["override_settings_restore_afterwards"])
+
+    def test_motion_project_chains_each_clip_final_frame_into_next_scene(self):
+        scenes = [
+            {"title": "Genesis 1:1", "VO": "One", "images": ["scene_001.png"], "motionPrompt": "First action", "timeline": [{"image": "scene_001.png", "prompt": "First frame"}]},
+            {"title": "Genesis 1:2", "VO": "Two", "images": ["scene_002.png"], "motionPrompt": "Second action", "timeline": [{"image": "scene_002.png", "prompt": "Unused independent frame"}]},
+        ]
+        payload = {"mode": "motion", "translation": "kjv", "visualStyle": "baroque", "renderOptions": {}}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "build_storyboard", return_value=("Genesis 1:1-2", scenes)
+        ), mock.patch.object(bible_workflow, "ensure_dirs"), mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(bible_workflow, "save_scenes"), mock.patch.object(
+            bible_workflow, "save_project_state"
+        ), mock.patch.object(bible_workflow, "_generate_still") as generate_still, mock.patch.object(
+            bible_workflow, "generate_motion_clip"
+        ) as generate_motion, mock.patch.object(bible_workflow, "extract_last_frame") as extract:
+            bible_workflow.prepare_bible_project("bible-test", payload, progress=mock.Mock(), log=mock.Mock())
+
+        first_clip = Path(tmp) / "input" / "motion" / "scene_001.mp4"
+        second_image = Path(tmp) / "input" / "images" / "scene_002.png"
+        generate_still.assert_called_once()
+        extract.assert_called_once_with(first_clip, second_image)
+        self.assertEqual(generate_motion.call_count, 2)
+        self.assertEqual(generate_motion.call_args_list[1].args[0], second_image)
 
     def test_generate_motion_submits_comfyui_workflow_and_downloads_artifact(self):
         session = mock.Mock()
@@ -143,3 +224,20 @@ class BibleWorkflowTest(TestCase):
         ):
             with self.assertRaisesRegex(motion_provider.MotionProviderError, "failed hard gates"):
                 motion_provider._verify_video(Path(tmp) / "short.mp4")
+
+    def test_extract_last_frame_creates_next_scene_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "scene_001.mp4"
+            destination = Path(tmp) / "scene_002.png"
+
+            def complete(command, **_kwargs):
+                destination.write_bytes(b"png-data")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=complete) as run:
+                motion_provider.extract_last_frame(source, destination)
+
+        command = run.call_args.args[0]
+        self.assertEqual(command[0], "ffmpeg")
+        self.assertIn("-sseof", command)
+        self.assertIn(str(source), command)

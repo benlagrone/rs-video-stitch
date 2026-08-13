@@ -22,6 +22,21 @@ class MotionProviderError(RuntimeError):
     pass
 
 
+def extract_last_frame(video_path: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg", "-y", "-sseof", "-0.08", "-i", str(video_path),
+        "-frames:v", "1", "-vf", "scale=1024:576:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        "pad=1024:576:(ow-iw)/2:(oh-ih)/2", str(destination),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise MotionProviderError(f"Unable to carry the previous scene into the next scene: {exc}") from exc
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise MotionProviderError("Previous scene did not yield a usable final frame")
+
+
 def _set_path(document: dict[str, Any], dotted_path: str, value: Any) -> None:
     target: Any = document
     parts = dotted_path.split(".")

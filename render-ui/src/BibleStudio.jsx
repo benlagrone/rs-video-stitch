@@ -90,6 +90,7 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
   const healthRows = [
     ['Sextant Orchestrator', health.sextant],
     ['MediaStudio', health.mediastudio],
+    ['Fortress Story Planner', health.planning],
     ['Fortress Image GPU', health.image],
     ['Fortress Wan / ComfyUI model', health.motion],
   ];
@@ -173,12 +174,12 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
         </aside>
 
         <section className="bible-storyboard">
-          <div className="bible-section-heading"><div><h2>Storyboard</h2><p>{scenes.length ? `${scenes.length} scenes from ${project?.state?.passage || passage}` : 'Scenes appear here as the job completes.'}</p></div><strong>{mode.toUpperCase()}</strong></div>
+          <div className="bible-section-heading"><div><h2>Storyboard</h2><p>{scenes.length ? `${scenes.length} scenes from ${project?.state?.passage || passage}` : 'Scenes appear here as the job completes.'}</p></div><strong>{mode === 'motion' ? 'MOTION · CONTINUITY PLANNED' : 'STILL'}</strong></div>
           {scenes.length ? <div className="bible-scene-list">{scenes.map((scene, index) => {
             const image = scene.images?.[0];
             const imageUrl = apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(project.projectId)}/assets/images/${encodeURIComponent(image)}`);
-            return <article className="bible-scene" key={`${scene.title}-${index}`}><span className="scene-number">{index + 1}</span><img src={imageUrl} alt="" /><div><h3>{scene.title}</h3><p>{scene.VO}</p><small>{Math.round(scene.duration || 0)} sec · {project.state?.mode === 'motion' ? 'Motion clip' : 'Still image'}</small></div></article>;
-          })}</div> : <div className="storyboard-empty"><div className="empty-frame">16:9</div><h3>Name a passage. Sextant handles the rest.</h3><p>The job will retrieve the verses, create the storyboard, generate imagery, add motion when selected, narrate, and render one MP4.</p></div>}
+            return <article className="bible-scene" key={`${scene.title}-${index}`}><span className="scene-number">{index + 1}</span><img src={imageUrl} alt="" /><div><h3>{scene.title}</h3><p>{scene.VO}</p>{scene.action && <dl className="motion-beat"><div><dt>Action</dt><dd>{scene.action}</dd></div><div><dt>Camera</dt><dd>{scene.camera}</dd></div><div><dt>Continuity</dt><dd>{scene.continuity}</dd></div><div><dt>Ends with</dt><dd>{scene.endState}</dd></div></dl>}<small>{Math.round(scene.duration || 0)} sec · {project.state?.mode === 'motion' ? 'Chained motion clip' : 'Still image'}</small></div></article>;
+          })}</div> : <div className="storyboard-empty"><div className="empty-frame">16:9</div><h3>Name a passage. Sextant handles the rest.</h3><p>Motion mode plans the whole passage as one continuous sequence, gives every scene a visible action, and carries each scene's final frame into the next shot.</p></div>}
         </section>
 
         <aside className="bible-output">
