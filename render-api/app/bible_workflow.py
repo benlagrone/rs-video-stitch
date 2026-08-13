@@ -234,10 +234,12 @@ def generate_scene_animation_prompt(project_id: str, scene_index: int, *, sessio
     image_prompt = str(((scene.get("timeline") or [{}])[0]).get("prompt") or "").strip()
     planning_prompt = (
         "Write one production-ready image-to-video animation prompt for this existing Bible scene still. "
-        "Describe a concrete visible action that develops throughout a five-second continuous shot, purposeful camera "
+        "Use 40 to 110 words. Describe a concrete visible action that develops throughout a five-second continuous shot, purposeful camera "
         "movement, stable faces and anatomy, and what the final frame should show. Preserve the people, clothing, "
         "architecture, geography, palette, light direction, and composition already visible in the still. Do not invent "
-        "new characters, add text, cut to another view, or use vague phrases such as cinematic movement. Return only the prompt.\n\n"
+        "new people, creatures, objects, symbols, writing, lettering, or captions. Do not quote the narration, cut to another "
+        "view, begin frozen, or use vague phrases such as cinematic movement. Return only the positive motion prompt and do "
+        "not discuss these restrictions.\n\n"
         f"Scene {scene_index}: {scene.get('title') or ''}\n"
         f"Narration: {scene.get('VO') or scene.get('description') or ''}\n"
         f"Still-image description: {image_prompt}\n"
@@ -245,22 +247,41 @@ def generate_scene_animation_prompt(project_id: str, scene_index: int, *, sessio
         f"Previous scene ending: {(previous_scene or {}).get('endState') or (previous_scene or {}).get('title') or 'opening scene'}\n"
         f"Next scene opening: {(next_scene or {}).get('startState') or (next_scene or {}).get('title') or 'final scene'}"
     )
-    response = session.post(
-        f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-        json={
-            "model": OLLAMA_MODEL,
-            "prompt": planning_prompt,
-            "stream": False,
-            "options": {"temperature": 0.3},
-        },
-        timeout=OLLAMA_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    prompt = str(payload.get("response") or "").strip().strip('"')
-    if not prompt:
-        raise RuntimeError("Fortress motion prompt planner returned an empty response")
-    return re.sub(r"\s+", " ", prompt)
+    rejected = ""
+    for attempt in range(3):
+        retry_instruction = ""
+        if rejected:
+            retry_instruction = (
+                "\n\nYour previous answer was rejected because it introduced forbidden still-image or "
+                f"text behavior ({rejected}). Rewrite it as visible physical motion using only existing scene elements."
+            )
+        response = session.post(
+            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": planning_prompt + retry_instruction,
+                "stream": False,
+                "options": {"temperature": 0.2 if attempt else 0.3},
+            },
+            timeout=OLLAMA_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        prompt = re.sub(r"\s+", " ", str(payload.get("response") or "").strip().strip('"'))
+        if not prompt:
+            rejected = "empty response"
+            continue
+        forbidden = re.findall(
+            r"\b(?:text|lettering|caption|subtitle|words?|quill|write|writes|writing|written|static|frozen|still image|scene cut|jump cut)\b",
+            prompt,
+            flags=re.IGNORECASE,
+        )
+        if len(prompt.split()) > 140:
+            forbidden.append("over 140 words")
+        if not forbidden:
+            return prompt
+        rejected = ", ".join(sorted({value.lower() for value in forbidden}))
+    raise RuntimeError(f"Fortress motion prompt planner failed the no-text/no-still quality gate: {rejected}")
 
 
 def animate_bible_scene(
