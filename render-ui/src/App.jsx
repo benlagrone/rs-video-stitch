@@ -346,6 +346,10 @@ export function App() {
     const assigned = new Set(scenesPayload.scenes.flatMap((scene) => scene.images || []));
     return imagePreviews.filter((preview) => !assigned.has(preview.name));
   }, [imagePreviews, scenesPayload]);
+  const imagePreviewByName = useMemo(
+    () => new Map(imagePreviews.map((preview) => [preview.name, preview])),
+    [imagePreviews],
+  );
   const roomInfoPayload = useMemo(
     () => images.map((image) => ({
       filename: image.name,
@@ -1322,13 +1326,27 @@ export function App() {
                         </span>
                       </div>
                       <div className="scene-image-assignment-row">
-                        <div className="scene-image-chip-list">
-                          {assignedImages.length ? assignedImages.map((imageName) => (
-                            <span className="scene-image-chip" key={imageName}>
-                              {imageName}
-                              <button type="button" aria-label={`Remove ${imageName} from scene ${index + 1}`} onClick={() => removeImageFromScene(index, imageName)}>x</button>
-                            </span>
-                          )) : <span className="scene-empty-note">No pictures assigned</span>}
+                        <div className="scene-image-preview-list">
+                          {assignedImages.length ? assignedImages.map((imageName) => {
+                            const preview = imagePreviewByName.get(imageName);
+                            return (
+                              <div className="scene-image-preview-card" key={imageName}>
+                                <button
+                                  className="scene-image-thumbnail"
+                                  type="button"
+                                  onClick={() => setSelectedImageName(imageName)}
+                                  aria-label={`Open ${imageName} preview for scene ${index + 1}`}
+                                >
+                                  <img src={preview?.url || missingImageDataUrl(imageName)} alt="" draggable="false" />
+                                  <span>Expand</span>
+                                </button>
+                                <div className="scene-image-preview-meta">
+                                  <span title={imageName}>{imageName}</span>
+                                  <button type="button" aria-label={`Remove ${imageName} from scene ${index + 1}`} onClick={() => removeImageFromScene(index, imageName)}>x</button>
+                                </div>
+                              </div>
+                            );
+                          }) : <span className="scene-empty-note">No pictures assigned</span>}
                         </div>
                         <select
                           aria-label={`Add picture to scene ${index + 1}`}
@@ -1376,13 +1394,14 @@ export function App() {
                 Save room info
               </button>
             </div>
-            <div className="loading-zone-heading">
-              <h3>Image Loading Zone</h3>
-              <span>{unassignedImageCount} unassigned image{unassignedImageCount === 1 ? '' : 's'}</span>
-            </div>
-            <div className="image-order-list">
-              {imagePreviews.map((preview, index) => {
-                const assignedSceneIndex = scenesPayload.scenes.findIndex((scene) => (scene.images || []).includes(preview.name));
+            {unassignedImagePreviews.length > 0 ? <>
+              <div className="loading-zone-heading">
+                <h3>Image Loading Zone</h3>
+                <span>{unassignedImageCount} unassigned image{unassignedImageCount === 1 ? '' : 's'}</span>
+              </div>
+              <div className="image-order-list">
+              {unassignedImagePreviews.map((preview, loadingIndex) => {
+                const index = imagePreviews.findIndex((item) => item.name === preview.name);
                 return (
                 <Fragment key={`${preview.name}-${index}`}>
                   <div
@@ -1398,7 +1417,7 @@ export function App() {
                       setDraggedImageName('');
                     }}
                   >
-                    <span>{index === 0 ? 'Drop here for beginning' : 'Drop here'}</span>
+                    <span>{loadingIndex === 0 ? 'Drop here for beginning' : 'Drop here'}</span>
                   </div>
                   <div
                     className={`image-header-item ${draggedImageName === preview.name ? 'is-dragging' : ''}`}
@@ -1421,9 +1440,7 @@ export function App() {
                       </span>
                       <span className="image-order-number">{index + 1}</span>
                       <span className="image-file-name" title={preview.name}>{preview.name}</span>
-                      <span className={`image-assignment-badge ${assignedSceneIndex >= 0 ? 'is-assigned' : ''}`}>
-                        {assignedSceneIndex >= 0 ? `Scene ${assignedSceneIndex + 1}` : 'Loading zone'}
-                      </span>
+                      <span className="image-assignment-badge">Loading zone</span>
                       {preview.missing && <span className="missing-file-badge">Missing file</span>}
                       <button type="button" aria-label={`Remove ${preview.name}`} onClick={() => removeImage(preview.name)}>
                         x
@@ -1486,7 +1503,8 @@ export function App() {
               >
                 <span>Drop at end</span>
               </div>
-            </div>
+              </div>
+            </> : <p className="all-images-assigned">All {imagePreviews.length} pictures are assigned and shown in their scene cards above.</p>}
             </>
           )}
 
