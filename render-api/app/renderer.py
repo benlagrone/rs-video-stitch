@@ -1356,12 +1356,28 @@ def render_project(
                 motion_path = input_dir / "motion" / motion_name
                 if not motion_path.exists():
                     raise FileNotFoundError(f"Missing motion clip for scene {idx}: {motion_name}")
+                motion_duration = ffprobe_duration(motion_path)
+                visual_duration = max(duration_seconds, motion_duration)
+                speed_factor = visual_duration / motion_duration if motion_duration > 0 else 1.0
+                motion_filter = _fit_image_frame_filter("0:v", "v").replace(
+                    ",setsar=1",
+                    f",setpts={speed_factor:.8f}*PTS,setsar=1",
+                )
+                _log(
+                    log,
+                    (
+                        "Scene %s: playing motion once and stretching %.3fs to %.3fs "
+                        "so its final frame becomes the next scene handoff"
+                    )
+                    % (idx, motion_duration, visual_duration),
+                )
                 run([
-                    "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(motion_path),
-                    "-t", f"{duration_seconds:.3f}", "-filter_complex", _fit_image_frame_filter("0:v", "v"),
+                    "ffmpeg", "-y", "-i", str(motion_path),
+                    "-t", f"{visual_duration:.3f}", "-filter_complex", motion_filter,
                     "-map", "[v]", "-an", "-c:v", "libx264", "-preset", preset, "-crf", crf,
                     "-pix_fmt", "yuv420p", str(segment),
                 ], log)
+                duration_seconds = visual_duration
             else:
                 filter_complex = _fit_image_frame_filter("0:v", "v")
                 run(
@@ -1486,6 +1502,8 @@ def render_project(
                 "aac",
                 "-b:a",
                 "192k",
+                "-af",
+                "apad",
                 "-shortest",
                 str(scene_file),
             ],

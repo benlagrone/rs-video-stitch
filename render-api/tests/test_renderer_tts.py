@@ -276,3 +276,40 @@ class RendererTTSTest(TestCase):
         self.assertIn("pad=1920:1080:(ow-iw)/2:(oh-ih)/2", filter_graph)
         self.assertNotIn("crop=1920:1080", filter_graph)
         self.assertNotIn("zoompan", filter_graph)
+
+    def test_motion_clip_plays_once_stretches_to_scene_and_pads_short_audio(self):
+        commands = []
+
+        def fake_run(cmd, log=None):
+            commands.append(cmd)
+            target = Path(cmd[-1])
+            if target.suffix:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"output")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            storage_root = _setup_project(Path(tmp), "none")
+            project_root = storage_root / "projects" / "pid123"
+            scenes_path = project_root / "input" / "scenes.json"
+            spec = json.loads(scenes_path.read_text(encoding="utf-8"))
+            spec["scenes"][0].update(
+                {
+                    "duration": 12.0,
+                    "timeline": [{"image": "img001.png", "video": "scene_001.mp4"}],
+                }
+            )
+            scenes_path.write_text(json.dumps(spec), encoding="utf-8")
+            motion_path = project_root / "input" / "motion" / "scene_001.mp4"
+            motion_path.parent.mkdir(parents=True, exist_ok=True)
+            motion_path.write_bytes(b"motion")
+
+            with mock.patch.object(renderer, "run", side_effect=fake_run), mock.patch.object(
+                renderer, "ffprobe_duration", return_value=5.0
+            ):
+                renderer.render_project("pid123", storage_root, {}, "output.mp4")
+
+        motion_command = next(command for command in commands if str(motion_path) in command)
+        self.assertNotIn("-stream_loop", motion_command)
+        self.assertIn("setpts=2.40000000*PTS", motion_command[motion_command.index("-filter_complex") + 1])
+        audio_mux = next(command for command in commands if "-c:a" in command and "-shortest" in command)
+        self.assertEqual(audio_mux[audio_mux.index("-af") + 1], "apad")
