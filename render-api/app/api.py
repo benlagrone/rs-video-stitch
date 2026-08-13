@@ -72,6 +72,7 @@ from app.youtube_upload import (
     youtube_authorization_url,
 )
 from app.bible_workflow import (
+    BIBLE_CAPTION_STYLE,
     BIBLE_CHANNEL_ICON,
     capability_health,
     generate_scene_animation_prompt,
@@ -441,6 +442,8 @@ async def regenerate_bible_title_card(
         "logoImage": BIBLE_CHANNEL_ICON,
         "logoCorner": "bottom-right",
         "logoMargin": 28,
+        "scriptureCaptionEnabled": True,
+        "titleStyle": dict(render_options.get("titleStyle") or BIBLE_CAPTION_STYLE),
     })
     job_id = f"j_{uuid.uuid4().hex[:12]}"
     db.add(Job(
@@ -471,6 +474,19 @@ async def bible_health() -> dict:
 async def bible_styles() -> dict:
     styles = list_art_styles()
     return {"styles": styles, "count": len(styles)}
+
+
+@app.get("/v1/bible/fonts")
+async def bible_fonts() -> dict:
+    fonts = [
+        {"id": name, "name": name, "family": family}
+        for family, names in (
+            ("EB Garamond", ("EB Garamond", "EB Garamond Medium", "EB Garamond SemiBold", "EB Garamond Bold", "EB Garamond Italic")),
+            ("Cinzel", ("Cinzel", "Cinzel Medium", "Cinzel SemiBold", "Cinzel Bold", "Cinzel ExtraBold", "Cinzel Black")),
+        )
+        for name in names
+    ]
+    return {"fonts": fonts, "count": len(fonts)}
 
 
 @app.get("/v1/brand-assets")

@@ -39,6 +39,30 @@ def _setup_project(tmpdir: Path, api_value: str, voice: str = "custom-voice") ->
 
 
 class RendererTTSTest(TestCase):
+    def test_bottom_scripture_caption_wraps_reference_and_verse(self):
+        commands = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.mp4"
+            source.write_bytes(b"video")
+            title_file = root / "caption.txt"
+            with mock.patch.object(renderer, "run", side_effect=lambda cmd, log=None: commands.append(cmd)):
+                renderer._overlay_title(
+                    source,
+                    root / "captioned.mp4",
+                    "Genesis 1:2\nAnd the earth was without form, and void; and darkness was upon the face of the deep.",
+                    title_file,
+                    root / "font.ttf",
+                    {"position": "bottom-center", "fontSize": 48},
+                    "medium",
+                    "18",
+                    None,
+                )
+            caption = title_file.read_text(encoding="utf-8")
+        self.assertTrue(caption.startswith("Genesis 1:2\n"))
+        self.assertGreater(caption.count("\n"), 1)
+        self.assertIn("y=h-text_h-h*0.08", commands[0][commands[0].index("-vf") + 1])
+
     def test_final_concat_normalizes_mixed_intro_and_scene_time_bases(self):
         graph = renderer._normalized_concat_filter(2, 30)
 

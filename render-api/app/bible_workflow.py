@@ -35,6 +35,13 @@ OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
 BIBLE_CHANNEL_NAME = os.getenv("BIBLE_CHANNEL_NAME", "Animal Safari Kids")
 BIBLE_CHANNEL_ID = os.getenv("BIBLE_CHANNEL_ID", "UCU1T3KZjLceczyfHr2aqpeQ")
 BIBLE_CHANNEL_ICON = os.getenv("BIBLE_CHANNEL_ICON", "animal-safari-kids.png")
+BIBLE_CAPTION_STYLE = {
+    "fontFamily": "EB Garamond",
+    "fontSize": 48,
+    "fill": "#ffffff",
+    "outline": "#000000",
+    "position": "bottom-center",
+}
 
 Progress = Callable[[str, float], None]
 Log = Callable[[str], None]
@@ -460,6 +467,8 @@ def generate_bible_title_card(
         "logoImage": BIBLE_CHANNEL_ICON,
         "logoCorner": "bottom-right",
         "logoMargin": 28,
+        "scriptureCaptionEnabled": True,
+        "titleStyle": dict(render_options.get("titleStyle") or BIBLE_CAPTION_STYLE),
     })
     state["renderOptions"] = render_options
     save_project_state(project_id, state, project_name=str(state.get("title") or canonical))
@@ -504,6 +513,8 @@ def prepare_bible_project(
         "logoImage": BIBLE_CHANNEL_ICON,
         "logoCorner": "bottom-right",
         "logoMargin": 28,
+        "scriptureCaptionEnabled": True,
+        "titleStyle": dict(render_options.get("titleStyle") or BIBLE_CAPTION_STYLE),
     })
 
     previous_motion_path: Path | None = None
