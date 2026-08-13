@@ -186,6 +186,9 @@ class BibleWorkflowTest(TestCase):
         self.assertFalse(payload["renderOptions"]["introLeaderEnabled"])
         self.assertTrue(payload["renderOptions"]["logoEnabled"])
         self.assertEqual(payload["renderOptions"]["logoImage"], "animal-safari-kids.png")
+        self.assertTrue(payload["renderOptions"]["scriptureCaptionEnabled"])
+        self.assertEqual(payload["renderOptions"]["titleStyle"]["fontFamily"], "EB Garamond")
+        self.assertEqual(payload["renderOptions"]["titleStyle"]["position"], "bottom-center")
         extract.assert_called_once_with(first_clip, second_image)
         self.assertEqual(generate_motion.call_count, 2)
         self.assertEqual(generate_motion.call_args_list[1].args[0], second_image)
@@ -228,6 +231,7 @@ class BibleWorkflowTest(TestCase):
         self.assertFalse(saved_states[-1]["renderOptions"]["introLeaderEnabled"])
         self.assertTrue(saved_states[-1]["renderOptions"]["logoEnabled"])
         self.assertEqual(saved_states[-1]["renderOptions"]["logoImage"], "animal-safari-kids.png")
+        self.assertTrue(saved_states[-1]["renderOptions"]["scriptureCaptionEnabled"])
 
     def test_scene_animation_prompt_reuses_structured_motion_plan(self):
         document = {

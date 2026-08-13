@@ -507,6 +507,14 @@ label {
   margin-top: -6px;
 }
 
+.caption-font-note {
+  color: var(--muted);
+  display: block;
+  font-size: 10px;
+  line-height: 1.45;
+  margin-top: -5px;
+}
+
 input,
 select,
 textarea {

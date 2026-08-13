@@ -21,7 +21,7 @@ The complete runtime and project store are locked to `fortress.sextant`; see
 
 Headless FastAPI service plus worker that renders narrated slideshows into 1080p MP4 files using FFmpeg. The API accepts scene specifications, assets, and render options, queues jobs in SQLite, and a companion worker container pulls jobs and produces artifacts on a shared `/videos` volume.
 
-Each scene’s `title` is burned into the video frame using the bundled EB Garamond font so viewers see a consistent on-screen caption while that scene plays.
+Bible scenes burn the verse reference and full scripture text into a wrapped lower-third caption. The create and edit views expose every bundled EB Garamond and Cinzel face, and the selected font is persisted in project render options.
 
 ## Architecture
 
