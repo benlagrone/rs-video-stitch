@@ -577,6 +577,24 @@ def _fit_image_frame_filter(input_label: str = "0:v", output_label: str = "v") -
     )
 
 
+def _normalized_concat_filter(input_count: int, fps: int) -> str:
+    """Normalize mixed intro/scene time bases before final concatenation."""
+    normalized: List[str] = []
+    labels: List[str] = []
+    for index in range(input_count):
+        normalized.extend([
+            f"[{index}:v]fps={fps},settb=AVTB,setpts=PTS-STARTPTS[v{index}]",
+            (
+                f"[{index}:a]aresample=48000,"
+                "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                f"asetpts=PTS-STARTPTS[a{index}]"
+            ),
+        ])
+        labels.append(f"[v{index}][a{index}]")
+    normalized.append("".join(labels) + f"concat=n={input_count}:v=1:a=1[v][a]")
+    return ";".join(normalized)
+
+
 def _overlay_logo_on_video(
     source: Path,
     destination: Path,
@@ -1559,8 +1577,7 @@ def render_project(
     for scene_file in scene_files:
         concat_inputs.extend(["-i", str(scene_file)])
 
-    concat_filter = "".join(f"[{i}:v][{i}:a]" for i in range(len(scene_files)))
-    concat_filter += f"concat=n={len(scene_files)}:v=1:a=1[v][a]"
+    concat_filter = _normalized_concat_filter(len(scene_files), fps)
 
     run(
         [
