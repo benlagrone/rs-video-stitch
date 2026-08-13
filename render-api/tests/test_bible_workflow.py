@@ -167,6 +167,98 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(generate_motion.call_count, 2)
         self.assertEqual(generate_motion.call_args_list[1].args[0], second_image)
 
+    def test_scene_animation_prompt_reuses_structured_motion_plan(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)"},
+            "scenes": [{
+                "title": "Genesis 1:1",
+                "VO": "In the beginning.",
+                "images": ["scene_001.png"],
+                "startState": "Dark water fills the frame",
+                "action": "Light travels across the water",
+                "endState": "The horizon glows",
+                "camera": "Slow forward push",
+                "continuity": "Keep the same water and horizon",
+                "transition": "The glow carries into the next shot",
+                "timeline": [{"image": "scene_001.png", "prompt": "A dark sea beneath the heavens"}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(
+            bible_workflow, "read_project_state", return_value={"visualStyle": "baroque"}
+        ):
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            (input_dir / "images" / "scene_001.png").write_bytes(b"png")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+            prompt = bible_workflow.generate_scene_animation_prompt("bible-test", 1)
+
+        self.assertIn("Light travels across the water", prompt)
+        self.assertIn("Slow forward push", prompt)
+        self.assertIn("The horizon glows", prompt)
+
+    def test_scene_animation_prompt_falls_back_without_inventing_new_content(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)"},
+            "scenes": [{
+                "title": "Genesis 1:1",
+                "VO": "In the beginning God created the heaven and the earth.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png", "prompt": "An existing landscape beneath the heavens"}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(bible_workflow, "read_project_state", return_value={}):
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            (input_dir / "images" / "scene_001.png").write_bytes(b"png")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+            prompt = bible_workflow.generate_scene_animation_prompt("bible-test", 1)
+
+        self.assertIn("available light advances", prompt)
+        self.assertIn("without introducing anything new", prompt)
+
+    def test_animate_scene_preserves_still_and_attaches_motion_clip(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)"},
+            "scenes": [{
+                "title": "Genesis 1:1",
+                "VO": "In the beginning.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png"}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(
+            bible_workflow, "read_project_state", return_value={"title": "Genesis 1 (KJV)"}
+        ), mock.patch.object(bible_workflow, "save_scenes") as save_scenes, mock.patch.object(
+            bible_workflow, "save_project_state"
+        ), mock.patch.object(bible_workflow, "generate_motion_clip") as generate_motion:
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            still = input_dir / "images" / "scene_001.png"
+            still.write_bytes(b"original-still")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+
+            clip = bible_workflow.animate_bible_scene(
+                "bible-test",
+                1,
+                "Light expands across the water.",
+                progress=mock.Mock(),
+                log=mock.Mock(),
+            )
+            preserved_still = still.read_bytes()
+
+        self.assertEqual(preserved_still, b"original-still")
+        self.assertEqual(clip.name, "scene_001.mp4")
+        generate_motion.assert_called_once()
+        saved_document = json.loads(save_scenes.call_args.args[1])
+        self.assertEqual(saved_document["scenes"][0]["timeline"][0]["video"], "scene_001.mp4")
+        self.assertEqual(saved_document["scenes"][0]["motionPrompt"], "Light expands across the water.")
+
     def test_generate_motion_submits_comfyui_workflow_and_downloads_artifact(self):
         session = mock.Mock()
         session.post.side_effect = [

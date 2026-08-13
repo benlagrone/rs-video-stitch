@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
@@ -13,7 +14,7 @@ import requests
 
 from app.art_styles import resolve_art_style
 from app.motion_provider import COMFYUI_MODEL_API_URL, extract_last_frame, generate_motion_clip
-from app.storage import ensure_dirs, p_input, save_project_state, save_scenes
+from app.storage import ensure_dirs, p_input, read_project_state, save_project_state, save_scenes
 
 BIBLE_TEXT_API_URL = os.getenv("BIBLE_TEXT_API_URL", "https://bible-api.com")
 BIBLE_TEXT_TIMEOUT_SECONDS = float(os.getenv("BIBLE_TEXT_TIMEOUT_SECONDS", "30"))
@@ -197,6 +198,116 @@ def _motion_prompt(scene: dict[str, Any], visual_style: str) -> str:
         f"Connection to the next shot: {scene['transition']}. {style['prompt']}. "
         "Natural body mechanics, purposeful movement throughout the shot, coherent lighting, no cuts."
     )
+
+
+def scene_animation_context(project_id: str, scene_index: int) -> tuple[dict[str, Any], dict[str, Any], Path, Path]:
+    scenes_path = p_input(project_id) / "scenes.json"
+    if not scenes_path.exists():
+        raise FileNotFoundError(f"Project {project_id} has no scenes.json")
+    try:
+        document = json.loads(scenes_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Project {project_id} has invalid scene data") from exc
+
+    scenes = document.get("scenes") or []
+    if scene_index < 1 or scene_index > len(scenes):
+        raise IndexError(f"Scene {scene_index} does not exist")
+    scene = scenes[scene_index - 1]
+    image_name = str((scene.get("images") or [""])[0]).strip()
+    if not image_name:
+        raise ValueError(f"Scene {scene_index} has no still image")
+    still_path = p_input(project_id) / "images" / Path(image_name).name
+    if not still_path.exists():
+        raise FileNotFoundError(f"Scene {scene_index} still image is missing: {image_name}")
+    clip_name = f"scene_{scene_index:03d}.mp4"
+    clip_path = p_input(project_id) / "motion" / clip_name
+    return document, scene, still_path, clip_path
+
+
+def _safe_fallback_animation_prompt(scene: dict[str, Any]) -> str:
+    context = " ".join(
+        str(value or "")
+        for value in (
+            scene.get("VO"),
+            scene.get("description"),
+            ((scene.get("timeline") or [{}])[0]).get("prompt"),
+        )
+    ).lower()
+    actions = []
+    if any(term in context for term in ("water", "sea", "river", "ocean")):
+        actions.append("Existing water ripples outward and its reflections travel continuously across the surface")
+    if any(term in context for term in ("light", "sun", "day", "heaven", "created", "beginning")):
+        actions.append("available light advances gradually across the existing landscape")
+    if any(term in context for term in ("plant", "tree", "grass", "herb", "flower", "vine")):
+        actions.append("existing leaves and stems respond naturally to a steady breeze")
+    if any(term in context for term in ("animal", "bird", "fish", "creature", "cattle")):
+        actions.append("the existing creatures continue one restrained natural movement")
+    if any(term in context for term in ("man", "woman", "people", "person", "adam", "eve")):
+        actions.append("the existing people breathe, shift their weight, and direct their gaze toward the visible action")
+    if not actions:
+        actions.append("the existing subjects and environmental light develop through one restrained natural action")
+    return (
+        f"{'; '.join(actions[:3])}. The camera makes a slow, steady forward move with gentle parallax, keeping every "
+        "visible subject, garment, face, structure, decorative element, palette, and light direction consistent. Motion "
+        "continues throughout the five-second shot and settles into a clear final composition that can flow directly into "
+        "the following scene without introducing anything new."
+    )
+
+
+def generate_scene_animation_prompt(project_id: str, scene_index: int) -> str:
+    document, scene, _, _ = scene_animation_context(project_id, scene_index)
+    state = read_project_state(project_id) or {}
+    visual_style = str(state.get("visualStyle") or (document.get("info") or {}).get("visualStyle") or "cinematic natural light")
+    existing_prompt = re.sub(r"\s+", " ", str(scene.get("motionPrompt") or "")).strip()
+    if existing_prompt:
+        return existing_prompt
+    plan_fields = ("startState", "action", "endState", "camera", "continuity", "transition")
+    if all(str(scene.get(field) or "").strip() for field in plan_fields):
+        return _motion_prompt(scene, visual_style)
+    return _safe_fallback_animation_prompt(scene)
+
+
+def animate_bible_scene(
+    project_id: str,
+    scene_index: int,
+    prompt: str = "",
+    *,
+    progress: Progress,
+    log: Log,
+) -> Path:
+    document, scene, still_path, clip_path = scene_animation_context(project_id, scene_index)
+    resolved_prompt = re.sub(r"\s+", " ", prompt).strip()
+    if not resolved_prompt:
+        progress("WRITING_MOTION_PROMPT", 0.12)
+        log(f"Generating a continuity-safe animation prompt for scene {scene_index}")
+        resolved_prompt = generate_scene_animation_prompt(project_id, scene_index)
+
+    progress("MOTION_GENERATION", 0.25)
+    log(f"Animating scene {scene_index} from {still_path.name}")
+    generate_motion_clip(
+        still_path,
+        clip_path,
+        prompt=resolved_prompt,
+        negative_prompt=(
+            "static tableau, frozen pose, slideshow, no movement, scene cut, jump cut, jitter, flicker, "
+            "face morph, anatomy distortion, identity change, clothing change, text, watermark"
+        ),
+    )
+    timeline = scene.setdefault("timeline", [{"image": still_path.name}])
+    if not timeline:
+        timeline.append({"image": still_path.name})
+    timeline[0]["video"] = clip_path.name
+    scene["motionPrompt"] = resolved_prompt
+    scene["animationUpdatedAt"] = time.time()
+    project_name = str((document.get("info") or {}).get("name") or project_id)
+    save_scenes(project_id, json.dumps(document, indent=2), project_name=project_name)
+
+    state = read_project_state(project_id) or {}
+    state["hasMotionScenes"] = True
+    state["updatedAt"] = time.time()
+    save_project_state(project_id, state, project_name=str(state.get("title") or project_name))
+    progress("MOTION_READY", 0.95)
+    return clip_path
 
 
 def build_storyboard(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:

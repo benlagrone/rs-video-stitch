@@ -58,8 +58,32 @@ class YouTubeThumbnailApiTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(result.videoId, "video-456")
             self.assertFalse(result.thumbnailApplied)
-            self.assertEqual(result.thumbnailError, "thumbnail missing")
+            self.assertEqual(result.thumbnailError, "YouTube thumbnail failed: thumbnail missing")
             self.assertEqual(saved_states[-1]["youtubeUpload"]["videoId"], "video-456")
+
+    async def test_upload_explains_custom_thumbnail_eligibility_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            (output_dir / "video.mp4").write_bytes(b"video")
+            (output_dir / "thumbnail.jpg").write_bytes(b"thumbnail")
+            permission_error = RuntimeError(
+                "The authenticated user doesn't have permissions to upload and set custom video thumbnails."
+            )
+
+            with patch.object(api, "p_output", return_value=output_dir), patch.object(
+                api, "upload_video_to_youtube", return_value="video-456"
+            ), patch.object(
+                api, "set_youtube_thumbnail", side_effect=permission_error
+            ), patch.object(
+                api, "read_project_state", return_value={"title": "Listing"}
+            ), patch.object(api, "save_project_state"):
+                result = await api.youtube_upload(
+                    "project-1",
+                    YouTubeUploadRequest(title="Listing"),
+                )
+
+            self.assertIn("Feature eligibility", result.thumbnailError)
+            self.assertIn("Apply thumbnail again", result.thumbnailError)
 
     async def test_manual_thumbnail_uses_recorded_video_id(self):
         with tempfile.TemporaryDirectory() as temp_dir:

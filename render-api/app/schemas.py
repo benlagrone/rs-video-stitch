@@ -170,6 +170,16 @@ class BibleVideoRequest(BaseModel):
     renderOptions: RenderOptions = Field(default_factory=RenderOptions)
 
 
+class SceneAnimationRequest(BaseModel):
+    prompt: str = Field(default="", max_length=2000)
+
+
+class SceneAnimationPromptResponse(BaseModel):
+    projectId: str
+    sceneIndex: int
+    prompt: str
+
+
 class ScriptEnhanceRequest(BaseModel):
     script: str = Field(min_length=1)
     targetSeconds: int = Field(ge=5, le=3600)
