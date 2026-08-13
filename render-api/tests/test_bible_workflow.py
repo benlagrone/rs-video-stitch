@@ -162,10 +162,49 @@ class BibleWorkflowTest(TestCase):
 
         first_clip = Path(tmp) / "input" / "motion" / "scene_001.mp4"
         second_image = Path(tmp) / "input" / "images" / "scene_002.png"
-        generate_still.assert_called_once()
+        self.assertEqual(generate_still.call_count, 2)
+        title_card_call = generate_still.call_args_list[0]
+        self.assertIn("Genesis 1:1-2", title_card_call.args[0])
+        self.assertIn("Baroque", title_card_call.args[0])
+        self.assertIn("No words", title_card_call.args[0])
+        self.assertEqual(title_card_call.args[1].name, "bible-title-card.png")
+        self.assertFalse(payload["renderOptions"]["introLeaderEnabled"])
+        self.assertFalse(payload["renderOptions"]["logoEnabled"])
         extract.assert_called_once_with(first_clip, second_image)
         self.assertEqual(generate_motion.call_count, 2)
         self.assertEqual(generate_motion.call_args_list[1].args[0], second_image)
+
+    def test_regenerated_title_card_uses_saved_passage_and_selected_style(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)", "passage": "Genesis 1"},
+            "scenes": [{"title": "Genesis 1:1", "VO": "In the beginning God created the heaven and the earth."}],
+        }
+        saved_states = []
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(
+            bible_workflow, "read_project_state", return_value={"title": "Genesis 1 (KJV)", "passage": "Genesis 1"}
+        ), mock.patch.object(
+            bible_workflow, "save_project_state", side_effect=lambda _pid, state, **_kwargs: saved_states.append(dict(state))
+        ), mock.patch.object(bible_workflow, "_generate_still") as generate_still:
+            input_dir = Path(tmp) / "input"
+            input_dir.mkdir(parents=True)
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+            destination = bible_workflow.generate_bible_title_card(
+                "bible-test",
+                "medieval-illuminated-manuscript",
+                progress=mock.Mock(),
+                log=mock.Mock(),
+            )
+
+        self.assertEqual(destination.name, "bible-title-card.png")
+        prompt = generate_still.call_args.args[0]
+        self.assertIn("Genesis 1", prompt)
+        self.assertIn("Medieval Illuminated Manuscript", prompt)
+        self.assertIn("brokerage branding", prompt)
+        self.assertEqual(saved_states[-1]["visualStyle"], "medieval-illuminated-manuscript")
+        self.assertFalse(saved_states[-1]["renderOptions"]["introLeaderEnabled"])
+        self.assertFalse(saved_states[-1]["renderOptions"]["logoEnabled"])
 
     def test_scene_animation_prompt_reuses_structured_motion_plan(self):
         document = {

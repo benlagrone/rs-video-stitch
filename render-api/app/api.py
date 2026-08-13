@@ -29,6 +29,7 @@ from app.schemas import (
     BibleVideoRequest,
     SceneAnimationRequest,
     SceneAnimationPromptResponse,
+    BibleTitleCardRequest,
     LeadCardGenerateRequest,
     LeadCardGenerateResponse,
     RenderRequest,
@@ -348,6 +349,45 @@ async def animate_scene(
     )
     db.commit()
     return {"projectId": pid, "sceneIndex": scene_index, "jobId": job_id, "status": "QUEUED"}
+
+
+@app.post("/v1/projects/{pid}/bible-title-card", status_code=202)
+async def regenerate_bible_title_card(
+    pid: str,
+    req: BibleTitleCardRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    project = db.get(Project, pid)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    if not (p_input(pid) / "scenes.json").exists():
+        raise HTTPException(status_code=404, detail="project has no scenes")
+    state = read_project_state(pid) or {}
+    render_options = dict(state.get("renderOptions") or {})
+    render_options.update({
+        "introEnabled": True,
+        "introTitle": state.get("passage") or state.get("title") or pid,
+        "introBackgroundImage": "bible-title-card.png",
+        "introLeaderEnabled": False,
+        "thumbnailEnabled": True,
+        "logoEnabled": False,
+    })
+    job_id = f"j_{uuid.uuid4().hex[:12]}"
+    db.add(Job(
+        id=job_id,
+        project_id=pid,
+        status="QUEUED",
+        payload={
+            "workflow": "bible-title-card",
+            "visualStyle": req.visualStyle,
+            "renderOptions": render_options,
+            "outputName": state.get("outputName") or project.last_output_name or "video.mp4",
+        },
+        progress=0.0,
+        stage="QUEUED",
+    ))
+    db.commit()
+    return {"projectId": pid, "jobId": job_id, "status": "QUEUED"}
 
 
 @app.get("/v1/bible/health")

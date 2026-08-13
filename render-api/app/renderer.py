@@ -685,7 +685,7 @@ def _intro_title_drawtext_filter(
 def _create_intro_card_assets(
     *,
     background_image: Path,
-    leader_template: Path,
+    leader_template: Optional[Path],
     title: str,
     work_dir: Path,
     output_dir: Path,
@@ -715,25 +715,28 @@ def _create_intro_card_assets(
         input_label="card",
         output_label="v",
     )
-    card_filter = (
-        f"{_fit_image_frame_filter('0:v', 'bg')};"
-        f"[1:v]scale=-2:{leader_height},format=rgba[leader];"
-        "[bg][leader]overlay=(W-w)/2:(H-h)/2[card];"
-        f"{title_filter}"
-    )
-    _log(log, f"Creating 1.0s leader intro from {leader_template.name} over {background_image.name}")
+    if leader_template:
+        card_filter = (
+            f"{_fit_image_frame_filter('0:v', 'bg')};"
+            f"[1:v]scale=-2:{leader_height},format=rgba[leader];"
+            "[bg][leader]overlay=(W-w)/2:(H-h)/2[card];"
+            f"{title_filter}"
+        )
+        intro_inputs = ["-loop", "1", "-i", str(background_image), "-loop", "1", "-i", str(leader_template)]
+        audio_input_index = 2
+        still_inputs = ["-i", str(background_image), "-i", str(leader_template)]
+        _log(log, f"Creating 1.0s leader intro from {leader_template.name} over {background_image.name}")
+    else:
+        card_filter = f"{_fit_image_frame_filter('0:v', 'card')};{title_filter}"
+        intro_inputs = ["-loop", "1", "-i", str(background_image)]
+        audio_input_index = 1
+        still_inputs = ["-i", str(background_image)]
+        _log(log, f"Creating 1.0s subject title card from {background_image.name} without a brand template")
     run(
         [
             "ffmpeg",
             "-y",
-            "-loop",
-            "1",
-            "-i",
-            str(background_image),
-            "-loop",
-            "1",
-            "-i",
-            str(leader_template),
+            *intro_inputs,
             "-f",
             "lavfi",
             "-i",
@@ -743,7 +746,7 @@ def _create_intro_card_assets(
             "-map",
             "[v]",
             "-map",
-            "2:a",
+            f"{audio_input_index}:a",
             "-t",
             f"{duration:.3f}",
             "-c:v",
@@ -768,10 +771,7 @@ def _create_intro_card_assets(
         [
             "ffmpeg",
             "-y",
-            "-i",
-            str(background_image),
-            "-i",
-            str(leader_template),
+            *still_inputs,
             "-filter_complex",
             still_filter,
             "-map",
@@ -1164,6 +1164,8 @@ def render_project(
     else:
         intro_title = str(info_meta.get("name") or pid).strip()
     intro_leader_image = opts.get("introLeaderImage") or opts.get("intro_leader_image")
+    intro_background_image = opts.get("introBackgroundImage") or opts.get("intro_background_image")
+    intro_leader_enabled = _truthy(opts.get("introLeaderEnabled", opts.get("intro_leader_enabled", True)))
     try:
         intro_duration = float(opts.get("introDuration") or opts.get("intro_duration") or 1.0)
     except (TypeError, ValueError):
@@ -1517,9 +1519,20 @@ def render_project(
         first_image_name = first_images[0] if first_images else None
         if first_image_name:
             first_image = input_dir / "images" / first_image_name
-            leader_template = _resolve_leader_template(input_dir, str(intro_leader_image) if intro_leader_image else None, log)
+            intro_background = first_image
+            if intro_background_image:
+                requested_background = input_dir / "leader" / Path(str(intro_background_image)).name
+                if requested_background.exists():
+                    intro_background = requested_background
+                else:
+                    _log(log, f"Requested intro background {requested_background.name} is missing; using first scene")
+            leader_template = (
+                _resolve_leader_template(input_dir, str(intro_leader_image) if intro_leader_image else None, log)
+                if intro_leader_enabled
+                else None
+            )
             intro_file, thumbnail_file = _create_intro_card_assets(
-                background_image=first_image,
+                background_image=intro_background,
                 leader_template=leader_template,
                 title=intro_title,
                 work_dir=work_dir,

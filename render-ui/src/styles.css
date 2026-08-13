@@ -96,6 +96,9 @@ button { font: inherit; }
 .style-picker input, .style-picker select { box-sizing: border-box; max-width: 100%; width: 100%; }
 .style-picker p { color: var(--muted); font-size: 11px; line-height: 1.45; margin: 0; }
 .style-picker p strong { color: var(--text); }
+.bible-title-card-control { border-top: 1px solid var(--line); display: grid; gap: 8px; padding-top: 10px; }
+.bible-title-card-control img { aspect-ratio: 16 / 9; border-radius: 5px; object-fit: cover; width: 100%; }
+.bible-title-card-control small { color: var(--muted); font-size: 10px; line-height: 1.4; }
 
 .bible-storyboard { min-height: calc(100vh - 108px); padding: 14px; }
 .bible-section-heading { align-items: start; display: flex; justify-content: space-between; margin-bottom: 12px; }
