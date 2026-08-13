@@ -27,6 +27,8 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
   const [visualStyles, setVisualStyles] = useState(FALLBACK_STYLES);
   const [styleQuery, setStyleQuery] = useState('');
   const [voice, setVoice] = useState('Carter');
+  const [ttsApi, setTtsApi] = useState('vibevoice-proxy');
+  const [voiceProviders, setVoiceProviders] = useState([]);
   const [job, setJob] = useState(null);
   const [project, setProject] = useState(null);
   const [health, setHealth] = useState({});
@@ -61,6 +63,20 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
     request('/v1/bible/styles').then((result) => {
       if (result.styles?.length) setVisualStyles(result.styles);
     }).catch(() => {});
+  }, [effectiveApiBase, authToken]);
+
+  useEffect(() => {
+    request('/v1/voice-options').then((result) => {
+      const providers = (result.providers || []).filter((provider) => provider.selectable && provider.voices?.length);
+      setVoiceProviders(providers);
+      const selectedProvider = providers.find((provider) => (
+        provider.ttsApi === ttsApi && provider.voices.includes(voice)
+      ));
+      if (!selectedProvider && providers[0]) {
+        setTtsApi(providers[0].ttsApi);
+        setVoice(providers[0].voices[0]);
+      }
+    }).catch(() => setVoiceProviders([]));
   }, [effectiveApiBase, authToken]);
 
   useEffect(() => {
@@ -107,6 +123,15 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
     const category = style.category || 'Other';
     return { ...groups, [category]: [...(groups[category] || []), style] };
   }, {}), [filteredStyles]);
+  const activeVoiceProvider = voiceProviders.find((provider) => (
+    provider.ttsApi === ttsApi && provider.voices.includes(voice)
+  ));
+
+  function selectNarrator(event) {
+    const [nextTtsApi, ...voiceParts] = event.target.value.split('::');
+    setTtsApi(nextTtsApi);
+    setVoice(voiceParts.join('::'));
+  }
 
   async function buildVideo(event) {
     event.preventDefault();
@@ -120,8 +145,8 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           passage, translation, mode, visualStyle, voice,
-          language: 'en-US', ttsApi: 'voice-gateway', outputName: 'video.mp4',
-          renderOptions: { tts: voice, ttsLanguage: 'en-US', ttsApi: 'voice-gateway', introEnabled: true, introTitle: passage, logoEnabled: true },
+          language: 'en-US', ttsApi, outputName: 'video.mp4',
+          renderOptions: { tts: voice, ttsLanguage: 'en-US', ttsApi, introEnabled: true, introTitle: passage, logoEnabled: true },
         }),
       });
       setJob({ ...created, status: 'QUEUED', stage: 'QUEUED', progress: 0 });
@@ -168,7 +193,7 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
         <aside className="bible-config">
           <section><h2>Scripture source</h2><label>Passage<input value={passage} onChange={(event) => setPassage(event.target.value)} required /></label></section>
           <section><h2>Video mode</h2><div className="mode-switch"><button type="button" className={mode === 'still' ? 'active' : ''} onClick={() => setMode('still')}>Still</button><button type="button" className={mode === 'motion' ? 'active' : ''} onClick={() => setMode('motion')}>Motion</button></div></section>
-          <section><label>Translation<select value={translation} onChange={(event) => setTranslation(event.target.value)}><option value="kjv">KJV</option><option value="web">World English Bible</option></select></label><div className="style-picker"><label>Find a visual style<input type="search" value={styleQuery} onChange={(event) => setStyleQuery(event.target.value)} placeholder="Search all styles" /></label><label>Visual style<select value={visualStyle} onChange={(event) => setVisualStyle(event.target.value)}>{Object.entries(styleGroups).map(([category, styles]) => <optgroup label={category} key={category}>{styles.map((style) => <option value={style.id} key={style.id}>{style.name}</option>)}</optgroup>)}</select></label><p><strong>{visualStyles.length} styles</strong> available · {selectedStyle?.prompt}</p></div><label>Narrator voice<select value={voice} onChange={(event) => setVoice(event.target.value)}><option value="Carter">Carter · local</option><option value="en-US-AdamMultilingualNeural">Adam · warm</option><option value="en-US-AvaMultilingualNeural">Ava · clear</option></select></label></section>
+          <section><label>Translation<select value={translation} onChange={(event) => setTranslation(event.target.value)}><option value="kjv">KJV</option><option value="web">World English Bible</option></select></label><div className="style-picker"><label>Find a visual style<input type="search" value={styleQuery} onChange={(event) => setStyleQuery(event.target.value)} placeholder="Search all styles" /></label><label>Visual style<select value={visualStyle} onChange={(event) => setVisualStyle(event.target.value)}>{Object.entries(styleGroups).map(([category, styles]) => <optgroup label={category} key={category}>{styles.map((style) => <option value={style.id} key={style.id}>{style.name}</option>)}</optgroup>)}</select></label><p><strong>{visualStyles.length} styles</strong> available · {selectedStyle?.prompt}</p></div><label>Narrator voice<select value={`${ttsApi}::${voice}`} onChange={selectNarrator}>{voiceProviders.length ? voiceProviders.map((provider) => <optgroup label={provider.label} key={provider.id}>{provider.voices.map((voiceName) => <option value={`${provider.ttsApi}::${voiceName}`} key={`${provider.id}-${voiceName}`}>{voiceName}</option>)}</optgroup>) : <option value="vibevoice-proxy::Carter">Carter</option>}</select></label>{activeVoiceProvider && <span className="voice-source-note">Source: {activeVoiceProvider.label}</span>}</section>
           <button className="primary-action bible-build" type="submit" disabled={isSubmitting || (job && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(job.status))}>{isSubmitting ? 'Queuing' : `Generate ${mode === 'motion' ? 'Motion' : 'Still'} Video`}</button>
           {error && <div className="error-box">{error}</div>}
         </aside>

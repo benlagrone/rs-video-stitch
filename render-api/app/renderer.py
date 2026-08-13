@@ -897,7 +897,7 @@ def _vibevoice_speaker_name(voice: Optional[str]) -> str:
     requested = (voice or "").strip()
     if not requested:
         return VIBEVOICE_DEFAULT_SPEAKER
-    if requested.lower().startswith("en-") or "neural" in requested.lower():
+    if "neural" in requested.lower():
         return VIBEVOICE_DEFAULT_SPEAKER
     return requested
 

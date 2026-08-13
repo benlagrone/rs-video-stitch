@@ -297,9 +297,9 @@ export function App() {
   const [logoImage, setLogoImage] = useState(null);
   const [logoCorner, setLogoCorner] = useState('top-right');
   const [logoMargin, setLogoMargin] = useState(24);
-  const [voice, setVoice] = useState('en-US-AdamMultilingualNeural');
+  const [voice, setVoice] = useState('Carter');
   const [language, setLanguage] = useState('en-US');
-  const [ttsApi, setTtsApi] = useState('voice-gateway');
+  const [ttsApi, setTtsApi] = useState('vibevoice-proxy');
   const [voiceProviders, setVoiceProviders] = useState([]);
   const [outputName, setOutputName] = useState('video.mp4');
   const [status, setStatus] = useState('Idle');
@@ -408,9 +408,9 @@ export function App() {
   useEffect(() => localStorage.setItem('renderUi.authToken', authToken), [authToken]);
   useEffect(() => localStorage.setItem('renderUi.theme', theme), [theme]);
   useEffect(() => {
-    if (ttsApi === 'vibevoice-proxy' && (/^en-/i.test(voice) || /neural/i.test(voice))) {
+    if (ttsApi === 'vibevoice-proxy' && /neural$/i.test(voice)) {
       setVoice('Carter');
-    } else if (ttsApi === 'azure-proxy' && (!voice || voice === 'Carter' || ['kal', 'awb', 'rms', 'slt'].includes(voice))) {
+    } else if (ttsApi === 'azure-proxy' && (!voice || !/neural$/i.test(voice))) {
       setVoice('en-US-AdamMultilingualNeural');
     } else if (ttsApi === 'flite' && (!voice || /^en-/i.test(voice) || /neural/i.test(voice))) {
       setVoice('kal');

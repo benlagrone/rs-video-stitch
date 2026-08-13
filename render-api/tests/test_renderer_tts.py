@@ -39,6 +39,13 @@ def _setup_project(tmpdir: Path, api_value: str, voice: str = "custom-voice") ->
 
 
 class RendererTTSTest(TestCase):
+    def test_vibevoice_preserves_named_english_presets(self):
+        self.assertEqual(renderer._vibevoice_speaker_name("en-Emma_woman"), "en-Emma_woman")
+        self.assertEqual(
+            renderer._vibevoice_speaker_name("en-US-AdamMultilingualNeural"),
+            renderer.VIBEVOICE_DEFAULT_SPEAKER,
+        )
+
     def _common_patches(self):
         fake_run_outputs = []
 

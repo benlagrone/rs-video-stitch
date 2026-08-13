@@ -163,9 +163,9 @@ class BibleVideoRequest(BaseModel):
     translation: str = Field(default="kjv", min_length=2, max_length=20)
     mode: str = Field(default="still", pattern="^(still|motion)$")
     visualStyle: str = Field(default="cinematic natural light", min_length=3, max_length=160)
-    voice: str = Field(default="en-US-AdamMultilingualNeural", min_length=1, max_length=160)
+    voice: str = Field(default="Carter", min_length=1, max_length=160)
     language: str = Field(default="en-US", min_length=2, max_length=32)
-    ttsApi: str = Field(default="voice-gateway", min_length=2, max_length=64)
+    ttsApi: str = Field(default="vibevoice-proxy", min_length=2, max_length=64)
     outputName: str = Field(default="video.mp4", min_length=5, max_length=128)
     renderOptions: RenderOptions = Field(default_factory=RenderOptions)
 

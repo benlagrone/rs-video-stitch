@@ -241,14 +241,15 @@ async def voice_options() -> dict:
         if not provider_id or not voices:
             continue
         is_vibevoice = provider_id == "vibevoice"
+        is_azure_voice = provider_id == "azure_voice"
         if is_vibevoice and "Carter" not in voices:
             voices.insert(0, "Carter")
         providers.append(
             {
                 "id": provider_id,
                 "label": "VibeVoice · Fortress GPU" if is_vibevoice else "Azure Speech · Fortress proxy",
-                "ttsApi": "voice-gateway",
-                "selectable": is_vibevoice,
+                "ttsApi": "vibevoice-proxy" if is_vibevoice else "azure-proxy",
+                "selectable": (is_vibevoice or is_azure_voice) and backend.get("ok") is not False,
                 "voices": voices,
                 "detail": str(backend.get("detail") or ""),
             }
