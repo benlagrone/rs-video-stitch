@@ -6,7 +6,7 @@ from unittest import TestCase, mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import api
-from app.schemas import ScriptEnhanceRequest, YouTubeDescriptionRequest
+from app.schemas import LeadCardGenerateRequest, ScriptEnhanceRequest, YouTubeDescriptionRequest
 
 
 class _FakeOllamaResponse:
@@ -15,6 +15,11 @@ class _FakeOllamaResponse:
 
     def json(self):
         return {"response": "A tighter narrated script."}
+
+
+class _FakeLeadCardResponse(_FakeOllamaResponse):
+    def json(self):
+        return {"response": '{"lines":["Genesis 1","The Beginning of Creation","King James Version"]}'}
 
 
 class ScriptEnhanceApiTest(TestCase):
@@ -75,6 +80,28 @@ class ScriptEnhanceApiTest(TestCase):
         self.assertIn("Chef kitchen", payload["prompt"])
         self.assertIn("kitchen", payload["prompt"])
         self.assertIn("Oversized island", payload["prompt"])
+
+    def test_generate_lead_card_calls_ollama_and_returns_three_lines(self):
+        with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(
+            api,
+            "OLLAMA_MODEL",
+            "mixtral:latest",
+        ), mock.patch.object(api.requests, "post", return_value=_FakeLeadCardResponse()) as post:
+            response = asyncio.run(
+                api.generate_lead_card(
+                    LeadCardGenerateRequest(
+                        title="Genesis 1 (KJV)",
+                        script="In the beginning God created the heaven and the earth.",
+                    )
+                )
+            )
+
+        self.assertEqual(response.lines, ["Genesis 1", "The Beginning of Creation", "King James Version"])
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(post.call_args.args[0], "http://ollama.local:11434/api/generate")
+        self.assertEqual(payload["model"], "mixtral:latest")
+        self.assertIn("three-line leader card", payload["prompt"])
+        self.assertIn("Genesis 1 (KJV)", payload["prompt"])
 
     def test_enhance_youtube_description_calls_ollama_with_listing_prompt(self):
         with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(

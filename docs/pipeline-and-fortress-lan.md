@@ -5,9 +5,11 @@ This repository is the active git home for the MediaStudio render surface:
 - `render-api/`: FastAPI + worker + FFmpeg renderer.
 - `render-ui/`: React/Vite browser interface for uploading images, pasting scripts, queueing renders, and downloading MP4s.
 
-The render API also exposes `POST /v1/script/enhance` for script rewriting through an
-Ollama-compatible API. Configure it with `OLLAMA_BASE_URL` and `OLLAMA_MODEL`
-(`mixtral:latest` on Fortress LAN).
+The render API exposes `POST /v1/script/enhance`, `POST /v1/lead-card/generate`,
+and `POST /v1/youtube/description/enhance` for server-side writing through an
+Ollama-compatible API. Configure them with `OLLAMA_BASE_URL` and `OLLAMA_MODEL`
+(`mixtral:latest` on the protected Fortress model host). Browser clients call
+only these MediaStudio same-origin routes; they never call Ollama directly.
 
 ## CI
 

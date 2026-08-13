@@ -182,6 +182,17 @@ class ScriptEnhanceResponse(BaseModel):
     model: str
 
 
+class LeadCardGenerateRequest(BaseModel):
+    title: str = ""
+    script: str = ""
+    currentLines: List[str] = Field(default_factory=list)
+
+
+class LeadCardGenerateResponse(BaseModel):
+    lines: conlist(str, min_length=3, max_length=3)
+    model: str
+
+
 class YouTubeDescriptionRequest(BaseModel):
     title: str = ""
     script: str = ""

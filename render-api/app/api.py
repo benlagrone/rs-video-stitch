@@ -27,6 +27,8 @@ from app.schemas import (
     ProjectSpec,
     ProjectStateRequest,
     BibleVideoRequest,
+    LeadCardGenerateRequest,
+    LeadCardGenerateResponse,
     RenderRequest,
     RoomAnnotationRequest,
     ScriptEnhanceRequest,
@@ -488,6 +490,55 @@ def _ollama_generate(prompt: str, *, temperature: float = 0.55) -> str:
     if not result:
         raise HTTPException(status_code=502, detail="Ollama returned an empty response")
     return result
+
+
+def _lead_card_prompt(req: LeadCardGenerateRequest) -> str:
+    current_lines = [str(line).strip() for line in req.currentLines if str(line).strip()]
+    current_block = f"\nCurrent draft lines:\n{json.dumps(current_lines)}\n" if current_lines else ""
+    return (
+        "Create a concise three-line leader card for this video.\n"
+        "Line 1 is the primary title, maximum 42 characters.\n"
+        "Line 2 is a descriptive subtitle, maximum 60 characters.\n"
+        "Line 3 is useful context such as translation, location, or a factual callout, maximum 60 characters.\n"
+        "Use only facts supported by the supplied title and script. Do not invent names, claims, prices, or theology.\n"
+        "For scripture, preserve the passage reference and translation when available.\n"
+        "Return JSON only in exactly this shape: {\"lines\":[\"line 1\",\"line 2\",\"line 3\"]}.\n"
+        f"\nVideo title:\n{req.title.strip()}\n"
+        f"{current_block}"
+        f"Source script:\n{req.script.strip()[:6000]}"
+    )
+
+
+def _parse_lead_card_lines(value: str) -> list[str]:
+    raw = value.strip()
+    json_match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+    if json_match:
+        try:
+            payload = json.loads(json_match.group(0))
+            lines = payload.get("lines") if isinstance(payload, dict) else None
+            if isinstance(lines, list):
+                cleaned = [str(line).strip()[:60].rstrip() for line in lines if str(line).strip()]
+                if len(cleaned) >= 3:
+                    return cleaned[:3]
+        except (TypeError, ValueError):
+            pass
+
+    cleaned = []
+    for line in raw.splitlines():
+        line = re.sub(r"^\s*(?:[-*]|\d+[.)]|line\s*\d+\s*:)\s*", "", line, flags=re.IGNORECASE).strip()
+        if line and not line.startswith("```"):
+            cleaned.append(line[:60].rstrip())
+    if len(cleaned) < 3:
+        raise HTTPException(status_code=502, detail="Ollama did not return three usable lead-card lines")
+    return cleaned[:3]
+
+
+@app.post("/v1/lead-card/generate", response_model=LeadCardGenerateResponse)
+async def generate_lead_card(req: LeadCardGenerateRequest) -> LeadCardGenerateResponse:
+    if not f"{req.title} {req.script}".strip():
+        raise HTTPException(status_code=400, detail="Add a project title or script before generating a lead card")
+    result = _ollama_generate(_lead_card_prompt(req), temperature=0.35)
+    return LeadCardGenerateResponse(lines=_parse_lead_card_lines(result), model=OLLAMA_MODEL)
 
 
 @app.post("/v1/script/enhance", response_model=ScriptEnhanceResponse)

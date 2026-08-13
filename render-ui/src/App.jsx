@@ -289,6 +289,7 @@ export function App() {
   const [isClassifyingRooms, setIsClassifyingRooms] = useState(false);
   const [useIntro, setUseIntro] = useState(true);
   const [introLines, setIntroLines] = useState(['', '', '']);
+  const [isGeneratingIntro, setIsGeneratingIntro] = useState(false);
   const [leaderImage, setLeaderImage] = useState(null);
   const [brandAssets, setBrandAssets] = useState([]);
   const [useLogo, setUseLogo] = useState(true);
@@ -1028,6 +1029,30 @@ export function App() {
     }
   }
 
+  async function generateLeadCard() {
+    if (isGeneratingIntro || (!title.trim() && !script.trim())) return;
+
+    setError('');
+    setIsGeneratingIntro(true);
+    setStatus('Generating lead card with Fortress Ollama');
+    try {
+      const result = await request('/v1/lead-card/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, script, currentLines: introLines }),
+      });
+      const lines = Array.isArray(result.lines) ? result.lines.slice(0, 3) : [];
+      setIntroLines([lines[0] || '', lines[1] || '', lines[2] || '']);
+      setUseIntro(true);
+      setStatus(`Lead card generated with ${result.model || 'Fortress Ollama'}`);
+    } catch (err) {
+      setError(err.message || String(err));
+      setStatus('Lead card generation failed');
+    } finally {
+      setIsGeneratingIntro(false);
+    }
+  }
+
   async function enhanceScript({ withRoomInfo = false } = {}) {
     if (!canEnhance) return;
 
@@ -1236,7 +1261,12 @@ export function App() {
           <label>Voice<input value={voice} onChange={(event) => setVoice(event.target.value)} /></label>
           <label>Language<input value={language} onChange={(event) => { setLanguage(event.target.value); setYoutubeProfile(youtubeProfileForLanguage(event.target.value)); }} /></label>
 
-          <h2>Intro</h2>
+          <div className="settings-section-heading">
+            <h2>Intro</h2>
+            <button type="button" onClick={generateLeadCard} disabled={isGeneratingIntro || (!title.trim() && !script.trim())}>
+              {isGeneratingIntro ? 'Generating' : 'Generate with Ollama'}
+            </button>
+          </div>
           <label className="check-row"><input type="checkbox" checked={useIntro} onChange={(event) => setUseIntro(event.target.checked)} />Use 1 second leader card</label>
           <label>Lead card line 1<input value={introLines[0] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 0, event.target.value))} placeholder="Primary title line" /></label>
           <label>Lead card line 2<input value={introLines[1] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 1, event.target.value))} placeholder="Subtitle or property detail" /></label>
