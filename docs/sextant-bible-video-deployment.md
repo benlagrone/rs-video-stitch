@@ -31,7 +31,7 @@ and keep YouTube publishing behind a separate confirmation dialog.
 - Compose project: `mediastudio-sextant`
 - Compose file: `docker-compose.yml`
 - Network: `mediastudio-sextant-net`
-- Private UI: `http://fortress-sextant.local:8082/media-studio`
+- Private UI: `http://fortress-sextant.lan:8082/media-studio`
 - Storage: `~/Videos/MediaStudio` for Bible, real-estate, and generic projects
 
 The host must pass the Colima/Docker preflight before deployment. Stable

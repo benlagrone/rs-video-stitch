@@ -26,7 +26,7 @@ class YouTubeProfileTests(unittest.TestCase):
             os.environ,
             {
                 "YOUTUBE_STATE_FILE": str(Path(temp_dir) / "youtube_oauth_state.txt"),
-                "YOUTUBE_REDIRECT_URI": "http://fortress-sextant.local:8082/v1/youtube/auth/callback",
+                "YOUTUBE_REDIRECT_URI": "http://localhost:8082/v1/youtube/auth/callback",
             },
             clear=False,
         ), patch.object(youtube_upload, "_auth_flow") as auth_flow:

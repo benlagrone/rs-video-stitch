@@ -13,7 +13,7 @@ services:
       - INLINE_WORKER=0
       - MEDIASTUDIO_RUNTIME_HOST=fortress.sextant
       - AUTH_TOKEN=${AUTH_TOKEN:?Set AUTH_TOKEN in the Sextant environment}
-      - ALLOW_ORIGINS=${ALLOW_ORIGINS:-http://fortress-sextant.local:8082}
+      - ALLOW_ORIGINS=${ALLOW_ORIGINS:-http://fortress-sextant.lan:8082}
       - VOICE_GATEWAY_URL=${VOICE_GATEWAY_URL:-http://100.100.97.30:8133}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://100.100.97.30:11434}
       - STABLE_DIFFUSION_API_URL=${STABLE_DIFFUSION_API_URL:-http://100.100.97.30:7861/sdapi/v1/txt2img}
@@ -25,7 +25,7 @@ services:
       - YOUTUBE_TOKEN_FILE=/videos/youtube_token.json
       - YOUTUBE_MANDARIN_TOKEN_FILE=/videos/youtube_token_mandarin.json
       - YOUTUBE_CLIENT_SECRET_FILE=/videos/youtube_client_secret.json
-      - YOUTUBE_REDIRECT_URI=${YOUTUBE_REDIRECT_URI:-http://fortress-sextant.local:8082/v1/youtube/auth/callback}
+      - YOUTUBE_REDIRECT_URI=${YOUTUBE_REDIRECT_URI:-http://localhost:8082/v1/youtube/auth/callback}
       - YOUTUBE_LOOPBACK_BRIDGE=${YOUTUBE_LOOPBACK_BRIDGE:-true}
       - DEFAULT_FPS=30
       - DEFAULT_MIN_SHOT=2.5

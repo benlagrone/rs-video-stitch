@@ -132,7 +132,7 @@ after the approved Colima preflight, build and launch with the locked project:
    ```
 
 The Bible and real-estate tools share the private UI at
-`http://fortress-sextant.local:8082/media-studio`. The worker shares the API
+`http://fortress-sextant.lan:8082/media-studio`. The worker shares the API
 image and consumes render jobs. Model inference stays on Fortress Phronesis;
 workflow state, provider adapters, rendering, publishing gates, and the UI run
 on Sextant.
