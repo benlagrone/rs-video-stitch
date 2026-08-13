@@ -306,7 +306,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
         body: JSON.stringify({
           passage, translation, mode, visualStyle, voice,
           language: 'en-US', ttsApi, outputName: 'video.mp4',
-          renderOptions: { tts: voice, ttsLanguage: 'en-US', ttsApi, introEnabled: true, introTitle: passage, introBackgroundImage: 'bible-title-card.png', introLeaderEnabled: false, logoEnabled: false },
+          renderOptions: { tts: voice, ttsLanguage: 'en-US', ttsApi, introEnabled: true, introTitle: passage, introBackgroundImage: 'bible-title-card.png', introLeaderEnabled: false, logoEnabled: true, logoImage: 'animal-safari-kids.png', logoCorner: 'bottom-right', logoMargin: 28 },
         }),
       });
       setJob({ ...created, status: 'QUEUED', stage: 'QUEUED', progress: 0 });
@@ -376,7 +376,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
           <section><div className="bible-section-heading"><div><h2>Video preview</h2><p>16:9 · 1080p MP4</p></div></div>{videoHref ? <video controls src={videoHref} /> : <div className="video-placeholder"><span>{progress}%</span><p>{job ? stageLabel(job.stage) : 'Waiting for a job'}</p></div>}</section>
           <section className="progress-card"><h2>Render progress</h2><progress value={job?.progress || 0} max="1" /><div><span>{stageLabel(job?.stage)}</span><strong>{progress}%</strong></div></section>
           <section className="health-card"><h2>Worker health</h2>{healthRows.map(([label, value]) => <div className="health-row" key={label}><span>{label}</span><strong className={value?.ok ? 'healthy' : 'offline'}>{value?.ok ? 'Healthy' : 'Unavailable'}</strong></div>)}</section>
-          <section className="publish-card"><h2>YouTube publishing</h2><label>Title<input value={youtubeTitle} onChange={(event) => setYoutubeTitle(event.target.value)} disabled={!project} /></label><label>Privacy<select value={youtubePrivacy} onChange={(event) => setYoutubePrivacy(event.target.value)} disabled={!project}><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select></label><button type="button" className="primary-action" disabled={!project || isPublishing} onClick={() => setPublishReview(true)}>Review &amp; Publish</button>{youtubeResult && <a href={youtubeResult} target="_blank" rel="noreferrer">Open published video</a>}</section>
+          <section className="publish-card"><h2>YouTube publishing</h2><div className="channel-brand"><img src={apiUrl(effectiveApiBase, '/media-studio/brand-assets/animal-safari-kids.png')} alt="Animal Safari Kids channel icon" /><div><strong>{project?.state?.youtubeChannelName || 'Animal Safari Kids'}</strong><span>Bible channel branding</span></div></div><label>Title<input value={youtubeTitle} onChange={(event) => setYoutubeTitle(event.target.value)} disabled={!project} /></label><label>Privacy<select value={youtubePrivacy} onChange={(event) => setYoutubePrivacy(event.target.value)} disabled={!project}><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select></label><button type="button" className="primary-action" disabled={!project || isPublishing} onClick={() => setPublishReview(true)}>Review &amp; Publish</button>{youtubeResult && <a href={youtubeResult} target="_blank" rel="noreferrer">Open published video</a>}</section>
         </aside>
       </form>
 

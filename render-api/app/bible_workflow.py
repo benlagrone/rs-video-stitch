@@ -32,6 +32,9 @@ SEXTANT_ORCHESTRATOR_URL = os.getenv("SEXTANT_ORCHESTRATOR_URL", "")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://fortress.lan:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mixtral:latest")
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
+BIBLE_CHANNEL_NAME = os.getenv("BIBLE_CHANNEL_NAME", "Animal Safari Kids")
+BIBLE_CHANNEL_ID = os.getenv("BIBLE_CHANNEL_ID", "UCU1T3KZjLceczyfHr2aqpeQ")
+BIBLE_CHANNEL_ICON = os.getenv("BIBLE_CHANNEL_ICON", "animal-safari-kids.png")
 
 Progress = Callable[[str, float], None]
 Log = Callable[[str], None]
@@ -453,7 +456,10 @@ def generate_bible_title_card(
         "introBackgroundImage": destination.name,
         "introLeaderEnabled": False,
         "thumbnailEnabled": True,
-        "logoEnabled": False,
+        "logoEnabled": True,
+        "logoImage": BIBLE_CHANNEL_ICON,
+        "logoCorner": "bottom-right",
+        "logoMargin": 28,
     })
     state["renderOptions"] = render_options
     save_project_state(project_id, state, project_name=str(state.get("title") or canonical))
@@ -494,7 +500,10 @@ def prepare_bible_project(
         "introBackgroundImage": title_card_name,
         "introLeaderEnabled": False,
         "thumbnailEnabled": True,
-        "logoEnabled": False,
+        "logoEnabled": True,
+        "logoImage": BIBLE_CHANNEL_ICON,
+        "logoCorner": "bottom-right",
+        "logoMargin": 28,
     })
 
     previous_motion_path: Path | None = None
@@ -558,6 +567,8 @@ def prepare_bible_project(
             "youtubeDescription": f"A narrated visual presentation of {canonical}.",
             "youtubeTags": f"Bible, Scripture, {canonical.split()[0]}",
             "youtubePrivacy": "private",
+            "youtubeChannelName": BIBLE_CHANNEL_NAME,
+            "youtubeChannelId": BIBLE_CHANNEL_ID,
             "titleCardImageName": title_card_name,
             "renderOptions": render_options,
         },
