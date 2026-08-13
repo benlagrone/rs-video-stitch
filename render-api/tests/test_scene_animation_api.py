@@ -2,7 +2,7 @@ import unittest
 from unittest import mock
 
 from app import api
-from app.schemas import SceneAnimationRequest
+from app.schemas import SceneAnimationBatchRequest, SceneAnimationRequest
 
 
 class _Database:
@@ -49,6 +49,50 @@ class SceneAnimationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queued_job.payload["sceneIndex"], 2)
         self.assertEqual(queued_job.payload["prompt"], "Water ripples outward.")
         self.assertTrue(database.committed)
+
+    async def test_animate_all_scenes_queues_each_still_in_storyboard_order(self):
+        database = _Database()
+        document = {
+            "scenes": [
+                {"timeline": [{"image": "scene_001.png"}]},
+                {"timeline": [{"image": "scene_002.png", "video": "scene_002.mp4"}]},
+                {"timeline": [{"image": "scene_003.png"}]},
+            ]
+        }
+        scenes_path = mock.MagicMock()
+        scenes_path.exists.return_value = True
+        scenes_path.read_text.return_value = __import__("json").dumps(document)
+        with mock.patch.object(api, "p_input") as project_input, mock.patch.object(api, "scene_animation_context"):
+            project_input.return_value.__truediv__.return_value = scenes_path
+            result = await api.animate_all_scenes(
+                "bible-genesis-1",
+                SceneAnimationBatchRequest(prompts={1: "Light moves.", 3: "Water moves."}),
+                db=database,
+            )
+
+        queued_jobs = [value for value in database.added if hasattr(value, "payload")]
+        self.assertEqual(result["queuedCount"], 2)
+        self.assertEqual(result["skippedSceneIndexes"], [2])
+        self.assertEqual([job.payload["sceneIndex"] for job in queued_jobs], [1, 3])
+        self.assertEqual([job.payload["prompt"] for job in queued_jobs], ["Light moves.", "Water moves."])
+        self.assertTrue(database.committed)
+
+    async def test_animate_all_scenes_can_reanimate_existing_motion(self):
+        database = _Database()
+        document = {"scenes": [{"timeline": [{"image": "scene_001.png", "video": "scene_001.mp4"}]}]}
+        scenes_path = mock.MagicMock()
+        scenes_path.exists.return_value = True
+        scenes_path.read_text.return_value = __import__("json").dumps(document)
+        with mock.patch.object(api, "p_input") as project_input, mock.patch.object(api, "scene_animation_context"):
+            project_input.return_value.__truediv__.return_value = scenes_path
+            result = await api.animate_all_scenes(
+                "bible-genesis-1",
+                SceneAnimationBatchRequest(includeAnimated=True),
+                db=database,
+            )
+
+        self.assertEqual(result["queuedCount"], 1)
+        self.assertEqual(result["skippedSceneIndexes"], [])
 
 
 if __name__ == "__main__":

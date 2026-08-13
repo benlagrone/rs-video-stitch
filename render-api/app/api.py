@@ -28,6 +28,7 @@ from app.schemas import (
     ProjectStateRequest,
     BibleVideoRequest,
     SceneAnimationRequest,
+    SceneAnimationBatchRequest,
     SceneAnimationPromptResponse,
     BibleTitleCardRequest,
     LeadCardGenerateRequest,
@@ -349,6 +350,67 @@ async def animate_scene(
     )
     db.commit()
     return {"projectId": pid, "sceneIndex": scene_index, "jobId": job_id, "status": "QUEUED"}
+
+
+@app.post("/v1/projects/{pid}/scenes/animate-all", status_code=202)
+async def animate_all_scenes(
+    pid: str,
+    req: SceneAnimationBatchRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    scenes_path = p_input(pid) / "scenes.json"
+    if not scenes_path.exists():
+        raise HTTPException(status_code=404, detail=f"Project {pid} has no scenes.json")
+    try:
+        document = json.loads(scenes_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Project {pid} has invalid scene data") from exc
+
+    scenes = document.get("scenes") or []
+    if not scenes:
+        raise HTTPException(status_code=404, detail=f"Project {pid} has no scenes")
+
+    project = db.get(Project, pid)
+    if project is None:
+        project = Project(id=pid)
+        db.add(project)
+
+    jobs = []
+    skipped = []
+    for scene_index, scene in enumerate(scenes, start=1):
+        try:
+            scene_animation_context(pid, scene_index)
+        except (FileNotFoundError, IndexError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        has_motion = bool(((scene.get("timeline") or [{}])[0]).get("video"))
+        if has_motion and not req.includeAnimated:
+            skipped.append(scene_index)
+            continue
+        job_id = f"j_{uuid.uuid4().hex[:12]}"
+        db.add(
+            Job(
+                id=job_id,
+                project_id=pid,
+                status="QUEUED",
+                payload={
+                    "workflow": "scene-animation",
+                    "sceneIndex": scene_index,
+                    "prompt": str(req.prompts.get(scene_index, "")).strip(),
+                },
+                progress=0.0,
+                stage="QUEUED",
+            )
+        )
+        jobs.append({"sceneIndex": scene_index, "jobId": job_id, "status": "QUEUED"})
+
+    db.commit()
+    return {
+        "projectId": pid,
+        "status": "QUEUED" if jobs else "NOTHING_TO_QUEUE",
+        "queuedCount": len(jobs),
+        "skippedSceneIndexes": skipped,
+        "jobs": jobs,
+    }
 
 
 @app.post("/v1/projects/{pid}/bible-title-card", status_code=202)

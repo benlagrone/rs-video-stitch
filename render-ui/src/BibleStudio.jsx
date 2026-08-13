@@ -43,6 +43,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
   const [animationPrompts, setAnimationPrompts] = useState({});
   const [animationJobs, setAnimationJobs] = useState({});
   const [writingPromptFor, setWritingPromptFor] = useState(0);
+  const [isQueuingAllAnimations, setIsQueuingAllAnimations] = useState(false);
   const [titleCardJob, setTitleCardJob] = useState(null);
 
   const headers = (extra = {}) => ({
@@ -167,6 +168,10 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
 
   const scenes = project?.scenes?.scenes || [];
   const motionClipCount = scenes.filter((scene) => scene.timeline?.[0]?.video).length;
+  const activeAnimationCount = Object.values(animationJobs).filter((animationJob) => (
+    animationJob?.jobId && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(animationJob.status)
+  )).length;
+  const remainingAnimationCount = scenes.length - motionClipCount;
   const outputName = project?.state?.outputName || 'video.mp4';
   const videoHref = project ? apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(project.projectId)}/outputs/video?filename=${encodeURIComponent(outputName)}&v=${encodeURIComponent(project.state?.updatedAt || project.state?.titleCardUpdatedAt || '')}`) : '';
   const progress = Math.round((job?.progress || 0) * 100);
@@ -231,6 +236,30 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
       }));
     } catch (animationError) {
       setError(animationError.message || String(animationError));
+    }
+  }
+
+  async function animateAllScenes() {
+    if (!project?.projectId || !scenes.length) return;
+    setError('');
+    setIsQueuingAllAnimations(true);
+    try {
+      const created = await request(`/v1/projects/${encodeURIComponent(project.projectId)}/scenes/animate-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompts: animationPrompts, includeAnimated: false }),
+      });
+      setAnimationJobs((previous) => ({
+        ...previous,
+        ...Object.fromEntries((created.jobs || []).map((animationJob) => [
+          animationJob.sceneIndex,
+          { ...animationJob, stage: 'QUEUED', progress: 0 },
+        ])),
+      }));
+    } catch (animationError) {
+      setError(animationError.message || String(animationError));
+    } finally {
+      setIsQueuingAllAnimations(false);
     }
   }
 
@@ -330,7 +359,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
         </aside>
 
         <section className="bible-storyboard">
-          <div className="bible-section-heading"><div><h2>Storyboard</h2><p>{scenes.length ? `${scenes.length} scenes from ${project?.state?.passage || passage}` : 'Scenes appear here as the job completes.'}</p></div><strong>{motionClipCount ? `${motionClipCount} MOTION · ${scenes.length - motionClipCount} STILL` : (mode === 'motion' ? 'MOTION · CONTINUITY PLANNED' : 'STILL')}</strong></div>
+          <div className="bible-section-heading"><div><h2>Storyboard</h2><p>{scenes.length ? `${scenes.length} scenes from ${project?.state?.passage || passage}` : 'Scenes appear here as the job completes.'}</p></div><div className="storyboard-actions"><strong>{motionClipCount ? `${motionClipCount} MOTION · ${scenes.length - motionClipCount} STILL` : (mode === 'motion' ? 'MOTION · CONTINUITY PLANNED' : 'STILL')}</strong>{scenes.length > 0 && <button type="button" className="primary-action animate-all-action" onClick={animateAllScenes} disabled={isQueuingAllAnimations || activeAnimationCount > 0 || remainingAnimationCount === 0}>{isQueuingAllAnimations ? 'Queuing scenes…' : activeAnimationCount > 0 ? `Animating ${activeAnimationCount} scene${activeAnimationCount === 1 ? '' : 's'}…` : remainingAnimationCount === 0 ? 'All scenes animated' : 'Animate all scenes'}</button>}</div></div>
           {scenes.length ? <div className="bible-scene-list">{scenes.map((scene, index) => {
             const sceneIndex = index + 1;
             const image = scene.images?.[0];
