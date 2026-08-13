@@ -398,7 +398,7 @@ def _overlay_title(
         font_size_candidate = 72.0
     font_size = max(1, int(round(font_size_candidate)))
     if str(title_style.get("position") or "").lower().startswith("bottom"):
-        wrap_width = max(28, min(72, int(3100 / max(1, font_size))))
+        wrap_width = max(28, min(52, int(2500 / max(1, font_size))))
         title_text = "\n".join(
             textwrap.fill(line, width=wrap_width, break_long_words=False, break_on_hyphens=False)
             for line in title_text.splitlines()

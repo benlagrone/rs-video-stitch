@@ -40,7 +40,7 @@ BIBLE_CAPTION_STYLE = {
     "fontSize": 48,
     "fill": "#ffffff",
     "outline": "#000000",
-    "position": "bottom-center",
+    "position": "bottom-left",
 }
 
 Progress = Callable[[str, float], None]
