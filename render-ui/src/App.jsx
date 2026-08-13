@@ -300,6 +300,7 @@ export function App() {
   const [voice, setVoice] = useState('en-US-AdamMultilingualNeural');
   const [language, setLanguage] = useState('en-US');
   const [ttsApi, setTtsApi] = useState('voice-gateway');
+  const [voiceProviders, setVoiceProviders] = useState([]);
   const [outputName, setOutputName] = useState('video.mp4');
   const [status, setStatus] = useState('Idle');
   const [theme, setTheme] = useState(localStorage.getItem('renderUi.theme') || 'dark');
@@ -350,6 +351,19 @@ export function App() {
   const imagePreviewByName = useMemo(
     () => new Map(imagePreviews.map((preview) => [preview.name, preview])),
     [imagePreviews],
+  );
+  const selectableVoiceRoutes = useMemo(() => {
+    const routes = new Map();
+    voiceProviders.filter((provider) => provider.selectable).forEach((provider) => {
+      if (!routes.has(provider.ttsApi)) routes.set(provider.ttsApi, provider.label);
+    });
+    return Array.from(routes, ([value, label]) => ({ value, label }));
+  }, [voiceProviders]);
+  const activeVoiceProvider = useMemo(
+    () => voiceProviders.find((provider) => provider.selectable && provider.ttsApi === ttsApi && provider.voices?.includes(voice))
+      || voiceProviders.find((provider) => provider.selectable && provider.ttsApi === ttsApi)
+      || null,
+    [ttsApi, voice, voiceProviders],
   );
   const roomInfoPayload = useMemo(
     () => images.map((image) => ({
@@ -403,6 +417,10 @@ export function App() {
     }
   }, [ttsApi, voice]);
   useEffect(() => {
+    if (!activeVoiceProvider?.voices?.length || activeVoiceProvider.voices.includes(voice)) return;
+    setVoice(activeVoiceProvider.voices[0]);
+  }, [activeVoiceProvider, voice]);
+  useEffect(() => {
     if (!hasSavedProject) {
       setOutputs([]);
       return;
@@ -427,6 +445,11 @@ export function App() {
         }
       })
       .catch(() => {});
+  }, [apiBase, authToken]);
+  useEffect(() => {
+    request('/v1/voice-options')
+      .then((result) => setVoiceProviders(result.providers || []))
+      .catch(() => setVoiceProviders([]));
   }, [apiBase, authToken]);
   useEffect(() => {
     refreshYoutubeAuth().catch(() => {});
@@ -1257,8 +1280,29 @@ export function App() {
           </div>
 
           <h2>Narration</h2>
-          <label>Narration route<select value={ttsApi} onChange={(event) => setTtsApi(event.target.value)}><option value="voice-gateway">Fortress Voice Gateway</option><option value="flite">Built-in fallback voice</option><option value="none">None / timed silence</option></select></label>
-          <label>Voice<input value={voice} onChange={(event) => setVoice(event.target.value)} /></label>
+          <label>Narration route<select value={ttsApi} onChange={(event) => setTtsApi(event.target.value)}>
+            {selectableVoiceRoutes.length
+              ? selectableVoiceRoutes.map((route) => <option key={route.value} value={route.value}>{route.label}</option>)
+              : <><option value="voice-gateway">Fortress Voice Gateway</option><option value="flite">Built-in fallback voice</option><option value="none">None / timed silence</option></>}
+          </select></label>
+          <label>Voice<select value={voice} onChange={(event) => setVoice(event.target.value)}>
+            {voiceProviders.length
+              ? voiceProviders.map((provider) => (
+                <optgroup key={provider.id} label={`${provider.label}${provider.selectable ? '' : ' · provider routing pending'}`}>
+                  {(provider.voices || []).map((voiceName) => (
+                    <option
+                      key={`${provider.id}-${voiceName}`}
+                      value={voiceName}
+                      disabled={!provider.selectable || provider.ttsApi !== ttsApi}
+                    >
+                      {voiceName}
+                    </option>
+                  ))}
+                </optgroup>
+              ))
+              : <option value={voice}>{voice}</option>}
+          </select></label>
+          {activeVoiceProvider && <span className="voice-source-note">Source: {activeVoiceProvider.label}</span>}
           <label>Language<input value={language} onChange={(event) => { setLanguage(event.target.value); setYoutubeProfile(youtubeProfileForLanguage(event.target.value)); }} /></label>
 
           <div className="settings-section-heading">

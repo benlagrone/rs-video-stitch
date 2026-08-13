@@ -82,6 +82,7 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://fortress.lan:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mixtral:latest")
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
 OLLAMA_CONNECT_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_CONNECT_TIMEOUT_SECONDS", "10"))
+VOICE_GATEWAY_URL = os.getenv("VOICE_GATEWAY_URL", "http://100.100.97.30:8133")
 ROOM_RENAMER_API_URL = os.getenv("ROOM_RENAMER_API_URL", "http://host.docker.internal:8000")
 ROOM_RENAMER_TIMEOUT_SECONDS = float(os.getenv("ROOM_RENAMER_TIMEOUT_SECONDS", "45"))
 EMOJI_PATTERN = re.compile(
@@ -222,6 +223,58 @@ async def healthz() -> dict:
 @app.get("/readyz")
 async def readyz() -> dict:
     return {"ok": True}
+
+
+@app.get("/v1/voice-options")
+async def voice_options() -> dict:
+    try:
+        response = requests.get(f"{VOICE_GATEWAY_URL.rstrip('/')}/control/api/voice", timeout=10)
+        response.raise_for_status()
+        snapshot = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=f"Fortress Voice Gateway catalog request failed: {exc}") from exc
+
+    providers = []
+    for backend in snapshot.get("backends") or []:
+        provider_id = str(backend.get("name") or "").strip()
+        voices = [str(voice).strip() for voice in backend.get("voices") or [] if str(voice).strip()]
+        if not provider_id or not voices:
+            continue
+        is_vibevoice = provider_id == "vibevoice"
+        if is_vibevoice and "Carter" not in voices:
+            voices.insert(0, "Carter")
+        providers.append(
+            {
+                "id": provider_id,
+                "label": "VibeVoice · Fortress GPU" if is_vibevoice else "Azure Speech · Fortress proxy",
+                "ttsApi": "voice-gateway",
+                "selectable": is_vibevoice,
+                "voices": voices,
+                "detail": str(backend.get("detail") or ""),
+            }
+        )
+
+    providers.extend(
+        [
+            {
+                "id": "flite",
+                "label": "Built-in fallback voice",
+                "ttsApi": "flite",
+                "selectable": True,
+                "voices": ["kal", "awb", "rms", "slt"],
+                "detail": "Local CPU fallback",
+            },
+            {
+                "id": "none",
+                "label": "None / timed silence",
+                "ttsApi": "none",
+                "selectable": True,
+                "voices": ["Timed silence"],
+                "detail": "No narration synthesis",
+            },
+        ]
+    )
+    return {"providers": providers, "gateway": "fortress-lan:voice-gateway"}
 
 
 @app.post("/v1/bible/videos", status_code=202)

@@ -22,6 +22,16 @@ class _FakeLeadCardResponse(_FakeOllamaResponse):
         return {"response": '{"lines":["Genesis 1","The Beginning of Creation","King James Version"]}'}
 
 
+class _FakeVoiceCatalogResponse(_FakeOllamaResponse):
+    def json(self):
+        return {
+            "backends": [
+                {"name": "vibevoice", "voices": ["en-Emma_woman"], "detail": "ready"},
+                {"name": "azure_voice", "voices": ["en-US-JennyNeural"], "detail": "ready"},
+            ]
+        }
+
+
 class ScriptEnhanceApiTest(TestCase):
     def test_parse_byte_range_supports_open_ended_range(self):
         self.assertEqual(api._parse_byte_range("bytes=100-", 1000), (100, 999))
@@ -31,6 +41,22 @@ class ScriptEnhanceApiTest(TestCase):
 
     def test_parse_byte_range_rejects_out_of_bounds_range(self):
         self.assertIsNone(api._parse_byte_range("bytes=1000-1200", 1000))
+
+    def test_voice_options_labels_sources_and_only_enables_supported_routes(self):
+        with mock.patch.object(api, "VOICE_GATEWAY_URL", "http://voice-gateway.local/"), mock.patch.object(
+            api.requests,
+            "get",
+            return_value=_FakeVoiceCatalogResponse(),
+        ) as get:
+            response = asyncio.run(api.voice_options())
+
+        get.assert_called_once_with("http://voice-gateway.local/control/api/voice", timeout=10)
+        providers = {provider["id"]: provider for provider in response["providers"]}
+        self.assertTrue(providers["vibevoice"]["selectable"])
+        self.assertEqual(providers["vibevoice"]["voices"], ["Carter", "en-Emma_woman"])
+        self.assertFalse(providers["azure_voice"]["selectable"])
+        self.assertEqual(providers["azure_voice"]["label"], "Azure Speech · Fortress proxy")
+        self.assertEqual(providers["flite"]["voices"], ["kal", "awb", "rms", "slt"])
 
     def test_enhance_script_calls_ollama_model(self):
         with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(
