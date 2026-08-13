@@ -61,7 +61,7 @@ class RendererTTSTest(TestCase):
                     "Genesis 1:2\nAnd the earth was without form, and void; and darkness was upon the face of the deep.",
                     title_file,
                     root / "font.ttf",
-                    {"position": "bottom-center", "fontSize": 48},
+                    {"position": "bottom-left", "fontSize": 48},
                     "medium",
                     "18",
                     None,

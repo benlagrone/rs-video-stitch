@@ -298,7 +298,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
       const renderOptions = {
         ...(project.state?.renderOptions || {}),
         scriptureCaptionEnabled: true,
-        titleStyle: { ...(project.state?.renderOptions?.titleStyle || {}), fontFamily: captionFont, fontSize: 48, fill: '#ffffff', outline: '#000000', position: 'bottom-center' },
+        titleStyle: { ...(project.state?.renderOptions?.titleStyle || {}), fontFamily: captionFont, fontSize: 48, fill: '#ffffff', outline: '#000000', position: 'bottom-left' },
       };
       await request(`/v1/projects/${encodeURIComponent(project.projectId)}/state`, {
         method: 'PUT',
@@ -329,7 +329,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
         body: JSON.stringify({
           passage, translation, mode, visualStyle, voice,
           language: 'en-US', ttsApi, outputName: 'video.mp4',
-          renderOptions: { tts: voice, ttsLanguage: 'en-US', ttsApi, introEnabled: true, introTitle: passage, introBackgroundImage: 'bible-title-card.png', introLeaderEnabled: false, logoEnabled: true, logoImage: 'animal-safari-kids.png', logoCorner: 'bottom-right', logoMargin: 28, scriptureCaptionEnabled: true, titleStyle: { fontFamily: captionFont, fontSize: 48, fill: '#ffffff', outline: '#000000', position: 'bottom-center' } },
+          renderOptions: { tts: voice, ttsLanguage: 'en-US', ttsApi, introEnabled: true, introTitle: passage, introBackgroundImage: 'bible-title-card.png', introLeaderEnabled: false, logoEnabled: true, logoImage: 'animal-safari-kids.png', logoCorner: 'bottom-right', logoMargin: 28, scriptureCaptionEnabled: true, titleStyle: { fontFamily: captionFont, fontSize: 48, fill: '#ffffff', outline: '#000000', position: 'bottom-left' } },
         }),
       });
       setJob({ ...created, status: 'QUEUED', stage: 'QUEUED', progress: 0 });
