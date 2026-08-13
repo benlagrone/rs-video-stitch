@@ -224,6 +224,36 @@ def scene_animation_context(project_id: str, scene_index: int) -> tuple[dict[str
     return document, scene, still_path, clip_path
 
 
+def _safe_fallback_animation_prompt(scene: dict[str, Any]) -> str:
+    context = " ".join(
+        str(value or "")
+        for value in (
+            scene.get("VO"),
+            scene.get("description"),
+            ((scene.get("timeline") or [{}])[0]).get("prompt"),
+        )
+    ).lower()
+    actions = []
+    if any(term in context for term in ("water", "sea", "river", "ocean")):
+        actions.append("Existing water ripples outward and its reflections travel continuously across the surface")
+    if any(term in context for term in ("light", "sun", "day", "heaven", "created", "beginning")):
+        actions.append("available light advances gradually across the existing landscape")
+    if any(term in context for term in ("plant", "tree", "grass", "herb", "flower", "vine")):
+        actions.append("existing leaves and stems respond naturally to a steady breeze")
+    if any(term in context for term in ("animal", "bird", "fish", "creature", "cattle")):
+        actions.append("the existing creatures continue one restrained natural movement")
+    if any(term in context for term in ("man", "woman", "people", "person", "adam", "eve")):
+        actions.append("the existing people breathe, shift their weight, and direct their gaze toward the visible action")
+    if not actions:
+        actions.append("the existing subjects and environmental light develop through one restrained natural action")
+    return (
+        f"{'; '.join(actions[:3])}. The camera makes a slow, steady forward move with gentle parallax, keeping every "
+        "visible subject, garment, face, structure, decorative element, palette, and light direction consistent. Motion "
+        "continues throughout the five-second shot and settles into a clear final composition that can flow directly into "
+        "the following scene without introducing anything new."
+    )
+
+
 def generate_scene_animation_prompt(project_id: str, scene_index: int, *, session=requests) -> str:
     document, scene, _, _ = scene_animation_context(project_id, scene_index)
     scenes = document.get("scenes") or []
@@ -281,7 +311,7 @@ def generate_scene_animation_prompt(project_id: str, scene_index: int, *, sessio
         if not forbidden:
             return prompt
         rejected = ", ".join(sorted({value.lower() for value in forbidden}))
-    raise RuntimeError(f"Fortress motion prompt planner failed the no-text/no-still quality gate: {rejected}")
+    return _safe_fallback_animation_prompt(scene)
 
 
 def animate_bible_scene(
