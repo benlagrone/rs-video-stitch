@@ -27,6 +27,8 @@ from app.schemas import (
     ProjectSpec,
     ProjectStateRequest,
     BibleVideoRequest,
+    SceneAnimationRequest,
+    SceneAnimationPromptResponse,
     LeadCardGenerateRequest,
     LeadCardGenerateResponse,
     RenderRequest,
@@ -67,7 +69,7 @@ from app.youtube_upload import (
     youtube_auth_status,
     youtube_authorization_url,
 )
-from app.bible_workflow import capability_health
+from app.bible_workflow import capability_health, generate_scene_animation_prompt, scene_animation_context
 from app.art_styles import list_art_styles
 
 ALLOW_ORIGINS = (
@@ -297,6 +299,55 @@ async def create_bible_video(req: BibleVideoRequest, db: Session = Depends(get_d
     db.add(Job(id=job_id, project_id=project_id, status="QUEUED", payload=payload, progress=0.0, stage="QUEUED"))
     db.commit()
     return {"projectId": project_id, "jobId": job_id, "status": "QUEUED"}
+
+
+@app.post(
+    "/v1/projects/{pid}/scenes/{scene_index}/animation-prompt",
+    response_model=SceneAnimationPromptResponse,
+)
+async def scene_animation_prompt(pid: str, scene_index: int) -> SceneAnimationPromptResponse:
+    try:
+        prompt = generate_scene_animation_prompt(pid, scene_index)
+    except (FileNotFoundError, IndexError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Motion prompt generation failed: {exc}") from exc
+    return SceneAnimationPromptResponse(projectId=pid, sceneIndex=scene_index, prompt=prompt)
+
+
+@app.post("/v1/projects/{pid}/scenes/{scene_index}/animate", status_code=202)
+async def animate_scene(
+    pid: str,
+    scene_index: int,
+    req: SceneAnimationRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        scene_animation_context(pid, scene_index)
+    except (FileNotFoundError, IndexError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    project = db.get(Project, pid)
+    if project is None:
+        project = Project(id=pid)
+        db.add(project)
+    job_id = f"j_{uuid.uuid4().hex[:12]}"
+    db.add(
+        Job(
+            id=job_id,
+            project_id=pid,
+            status="QUEUED",
+            payload={
+                "workflow": "scene-animation",
+                "sceneIndex": scene_index,
+                "prompt": req.prompt.strip(),
+            },
+            progress=0.0,
+            stage="QUEUED",
+        )
+    )
+    db.commit()
+    return {"projectId": pid, "sceneIndex": scene_index, "jobId": job_id, "status": "QUEUED"}
 
 
 @app.get("/v1/bible/health")
@@ -817,7 +868,7 @@ async def get_project(pid: str) -> dict:
             }
             for filename in list_asset_files(pid, subdir)
         ]
-        for subdir in ("images", "leader", "logo", "voiceovers")
+        for subdir in ("images", "motion", "leader", "logo", "voiceovers")
     }
     scenes = _load_scenes(pid)
     if not state:
@@ -888,7 +939,7 @@ async def restore_project_version(pid: str, version_id: str) -> dict:
 
 @app.get("/v1/projects/{pid}/assets/{subdir}/{filename}")
 async def get_project_asset(pid: str, subdir: str, filename: str) -> FileResponse:
-    allowed = {"images", "leader", "logo", "voiceovers"}
+    allowed = {"images", "motion", "leader", "logo", "voiceovers"}
     if subdir not in allowed:
         raise HTTPException(status_code=400, detail="Invalid subdir")
 

@@ -167,6 +167,73 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(generate_motion.call_count, 2)
         self.assertEqual(generate_motion.call_args_list[1].args[0], second_image)
 
+    def test_scene_animation_prompt_uses_existing_still_and_ollama(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)"},
+            "scenes": [{
+                "title": "Genesis 1:1",
+                "VO": "In the beginning.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png", "prompt": "A dark sea beneath the heavens"}],
+            }],
+        }
+        session = mock.Mock()
+        session.post.return_value = _Response({"response": "Light rolls visibly across the water as the camera pushes forward."})
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(
+            bible_workflow, "read_project_state", return_value={"visualStyle": "baroque"}
+        ):
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            (input_dir / "images" / "scene_001.png").write_bytes(b"png")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+            prompt = bible_workflow.generate_scene_animation_prompt("bible-test", 1, session=session)
+
+        self.assertIn("Light rolls visibly", prompt)
+        request_prompt = session.post.call_args.kwargs["json"]["prompt"]
+        self.assertIn("Genesis 1:1", request_prompt)
+        self.assertIn("A dark sea beneath the heavens", request_prompt)
+
+    def test_animate_scene_preserves_still_and_attaches_motion_clip(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)"},
+            "scenes": [{
+                "title": "Genesis 1:1",
+                "VO": "In the beginning.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png"}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(
+            bible_workflow, "read_project_state", return_value={"title": "Genesis 1 (KJV)"}
+        ), mock.patch.object(bible_workflow, "save_scenes") as save_scenes, mock.patch.object(
+            bible_workflow, "save_project_state"
+        ), mock.patch.object(bible_workflow, "generate_motion_clip") as generate_motion:
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            still = input_dir / "images" / "scene_001.png"
+            still.write_bytes(b"original-still")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+
+            clip = bible_workflow.animate_bible_scene(
+                "bible-test",
+                1,
+                "Light expands across the water.",
+                progress=mock.Mock(),
+                log=mock.Mock(),
+            )
+            preserved_still = still.read_bytes()
+
+        self.assertEqual(preserved_still, b"original-still")
+        self.assertEqual(clip.name, "scene_001.mp4")
+        generate_motion.assert_called_once()
+        saved_document = json.loads(save_scenes.call_args.args[1])
+        self.assertEqual(saved_document["scenes"][0]["timeline"][0]["video"], "scene_001.mp4")
+        self.assertEqual(saved_document["scenes"][0]["motionPrompt"], "Light expands across the water.")
+
     def test_generate_motion_submits_comfyui_workflow_and_downloads_artifact(self):
         session = mock.Mock()
         session.post.side_effect = [

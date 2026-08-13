@@ -16,7 +16,7 @@ function stageLabel(stage) {
   return String(stage || 'QUEUED').replaceAll('_', ' ').toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
+export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, onOpenProjects }) {
   const effectiveApiBase = window.location.port === '3000'
     ? `${window.location.protocol}//${window.location.hostname}:8082`
     : '';
@@ -40,6 +40,9 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
   const [youtubeTitle, setYoutubeTitle] = useState('');
   const [youtubeDescription, setYoutubeDescription] = useState('');
   const [youtubePrivacy, setYoutubePrivacy] = useState('private');
+  const [animationPrompts, setAnimationPrompts] = useState({});
+  const [animationJobs, setAnimationJobs] = useState({});
+  const [writingPromptFor, setWritingPromptFor] = useState(0);
 
   const headers = (extra = {}) => ({
     ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
@@ -53,6 +56,23 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
       throw new Error(`${response.status} ${response.statusText}${detail ? `: ${detail}` : ''}`);
     }
     return response.json();
+  }
+
+  async function loadBibleProject(projectId) {
+    const loaded = await request(`/v1/projects/${encodeURIComponent(projectId)}`);
+    const state = loaded.state || {};
+    const loadedScenes = loaded.scenes?.scenes || [];
+    setProject(loaded);
+    setPassage(state.passage || state.title || passage);
+    setTranslation(state.translation || 'kjv');
+    setMode(state.mode || 'still');
+    setVisualStyle(state.visualStyle || FALLBACK_STYLES[0].id);
+    setVoice(state.voice || state.renderOptions?.tts || 'Carter');
+    setTtsApi(state.ttsApi || state.renderOptions?.ttsApi || 'vibevoice-proxy');
+    setYoutubeTitle(state.youtubeTitle || state.title || state.passage || projectId);
+    setYoutubeDescription(state.youtubeDescription || `A narrated visual presentation of ${state.passage || state.title || projectId}.`);
+    setAnimationPrompts(Object.fromEntries(loadedScenes.map((scene, index) => [index + 1, scene.motionPrompt || ''])));
+    return loaded;
   }
 
   useEffect(() => {
@@ -80,6 +100,12 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
   }, [effectiveApiBase, authToken]);
 
   useEffect(() => {
+    if (!initialProjectId) return;
+    setError('');
+    loadBibleProject(initialProjectId).catch((loadError) => setError(loadError.message || String(loadError)));
+  }, [initialProjectId, effectiveApiBase, authToken]);
+
+  useEffect(() => {
     if (!job?.jobId || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(job.status)) return undefined;
     const timer = window.setInterval(async () => {
       try {
@@ -99,7 +125,33 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
     return () => window.clearInterval(timer);
   }, [job?.jobId, job?.status, job?.projectId, effectiveApiBase, authToken]);
 
+  useEffect(() => {
+    const activeJobs = Object.entries(animationJobs).filter(([, value]) => (
+      value?.jobId && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(value.status)
+    ));
+    if (!activeJobs.length || !project?.projectId) return undefined;
+    const timer = window.setInterval(async () => {
+      for (const [sceneIndex, animationJob] of activeJobs) {
+        try {
+          const current = await request(`/v1/jobs/${encodeURIComponent(animationJob.jobId)}`);
+          setAnimationJobs((previous) => ({ ...previous, [sceneIndex]: { ...animationJob, ...current } }));
+          if (current.status === 'SUCCEEDED') {
+            const loaded = await loadBibleProject(project.projectId);
+            const refreshedScene = loaded.scenes?.scenes?.[Number(sceneIndex) - 1];
+            if (refreshedScene?.motionPrompt) {
+              setAnimationPrompts((previous) => ({ ...previous, [sceneIndex]: refreshedScene.motionPrompt }));
+            }
+          }
+        } catch (pollError) {
+          setError(pollError.message || String(pollError));
+        }
+      }
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [animationJobs, project?.projectId, effectiveApiBase, authToken]);
+
   const scenes = project?.scenes?.scenes || [];
+  const motionClipCount = scenes.filter((scene) => scene.timeline?.[0]?.video).length;
   const outputName = project?.state?.outputName || 'video.mp4';
   const videoHref = project ? apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(project.projectId)}/outputs/video?filename=${encodeURIComponent(outputName)}`) : '';
   const progress = Math.round((job?.progress || 0) * 100);
@@ -131,6 +183,40 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
     const [nextTtsApi, ...voiceParts] = event.target.value.split('::');
     setTtsApi(nextTtsApi);
     setVoice(voiceParts.join('::'));
+  }
+
+  async function autoWriteAnimationPrompt(sceneIndex) {
+    if (!project?.projectId) return;
+    setError('');
+    setWritingPromptFor(sceneIndex);
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(project.projectId)}/scenes/${sceneIndex}/animation-prompt`, {
+        method: 'POST',
+      });
+      setAnimationPrompts((previous) => ({ ...previous, [sceneIndex]: result.prompt || '' }));
+    } catch (promptError) {
+      setError(promptError.message || String(promptError));
+    } finally {
+      setWritingPromptFor(0);
+    }
+  }
+
+  async function animateScene(sceneIndex) {
+    if (!project?.projectId) return;
+    setError('');
+    try {
+      const created = await request(`/v1/projects/${encodeURIComponent(project.projectId)}/scenes/${sceneIndex}/animate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: animationPrompts[sceneIndex] || '' }),
+      });
+      setAnimationJobs((previous) => ({
+        ...previous,
+        [sceneIndex]: { ...created, status: 'QUEUED', stage: 'QUEUED', progress: 0 },
+      }));
+    } catch (animationError) {
+      setError(animationError.message || String(animationError));
+    }
   }
 
   async function buildVideo(event) {
@@ -199,11 +285,16 @@ export function BibleStudio({ authToken, theme, onBack, onOpenProjects }) {
         </aside>
 
         <section className="bible-storyboard">
-          <div className="bible-section-heading"><div><h2>Storyboard</h2><p>{scenes.length ? `${scenes.length} scenes from ${project?.state?.passage || passage}` : 'Scenes appear here as the job completes.'}</p></div><strong>{mode === 'motion' ? 'MOTION · CONTINUITY PLANNED' : 'STILL'}</strong></div>
+          <div className="bible-section-heading"><div><h2>Storyboard</h2><p>{scenes.length ? `${scenes.length} scenes from ${project?.state?.passage || passage}` : 'Scenes appear here as the job completes.'}</p></div><strong>{motionClipCount ? `${motionClipCount} MOTION · ${scenes.length - motionClipCount} STILL` : (mode === 'motion' ? 'MOTION · CONTINUITY PLANNED' : 'STILL')}</strong></div>
           {scenes.length ? <div className="bible-scene-list">{scenes.map((scene, index) => {
+            const sceneIndex = index + 1;
             const image = scene.images?.[0];
             const imageUrl = apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(project.projectId)}/assets/images/${encodeURIComponent(image)}`);
-            return <article className="bible-scene" key={`${scene.title}-${index}`}><span className="scene-number">{index + 1}</span><img src={imageUrl} alt="" /><div><h3>{scene.title}</h3><p>{scene.VO}</p>{scene.action && <dl className="motion-beat"><div><dt>Action</dt><dd>{scene.action}</dd></div><div><dt>Camera</dt><dd>{scene.camera}</dd></div><div><dt>Continuity</dt><dd>{scene.continuity}</dd></div><div><dt>Ends with</dt><dd>{scene.endState}</dd></div></dl>}<small>{Math.round(scene.duration || 0)} sec · {project.state?.mode === 'motion' ? 'Chained motion clip' : 'Still image'}</small></div></article>;
+            const clip = scene.timeline?.[0]?.video;
+            const motionUrl = clip ? apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(project.projectId)}/assets/motion/${encodeURIComponent(clip)}`) : '';
+            const animationJob = animationJobs[sceneIndex];
+            const animationBusy = animationJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(animationJob.status);
+            return <article className="bible-scene" key={`${scene.title}-${index}`}><span className="scene-number">{sceneIndex}</span><div className="scene-media">{motionUrl ? <video controls preload="metadata" poster={imageUrl} src={motionUrl} /> : <img src={imageUrl} alt="" />}<span>{motionUrl ? 'Motion clip' : 'Still image'}</span></div><div><h3>{scene.title}</h3><p>{scene.VO}</p>{scene.action && <dl className="motion-beat"><div><dt>Action</dt><dd>{scene.action}</dd></div><div><dt>Camera</dt><dd>{scene.camera}</dd></div><div><dt>Continuity</dt><dd>{scene.continuity}</dd></div><div><dt>Ends with</dt><dd>{scene.endState}</dd></div></dl>}<div className="scene-animation-tools"><label>Animation prompt<textarea value={animationPrompts[sceneIndex] || ''} onChange={(event) => setAnimationPrompts((previous) => ({ ...previous, [sceneIndex]: event.target.value }))} placeholder="Optional — leave blank and Fortress Ollama will write it" /></label><div><button type="button" className="secondary-action" onClick={() => autoWriteAnimationPrompt(sceneIndex)} disabled={writingPromptFor === sceneIndex || animationBusy}>{writingPromptFor === sceneIndex ? 'Writing prompt…' : 'Auto-write prompt'}</button><button type="button" className="primary-action" onClick={() => animateScene(sceneIndex)} disabled={animationBusy}>{animationBusy ? `${stageLabel(animationJob.stage)} · ${Math.round((animationJob.progress || 0) * 100)}%` : (clip ? 'Re-animate image' : 'Animate image')}</button></div>{animationJob?.status === 'FAILED' && <small className="scene-animation-error">Animation failed: {animationJob.error || animationJob.stage}</small>}</div><small>{Math.round(scene.duration || 0)} sec · {clip ? 'Motion clip attached; original still preserved' : 'Still image ready to animate'}</small></div></article>;
           })}</div> : <div className="storyboard-empty"><div className="empty-frame">16:9</div><h3>Name a passage. Sextant handles the rest.</h3><p>Motion mode plans the whole passage as one continuous sequence, gives every scene a visible action, and carries each scene's final frame into the next shot.</p></div>}
         </section>
 

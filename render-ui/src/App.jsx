@@ -334,6 +334,7 @@ export function App() {
   const [outputs, setOutputs] = useState([]);
   const [error, setError] = useState('');
   const [view, setView] = useState('projects');
+  const [bibleProjectId, setBibleProjectId] = useState('');
   const [savedProjects, setSavedProjects] = useState([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [isLoadingProject, setIsLoadingProject] = useState(false);
@@ -599,6 +600,12 @@ export function App() {
       const result = await request(`/v1/projects/${encodeURIComponent(pid)}`);
       const state = result.state || {};
       const persistedScenes = result.scenes?.scenes || [];
+      if (state.workflow === 'bible-video') {
+        setBibleProjectId(pid);
+        setView('bible');
+        setStatus(`Loaded ${pid}`);
+        return;
+      }
       const projectImages = state.images?.length
         ? state.images
           .map((image) => stateImageItem(image, result.assets, 'images', apiBase))
@@ -1226,7 +1233,7 @@ export function App() {
   }
 
   if (view === 'bible') {
-    return <BibleStudio authToken={authToken} theme={theme} onBack={() => setView('editor')} onOpenProjects={() => setView('projects')} />;
+    return <BibleStudio authToken={authToken} theme={theme} initialProjectId={bibleProjectId} onBack={() => setView('projects')} onOpenProjects={() => setView('projects')} />;
   }
 
   if (view === 'projects') {
@@ -1238,7 +1245,7 @@ export function App() {
             <p>Open a saved video project, update the script and assets, then re-render from persisted server storage.</p>
           </div>
           <div className="header-actions">
-            <button className="primary-action" type="button" onClick={() => setView('bible')}>Bible Video Studio</button>
+            <button className="primary-action" type="button" onClick={() => { setBibleProjectId(''); setView('bible'); }}>Bible Video Studio</button>
             <button className="theme-toggle" type="button" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
               {theme === 'dark' ? 'Light mode' : 'Dark mode'}
             </button>
@@ -1307,7 +1314,7 @@ export function App() {
           <p>Upload stills, paste a script, generate scene JSON, and send the job to the Render API worker.</p>
         </div>
         <div className="header-actions">
-          <button className="primary-action" type="button" onClick={() => setView('bible')}>Bible Studio</button>
+          <button className="primary-action" type="button" onClick={() => { setBibleProjectId(''); setView('bible'); }}>Bible Studio</button>
           <button className="theme-toggle" type="button" onClick={() => { setView('projects'); refreshProjects().catch(() => {}); }}>
             Projects
           </button>
