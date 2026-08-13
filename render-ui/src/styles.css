@@ -298,6 +298,95 @@ button { font: inherit; }
   max-width: 520px;
 }
 
+.sound-library-shell {
+  margin-top: 18px;
+}
+
+.sound-library-heading {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.sound-policy-badge {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.sound-card-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.sound-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 16px;
+}
+
+.sound-card h3,
+.sound-card p {
+  margin: 0;
+}
+
+.sound-card p {
+  color: var(--muted);
+  margin-top: 5px;
+}
+
+.sound-card dl {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+}
+
+.sound-card dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.sound-card dd {
+  margin: 3px 0 0;
+}
+
+.sound-tags,
+.sound-card-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.sound-tags span {
+  background: var(--field);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.sound-card-links {
+  margin-top: auto;
+}
+
+.sound-card-links a {
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
 .project-save-meta {
   background: var(--surface-raised);
   border: 1px solid var(--line);

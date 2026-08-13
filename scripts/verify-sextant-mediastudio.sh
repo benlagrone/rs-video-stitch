@@ -12,6 +12,18 @@ base_url="http://127.0.0.1:8082"
 curl --fail --silent --show-error "$base_url/healthz" >/dev/null
 curl --fail --silent --show-error "$base_url/media-studio" >/dev/null
 
+sfx_catalog=$(curl --fail --silent --show-error "$base_url/v1/sfx/catalog")
+python3 -c '
+import json, sys
+catalog = json.loads(sys.argv[1])
+if catalog.get("policy") != "no-attribution-only":
+    raise SystemExit("MediaStudio SFX catalog is not enforcing no-attribution-only")
+if not isinstance(catalog.get("assets"), list):
+    raise SystemExit("MediaStudio SFX catalog does not expose an asset list")
+if catalog.get("owner") != "fortress.sextant:mediastudio-sfx-catalog":
+    raise SystemExit("MediaStudio SFX catalog is not owned by fortress.sextant")
+' "$sfx_catalog"
+
 projects=$(curl --fail --silent --show-error "$base_url/v1/projects")
 python3 -c '
 import json, sys

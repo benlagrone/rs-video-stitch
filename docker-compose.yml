@@ -9,6 +9,7 @@ services:
       - mediastudio-sextant-net
     environment:
       - RENDER_STORAGE=/videos
+      - SFX_LIBRARY_ROOT=/videos/sfx-library
       - DB_URL=sqlite:////videos/db.sqlite3
       - INLINE_WORKER=0
       - MEDIASTUDIO_RUNTIME_HOST=fortress.sextant

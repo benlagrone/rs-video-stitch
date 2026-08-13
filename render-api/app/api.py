@@ -69,6 +69,7 @@ from app.youtube_upload import (
 )
 from app.bible_workflow import capability_health
 from app.art_styles import list_art_styles
+from app.sfx_catalog import SfxCatalogError, list_sfx_catalog
 
 ALLOW_ORIGINS = (
     os.getenv("ALLOW_ORIGINS", "").split(",")
@@ -279,6 +280,14 @@ async def voice_options() -> dict:
         ]
     )
     return {"providers": providers, "gateway": "fortress-lan:voice-gateway"}
+
+
+@app.get("/v1/sfx/catalog")
+async def sfx_catalog() -> dict:
+    try:
+        return list_sfx_catalog()
+    except SfxCatalogError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/v1/bible/videos", status_code=202)

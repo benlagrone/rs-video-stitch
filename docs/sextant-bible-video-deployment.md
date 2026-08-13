@@ -6,6 +6,15 @@ share one API, worker, project store, render pipeline, thumbnail generator, and
 reviewed YouTube integration. Phronesis remains a protected model-serving host;
 it does not own MediaStudio workflow or project state.
 
+MediaStudio also owns the no-attribution sound-effects catalog. Codex or a
+Sextant-local MCP client imports individually downloaded Pixabay or Mixkit
+audio through `mcp/sfx_mcp.py`; the MCP rejects unknown providers and any item
+that requires attribution or disallows commercial/social use. The Projects
+control surface reads the catalog through the same-origin, read-only
+`/v1/sfx/catalog` route and lists approved inventory without exposing server
+file paths. An empty catalog is healthy and means no approved sounds have been
+imported yet.
+
 Bible Video Studio is a server workflow, not a laptop CLI. Its locked runtime
 host is `fortress.sextant`. The browser calls the MediaStudio same-origin API;
 the API queues the complete passage-to-video job, and the Sextant worker calls
@@ -33,6 +42,8 @@ and keep YouTube publishing behind a separate confirmation dialog.
 - Network: `mediastudio-sextant-net`
 - Private UI: `http://fortress-sextant.lan:8082/media-studio`
 - Storage: `~/Videos/MediaStudio` for Bible, real-estate, and generic projects
+- SFX library: `~/Videos/MediaStudio/sfx-library`
+- SFX MCP: `python3 mcp/sfx_mcp.py` with `SFX_LIBRARY_ROOT` set to that library
 
 The host must pass the Colima/Docker preflight before deployment. Stable
 Diffusion, Ollama, Wan/ComfyUI, and the central voice gateway are reached at
@@ -74,9 +85,9 @@ bash scripts/verify-sextant-bible-video.sh
 ```
 
 The full MediaStudio smoke check verifies placement, API readiness, UI
-availability, migrated real-estate project assets and outputs, and YouTube
-authorization. The Bible smoke check separately verifies image and motion
-provider health.
+availability, the no-attribution SFX inventory contract, migrated real-estate
+project assets and outputs, and YouTube authorization. The Bible smoke check
+separately verifies image and motion provider health.
 
 ## Full-project-store migration evidence
 

@@ -144,6 +144,13 @@ function apiUrl(baseUrl, path) {
   return `${baseUrl.replace(/\/+$/, '')}${path}`;
 }
 
+function formatBytes(value) {
+  if (!Number.isFinite(value) || value < 0) return 'Unknown size';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function youtubeProfileForLanguage(language) {
   return /^zh(?:-|$)/i.test(String(language || '').trim()) ? 'mandarin' : 'english';
 }
@@ -336,6 +343,8 @@ export function App() {
   const [view, setView] = useState('projects');
   const [savedProjects, setSavedProjects] = useState([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
+  const [soundCatalog, setSoundCatalog] = useState({ assets: [], count: 0, status: 'loading' });
+  const [isLoadingSoundCatalog, setIsLoadingSoundCatalog] = useState(false);
   const [isLoadingProject, setIsLoadingProject] = useState(false);
   const [isSavingProject, setIsSavingProject] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState('');
@@ -447,6 +456,7 @@ export function App() {
   }, [resolvedProjectId, hasSavedProject]);
   useEffect(() => {
     refreshProjects().catch(() => {});
+    refreshSoundCatalog().catch(() => {});
   }, [apiBase, authToken]);
   useEffect(() => {
     request('/v1/brand-assets')
@@ -539,6 +549,18 @@ export function App() {
       setSavedProjects(result.projects || []);
     } finally {
       setIsLoadingProjects(false);
+    }
+  }
+
+  async function refreshSoundCatalog() {
+    setIsLoadingSoundCatalog(true);
+    try {
+      const result = await request('/v1/sfx/catalog');
+      setSoundCatalog(result);
+    } catch (err) {
+      setSoundCatalog({ assets: [], count: 0, status: 'unavailable', error: err.message || String(err) });
+    } finally {
+      setIsLoadingSoundCatalog(false);
     }
   }
 
@@ -1292,6 +1314,52 @@ export function App() {
                   </div>
                 </article>
               ))}
+            </div>
+          )}
+        </section>
+
+        <section className="project-list-shell sound-library-shell">
+          <div className="project-list-toolbar">
+            <div>
+              <div className="sound-library-heading">
+                <h2>No-attribution sound library</h2>
+                <span className="sound-policy-badge">YouTube + TikTok ready</span>
+              </div>
+              <p>{soundCatalog.count || 0} approved sound effect{soundCatalog.count === 1 ? '' : 's'} available from Pixabay and Mixkit</p>
+            </div>
+            <button className="secondary-action" type="button" onClick={refreshSoundCatalog} disabled={isLoadingSoundCatalog}>
+              {isLoadingSoundCatalog ? 'Refreshing' : 'Refresh'}
+            </button>
+          </div>
+          {soundCatalog.status === 'unavailable' ? (
+            <div className="error-box">Sound catalog unavailable: {soundCatalog.error}</div>
+          ) : soundCatalog.assets?.length ? (
+            <div className="sound-card-grid">
+              {soundCatalog.assets.map((asset) => (
+                <article className="sound-card" key={asset.id}>
+                  <div>
+                    <h3>{asset.title}</h3>
+                    <p>{asset.providerLabel}</p>
+                  </div>
+                  <div className="sound-tags">
+                    {(asset.tags || []).map((tag) => <span key={tag}>{tag}</span>)}
+                  </div>
+                  <dl>
+                    <div><dt>File</dt><dd>{asset.format?.toUpperCase() || 'Audio'} · {formatBytes(asset.bytes)}</dd></div>
+                    <div><dt>Usage</dt><dd>No attribution · Commercial and social</dd></div>
+                    <div><dt>Status</dt><dd>{asset.available ? 'Ready on Sextant' : 'Cataloged; file unavailable'}</dd></div>
+                  </dl>
+                  <div className="sound-card-links">
+                    {asset.sourceUrl && <a href={asset.sourceUrl} target="_blank" rel="noreferrer">Source</a>}
+                    {asset.licenseUrl && <a href={asset.licenseUrl} target="_blank" rel="noreferrer">License</a>}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-project-list">
+              <h3>No approved sounds imported yet</h3>
+              <p>Use the MediaStudio SFX MCP to import individual Pixabay or Mixkit sounds. Only no-attribution assets appear here.</p>
             </div>
           )}
         </section>
