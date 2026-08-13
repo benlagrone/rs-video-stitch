@@ -104,6 +104,8 @@ button { font: inherit; }
 .bible-section-heading { align-items: start; display: flex; justify-content: space-between; margin-bottom: 12px; }
 .bible-section-heading h2 { font-size: 14px; margin: 0; }
 .bible-section-heading strong { color: #cba967; font-size: 11px; letter-spacing: .08em; }
+.storyboard-actions { align-items: flex-end; display: flex; flex-direction: column; gap: 8px; }
+.animate-all-action { min-height: 36px; white-space: nowrap; }
 .bible-scene-list { display: grid; gap: 9px; }
 .bible-scene { align-items: start; background: var(--surface-raised); border: 1px solid var(--line); border-radius: 6px; display: grid; gap: 12px; grid-template-columns: 28px 150px minmax(0, 1fr); padding: 10px; }
 .bible-scene img, .bible-scene video { aspect-ratio: 16 / 9; background: var(--surface-strong); border-radius: 4px; object-fit: cover; width: 100%; }

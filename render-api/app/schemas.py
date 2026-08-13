@@ -176,6 +176,11 @@ class SceneAnimationRequest(BaseModel):
     prompt: str = Field(default="", max_length=2000)
 
 
+class SceneAnimationBatchRequest(BaseModel):
+    prompts: Dict[int, str] = Field(default_factory=dict)
+    includeAnimated: bool = False
+
+
 class SceneAnimationPromptResponse(BaseModel):
     projectId: str
     sceneIndex: int
