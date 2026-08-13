@@ -10,7 +10,7 @@ from app.db import SessionLocal
 from app.models import Artifact, Job
 from app.renderer import render_project
 from app.bible_workflow import animate_bible_scene, generate_bible_title_card, prepare_bible_project
-from app.storage import ROOT as STORAGE_ROOT, job_log_path
+from app.storage import ROOT as STORAGE_ROOT, job_log_path, p_input
 
 POLL_INTERVAL = 1.0
 
@@ -87,20 +87,29 @@ def loop(stop_event: Event | None = None) -> None:
                         log=log,
                     )
                 elif is_bible_title_card:
-                    generate_bible_title_card(
-                        job.project_id,
-                        str(payload.get("visualStyle") or "") or None,
-                        progress=lambda stage, value: progress(stage, value * 0.3),
-                        log=log,
-                    )
-                    final_path = render_project(
-                        job.project_id,
-                        STORAGE_ROOT,
-                        options,
-                        output_name,
-                        log=log,
-                        progress=lambda stage, value: progress(stage, 0.3 + value * 0.69),
-                    )
+                    regenerate_image = bool(payload.get("regenerateImage", True))
+                    render_video = bool(payload.get("renderVideo", False))
+                    title_card_path = p_input(job.project_id) / "leader" / "bible-title-card.png"
+                    if regenerate_image:
+                        title_card_path = generate_bible_title_card(
+                            job.project_id,
+                            str(payload.get("visualStyle") or "") or None,
+                            progress=lambda stage, value: progress(stage, value * (0.3 if render_video else 0.95)),
+                            log=log,
+                        )
+                    if render_video:
+                        if not title_card_path.exists():
+                            raise FileNotFoundError("Generate and approve a Bible title card before rebuilding the video")
+                        final_path = render_project(
+                            job.project_id,
+                            STORAGE_ROOT,
+                            options,
+                            output_name,
+                            log=log,
+                            progress=lambda stage, value: progress(stage, (0.3 if regenerate_image else 0.02) + value * (0.69 if regenerate_image else 0.97)),
+                        )
+                    else:
+                        final_path = title_card_path
                 else:
                     if is_bible_video:
                         prepare_bible_project(
@@ -132,7 +141,7 @@ def loop(stop_event: Event | None = None) -> None:
                     project_id=job.project_id,
                     job_id=job.id,
                     path=str(rel_path),
-                    kind="motion" if is_scene_animation else "video",
+                    kind="motion" if is_scene_animation else ("title-card" if is_bible_title_card and not payload.get("renderVideo", False) else "video"),
                     size=size,
                 )
                 session.add(artifact)
