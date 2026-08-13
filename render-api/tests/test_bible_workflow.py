@@ -143,6 +143,21 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(payload["override_settings"]["sd_model_checkpoint"], bible_workflow.STABLE_DIFFUSION_CHECKPOINT)
         self.assertTrue(payload["override_settings_restore_afterwards"])
 
+    def test_generate_still_appends_title_card_negative_constraints(self):
+        session = mock.Mock()
+        session.post.return_value = _Response({"images": [base64.b64encode(b"png-data").decode("ascii")]})
+        with tempfile.TemporaryDirectory() as tmp:
+            bible_workflow._generate_still(
+                "Genesis title",
+                Path(tmp) / "title.png",
+                negative_extra="church, tower, busy center",
+                session=session,
+            )
+
+        negative_prompt = session.post.call_args.kwargs["json"]["negative_prompt"]
+        self.assertIn("church", negative_prompt)
+        self.assertIn("busy center", negative_prompt)
+
     def test_motion_project_chains_each_clip_final_frame_into_next_scene(self):
         scenes = [
             {"title": "Genesis 1:1", "VO": "One", "images": ["scene_001.png"], "motionPrompt": "First action", "timeline": [{"image": "scene_001.png", "prompt": "First frame"}]},
@@ -202,6 +217,9 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("Genesis 1", prompt)
         self.assertIn("Medieval Illuminated Manuscript", prompt)
         self.assertIn("brokerage branding", prompt)
+        self.assertIn("Primordial creation", prompt)
+        self.assertIn("no people, animals, buildings", prompt)
+        self.assertIn("church", generate_still.call_args.kwargs["negative_extra"])
         self.assertEqual(saved_states[-1]["visualStyle"], "medieval-illuminated-manuscript")
         self.assertFalse(saved_states[-1]["renderOptions"]["introLeaderEnabled"])
         self.assertFalse(saved_states[-1]["renderOptions"]["logoEnabled"])
