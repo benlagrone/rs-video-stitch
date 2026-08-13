@@ -375,6 +375,58 @@ def _generate_still(prompt: str, destination: Path, *, session=requests) -> None
     destination.write_bytes(base64.b64decode(images[0]))
 
 
+def _title_card_prompt(canonical: str, scenes: list[dict[str, Any]], visual_style: str) -> str:
+    style = resolve_art_style(visual_style)
+    subject = " ".join(str(scene.get("VO") or scene.get("description") or "") for scene in scenes[:6])
+    subject = re.sub(r"\s+", " ", subject).strip()[:1200]
+    return (
+        f"Create a dedicated 16:9 Bible video title-card background for {canonical}. "
+        f"The subject matter is: {subject}. Art direction: {style['name']}. {style['prompt']}. "
+        "Compose a reverent, visually specific interpretation of the passage with its principal subject and setting. "
+        "Keep a calm, lower-contrast central area for a separately rendered title while retaining meaningful imagery around it. "
+        "No words, letters, captions, logos, brokerage branding, real-estate marks, frames, badges, watermarks, or modern objects."
+    )
+
+
+def generate_bible_title_card(
+    project_id: str,
+    visual_style: str | None = None,
+    *,
+    progress: Progress,
+    log: Log,
+) -> Path:
+    scenes_path = p_input(project_id) / "scenes.json"
+    if not scenes_path.exists():
+        raise FileNotFoundError(f"Project {project_id} has no scenes.json")
+    document = json.loads(scenes_path.read_text(encoding="utf-8"))
+    scenes = document.get("scenes") or []
+    if not scenes:
+        raise ValueError(f"Project {project_id} has no Bible scenes")
+    state = read_project_state(project_id) or {}
+    canonical = str(state.get("passage") or (document.get("info") or {}).get("passage") or state.get("title") or project_id)
+    visual_style = str(visual_style or state.get("visualStyle") or "cinematic-natural-light")
+    destination = p_input(project_id) / "leader" / "bible-title-card.png"
+    progress("TITLE_CARD_GENERATION", 0.2)
+    log(f"Generating passage-specific {visual_style} title card for {canonical}")
+    _generate_still(_title_card_prompt(canonical, scenes, visual_style), destination)
+    state["titleCardImageName"] = destination.name
+    state["titleCardUpdatedAt"] = time.time()
+    state["visualStyle"] = visual_style
+    render_options = dict(state.get("renderOptions") or {})
+    render_options.update({
+        "introEnabled": True,
+        "introTitle": canonical,
+        "introBackgroundImage": destination.name,
+        "introLeaderEnabled": False,
+        "thumbnailEnabled": True,
+        "logoEnabled": False,
+    })
+    state["renderOptions"] = render_options
+    save_project_state(project_id, state, project_name=str(state.get("title") or canonical))
+    progress("TITLE_CARD_READY", 0.95)
+    return destination
+
+
 def prepare_bible_project(
     project_id: str,
     payload: dict[str, Any],
@@ -386,10 +438,26 @@ def prepare_bible_project(
     canonical, scenes = build_storyboard(payload)
     ensure_dirs(project_id)
     image_dir = p_input(project_id) / "images"
+    leader_dir = p_input(project_id) / "leader"
     motion_dir = p_input(project_id) / "motion"
     image_dir.mkdir(parents=True, exist_ok=True)
+    leader_dir.mkdir(parents=True, exist_ok=True)
     if payload.get("mode") == "motion":
         motion_dir.mkdir(parents=True, exist_ok=True)
+
+    title_card_name = "bible-title-card.png"
+    title_card_path = leader_dir / title_card_name
+    log(f"Generating passage-specific title card for {canonical}")
+    _generate_still(_title_card_prompt(canonical, scenes, str(payload.get("visualStyle") or "cinematic-natural-light")), title_card_path)
+    render_options = payload.setdefault("renderOptions", {})
+    render_options.update({
+        "introEnabled": True,
+        "introTitle": canonical,
+        "introBackgroundImage": title_card_name,
+        "introLeaderEnabled": False,
+        "thumbnailEnabled": True,
+        "logoEnabled": False,
+    })
 
     previous_motion_path: Path | None = None
     for index, scene in enumerate(scenes, start=1):
@@ -452,6 +520,8 @@ def prepare_bible_project(
             "youtubeDescription": f"A narrated visual presentation of {canonical}.",
             "youtubeTags": f"Bible, Scripture, {canonical.split()[0]}",
             "youtubePrivacy": "private",
+            "titleCardImageName": title_card_name,
+            "renderOptions": render_options,
         },
         project_name=spec["info"]["name"],
     )

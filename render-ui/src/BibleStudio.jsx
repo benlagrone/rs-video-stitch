@@ -43,6 +43,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
   const [animationPrompts, setAnimationPrompts] = useState({});
   const [animationJobs, setAnimationJobs] = useState({});
   const [writingPromptFor, setWritingPromptFor] = useState(0);
+  const [titleCardJob, setTitleCardJob] = useState(null);
 
   const headers = (extra = {}) => ({
     ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
@@ -150,10 +151,24 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     return () => window.clearInterval(timer);
   }, [animationJobs, project?.projectId, effectiveApiBase, authToken]);
 
+  useEffect(() => {
+    if (!titleCardJob?.jobId || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(titleCardJob.status)) return undefined;
+    const timer = window.setInterval(async () => {
+      try {
+        const current = await request(`/v1/jobs/${encodeURIComponent(titleCardJob.jobId)}`);
+        setTitleCardJob((previous) => ({ ...previous, ...current }));
+        if (current.status === 'SUCCEEDED' && project?.projectId) await loadBibleProject(project.projectId);
+      } catch (pollError) {
+        setError(pollError.message || String(pollError));
+      }
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [titleCardJob?.jobId, titleCardJob?.status, project?.projectId, effectiveApiBase, authToken]);
+
   const scenes = project?.scenes?.scenes || [];
   const motionClipCount = scenes.filter((scene) => scene.timeline?.[0]?.video).length;
   const outputName = project?.state?.outputName || 'video.mp4';
-  const videoHref = project ? apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(project.projectId)}/outputs/video?filename=${encodeURIComponent(outputName)}`) : '';
+  const videoHref = project ? apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(project.projectId)}/outputs/video?filename=${encodeURIComponent(outputName)}&v=${encodeURIComponent(project.state?.updatedAt || project.state?.titleCardUpdatedAt || '')}`) : '';
   const progress = Math.round((job?.progress || 0) * 100);
   const healthRows = [
     ['Sextant Orchestrator', health.sextant],
@@ -219,6 +234,21 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     }
   }
 
+  async function regenerateTitleCard() {
+    if (!project?.projectId) return;
+    setError('');
+    try {
+      const created = await request(`/v1/projects/${encodeURIComponent(project.projectId)}/bible-title-card`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visualStyle }),
+      });
+      setTitleCardJob({ ...created, status: 'QUEUED', stage: 'QUEUED', progress: 0 });
+    } catch (titleCardError) {
+      setError(titleCardError.message || String(titleCardError));
+    }
+  }
+
   async function buildVideo(event) {
     event.preventDefault();
     setError('');
@@ -232,7 +262,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
         body: JSON.stringify({
           passage, translation, mode, visualStyle, voice,
           language: 'en-US', ttsApi, outputName: 'video.mp4',
-          renderOptions: { tts: voice, ttsLanguage: 'en-US', ttsApi, introEnabled: true, introTitle: passage, logoEnabled: true },
+          renderOptions: { tts: voice, ttsLanguage: 'en-US', ttsApi, introEnabled: true, introTitle: passage, introBackgroundImage: 'bible-title-card.png', introLeaderEnabled: false, logoEnabled: false },
         }),
       });
       setJob({ ...created, status: 'QUEUED', stage: 'QUEUED', progress: 0 });
@@ -279,7 +309,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
         <aside className="bible-config">
           <section><h2>Scripture source</h2><label>Passage<input value={passage} onChange={(event) => setPassage(event.target.value)} required /></label></section>
           <section><h2>Video mode</h2><div className="mode-switch"><button type="button" className={mode === 'still' ? 'active' : ''} onClick={() => setMode('still')}>Still</button><button type="button" className={mode === 'motion' ? 'active' : ''} onClick={() => setMode('motion')}>Motion</button></div></section>
-          <section><label>Translation<select value={translation} onChange={(event) => setTranslation(event.target.value)}><option value="kjv">KJV</option><option value="web">World English Bible</option></select></label><div className="style-picker"><label>Find a visual style<input type="search" value={styleQuery} onChange={(event) => setStyleQuery(event.target.value)} placeholder="Search all styles" /></label><label>Visual style<select value={visualStyle} onChange={(event) => setVisualStyle(event.target.value)}>{Object.entries(styleGroups).map(([category, styles]) => <optgroup label={category} key={category}>{styles.map((style) => <option value={style.id} key={style.id}>{style.name}</option>)}</optgroup>)}</select></label><p><strong>{visualStyles.length} styles</strong> available · {selectedStyle?.prompt}</p></div><label>Narrator voice<select value={`${ttsApi}::${voice}`} onChange={selectNarrator}>{voiceProviders.length ? voiceProviders.map((provider) => <optgroup label={provider.label} key={provider.id}>{provider.voices.map((voiceName) => <option value={`${provider.ttsApi}::${voiceName}`} key={`${provider.id}-${voiceName}`}>{voiceName}</option>)}</optgroup>) : <option value="vibevoice-proxy::Carter">Carter</option>}</select></label>{activeVoiceProvider && <span className="voice-source-note">Source: {activeVoiceProvider.label}</span>}</section>
+          <section><label>Translation<select value={translation} onChange={(event) => setTranslation(event.target.value)}><option value="kjv">KJV</option><option value="web">World English Bible</option></select></label><div className="style-picker"><label>Find a visual style<input type="search" value={styleQuery} onChange={(event) => setStyleQuery(event.target.value)} placeholder="Search all styles" /></label><label>Visual style<select value={visualStyle} onChange={(event) => setVisualStyle(event.target.value)}>{Object.entries(styleGroups).map(([category, styles]) => <optgroup label={category} key={category}>{styles.map((style) => <option value={style.id} key={style.id}>{style.name}</option>)}</optgroup>)}</select></label><p><strong>{visualStyles.length} styles</strong> available · {selectedStyle?.prompt}</p></div>{project && <div className="bible-title-card-control">{project.state?.titleCardImageName && <img src={`${apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(project.projectId)}/assets/leader/${encodeURIComponent(project.state.titleCardImageName)}`)}?v=${encodeURIComponent(project.state?.titleCardUpdatedAt || '')}`} alt={`${project.state?.passage || passage} title card background`} />}<button type="button" className="secondary-action" onClick={regenerateTitleCard} disabled={titleCardJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(titleCardJob.status)}>{titleCardJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(titleCardJob.status) ? `${stageLabel(titleCardJob.stage)} · ${Math.round((titleCardJob.progress || 0) * 100)}%` : (project.state?.titleCardImageName ? 'Regenerate title card & video' : 'Generate title card & video')}</button><small>Generated from the passage and selected art style. The updated video has no brokerage template or logo.</small></div>}<label>Narrator voice<select value={`${ttsApi}::${voice}`} onChange={selectNarrator}>{voiceProviders.length ? voiceProviders.map((provider) => <optgroup label={provider.label} key={provider.id}>{provider.voices.map((voiceName) => <option value={`${provider.ttsApi}::${voiceName}`} key={`${provider.id}-${voiceName}`}>{voiceName}</option>)}</optgroup>) : <option value="vibevoice-proxy::Carter">Carter</option>}</select></label>{activeVoiceProvider && <span className="voice-source-note">Source: {activeVoiceProvider.label}</span>}</section>
           <button className="primary-action bible-build" type="submit" disabled={isSubmitting || (job && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(job.status))}>{isSubmitting ? 'Queuing' : `Generate ${mode === 'motion' ? 'Motion' : 'Still'} Video`}</button>
           {error && <div className="error-box">{error}</div>}
         </aside>

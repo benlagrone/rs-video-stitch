@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models import Artifact, Job
 from app.renderer import render_project
-from app.bible_workflow import animate_bible_scene, prepare_bible_project
+from app.bible_workflow import animate_bible_scene, generate_bible_title_card, prepare_bible_project
 from app.storage import ROOT as STORAGE_ROOT, job_log_path
 
 POLL_INTERVAL = 1.0
@@ -77,6 +77,7 @@ def loop(stop_event: Event | None = None) -> None:
             try:
                 is_bible_video = payload.get("workflow") == "bible-video"
                 is_scene_animation = payload.get("workflow") == "scene-animation"
+                is_bible_title_card = payload.get("workflow") == "bible-title-card"
                 if is_scene_animation:
                     final_path = animate_bible_scene(
                         job.project_id,
@@ -84,6 +85,21 @@ def loop(stop_event: Event | None = None) -> None:
                         str(payload.get("prompt") or ""),
                         progress=progress,
                         log=log,
+                    )
+                elif is_bible_title_card:
+                    generate_bible_title_card(
+                        job.project_id,
+                        str(payload.get("visualStyle") or "") or None,
+                        progress=lambda stage, value: progress(stage, value * 0.3),
+                        log=log,
+                    )
+                    final_path = render_project(
+                        job.project_id,
+                        STORAGE_ROOT,
+                        options,
+                        output_name,
+                        log=log,
+                        progress=lambda stage, value: progress(stage, 0.3 + value * 0.69),
                     )
                 else:
                     if is_bible_video:

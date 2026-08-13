@@ -141,7 +141,9 @@ class RenderOptions(BaseModel):
     titleStyle: Optional[TitleStyle] = None
     introEnabled: bool = Field(default=False)
     introTitle: Optional[str] = None
+    introBackgroundImage: Optional[str] = None
     introLeaderImage: Optional[str] = None
+    introLeaderEnabled: bool = Field(default=True)
     introDuration: float = Field(default=1.0, gt=0)
     thumbnailEnabled: bool = Field(default=True)
     logoEnabled: bool = Field(default=True)
@@ -178,6 +180,10 @@ class SceneAnimationPromptResponse(BaseModel):
     projectId: str
     sceneIndex: int
     prompt: str
+
+
+class BibleTitleCardRequest(BaseModel):
+    visualStyle: Optional[str] = Field(default=None, min_length=3, max_length=160)
 
 
 class ScriptEnhanceRequest(BaseModel):
