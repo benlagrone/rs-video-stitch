@@ -1103,7 +1103,7 @@ async def youtube_upload(
     except Exception as exc:  # noqa: BLE001
         # The video already exists. Return it as a successful upload and expose a
         # retryable thumbnail error instead of encouraging a duplicate upload.
-        upload_state["thumbnailError"] = str(exc)
+        upload_state["thumbnailError"] = _youtube_thumbnail_error(exc)
 
     state["youtubeUpload"] = upload_state
     state["updatedAt"] = time.time()
@@ -1142,7 +1142,7 @@ async def youtube_thumbnail(
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"YouTube thumbnail failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=_youtube_thumbnail_error(exc)) from exc
 
     url = f"https://youtu.be/{video_id}"
     upload_state.update(
@@ -1164,6 +1164,17 @@ async def youtube_thumbnail(
         url=url,
         thumbnailFilename=thumbnail_path.name,
     )
+
+
+def _youtube_thumbnail_error(exc: Exception) -> str:
+    message = str(exc)
+    if "doesn't have permissions to upload and set custom video thumbnails" in message:
+        return (
+            "This YouTube channel has not enabled custom thumbnails. In YouTube Studio, "
+            "open Settings > Channel > Feature eligibility, verify the channel for "
+            "Intermediate features, then click Apply thumbnail again."
+        )
+    return f"YouTube thumbnail failed: {message}"
 
 
 def _tail_logs(job_id: str, limit_bytes: int = 4096) -> str:
