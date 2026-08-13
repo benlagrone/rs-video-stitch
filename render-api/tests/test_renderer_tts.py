@@ -264,6 +264,40 @@ class RendererTTSTest(TestCase):
         self.assertIn("intro_title_1.txt", filter_graph)
         self.assertIn("[v]", filter_graph)
 
+    def test_subject_title_card_does_not_add_brand_template_input(self):
+        commands = []
+
+        def fake_run(command, log=None):
+            commands.append(command)
+            output = Path(command[-1])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"generated")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(renderer, "run", side_effect=fake_run):
+            root = Path(tmp)
+            background = root / "bible-title-card.png"
+            background.write_bytes(b"image")
+            renderer._create_intro_card_assets(
+                background_image=background,
+                leader_template=None,
+                title="Genesis 1",
+                work_dir=root / "work",
+                output_dir=root / "output",
+                fps=30,
+                duration=1.0,
+                title_font_path=root / "font.ttf",
+                preset="medium",
+                crf="18",
+                log=None,
+                thumbnail_enabled=False,
+            )
+
+        intro_command = commands[0]
+        self.assertEqual(intro_command.count("-loop"), 1)
+        self.assertIn("1:a", intro_command)
+        self.assertNotIn("leader.png", " ".join(intro_command))
+        self.assertNotIn("[leader]", intro_command[intro_command.index("-filter_complex") + 1])
+
     def test_default_image_durations_match_narration_length(self):
         durations = renderer._default_image_durations(
             scene={},
