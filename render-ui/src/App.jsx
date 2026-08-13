@@ -168,6 +168,25 @@ function stateImageItem(image, assets, subdir, baseUrl) {
   return { name, persisted: true, missing: true };
 }
 
+function scriptFromProject(state, scenes) {
+  if (typeof state.script === 'string' && state.script.trim()) return state.script;
+  return (Array.isArray(scenes) ? scenes : [])
+    .map((scene) => String(scene?.VO || scene?.description || '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function imageHeadersFromProject(state, scenes) {
+  if (state.imageHeaders && Object.keys(state.imageHeaders).length) return state.imageHeaders;
+  return (Array.isArray(scenes) ? scenes : []).reduce((headers, scene) => {
+    (scene?.images || []).forEach((imageName) => {
+      const timelineItem = (scene?.timeline || []).find((item) => item?.image === imageName);
+      headers[imageName] = timelineItem?.header || scene?.title || '';
+    });
+    return headers;
+  }, {});
+}
+
 function missingImageDataUrl(name) {
   const label = encodeURIComponent(name || 'missing image');
   return `data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='360' viewBox='0 0 640 360'%3E%3Crect width='640' height='360' fill='%23131820'/%3E%3Crect x='24' y='24' width='592' height='312' rx='14' fill='none' stroke='%23344655' stroke-width='4' stroke-dasharray='14 12'/%3E%3Ctext x='320' y='170' text-anchor='middle' font-family='Arial,sans-serif' font-size='26' fill='%23cbd5e1'%3EMissing image file%3C/text%3E%3Ctext x='320' y='210' text-anchor='middle' font-family='Arial,sans-serif' font-size='20' fill='%2394a3b8'%3E${label}%3C/text%3E%3C/svg%3E`;
@@ -534,6 +553,7 @@ export function App() {
     try {
       const result = await request(`/v1/projects/${encodeURIComponent(pid)}`);
       const state = result.state || {};
+      const persistedScenes = result.scenes?.scenes || [];
       const projectImages = state.images?.length
         ? state.images
           .map((image) => stateImageItem(image, result.assets, 'images', apiBase))
@@ -543,24 +563,24 @@ export function App() {
       const logoAsset = assetByName(result.assets, 'logo', state.logoImageName);
       const savedSceneDurations = Array.isArray(state.sceneDurations)
         ? state.sceneDurations
-        : (result.scenes?.scenes || []).map((scene) => scene.duration || '');
+        : persistedScenes.map((scene) => scene.duration || '');
       const savedSceneImageAssignments = Array.isArray(state.sceneImageAssignments)
         ? state.sceneImageAssignments
-        : (result.scenes?.scenes || []).map((scene) => scene.images || []);
+        : persistedScenes.map((scene) => scene.images || []);
       const removedProjectImages = (state.removedImages || [])
         .map((image) => stateImageItem(image, result.assets, 'images', apiBase))
         .filter(Boolean)
 
       setTitle(state.title || pid);
       setProjectId(pid);
-      setScript(state.script || '');
+      setScript(scriptFromProject(state, persistedScenes));
       setTargetSeconds(state.targetSeconds || 60);
       setSceneDurations(savedSceneDurations);
       setSceneImageAssignments(sanitizeSceneImageAssignments(savedSceneImageAssignments, projectImages.map((image) => image.name)));
       setOutputName(state.outputName || 'video.mp4');
       setImages(projectImages);
       setRemovedImages(removedProjectImages);
-      setImageHeaders(state.imageHeaders || {});
+      setImageHeaders(imageHeadersFromProject(state, persistedScenes));
       setImageRoomInfo(state.imageRoomInfo || {});
       setUseIntro(state.useIntro ?? true);
       setIntroLines(leadLinesFromState(state, ''));
