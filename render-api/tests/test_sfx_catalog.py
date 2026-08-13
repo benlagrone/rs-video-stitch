@@ -31,6 +31,7 @@ class SfxCatalogTests(unittest.TestCase):
         result = list_sfx_catalog()
         self.assertEqual(result["policy"], "no-attribution-only")
         self.assertEqual(result["owner"], "fortress.sextant:mediastudio-sfx-catalog")
+        self.assertEqual(result["availableCount"], 0)
         self.assertEqual(result["assets"], [])
 
     def test_lists_only_no_attribution_social_assets_without_paths(self):

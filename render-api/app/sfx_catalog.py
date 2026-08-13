@@ -37,6 +37,7 @@ def _empty_catalog(status: str = "empty") -> dict[str, Any]:
             for provider_id, label in ALLOWED_PROVIDERS.items()
         ],
         "count": 0,
+        "availableCount": 0,
         "assets": [],
     }
 
