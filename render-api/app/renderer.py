@@ -46,6 +46,19 @@ _DEFAULT_FONT_RELATIVE = Path("media") / "EB_Garamond" / "EBGaramond-VariableFon
 _DEFAULT_LEADER_RELATIVE = Path("media") / "leader.png"
 _DEFAULT_LOGO_RELATIVE = Path("media") / "brand" / "logophone.png"
 _BRAND_MEDIA_RELATIVE = Path("media") / "brand"
+_BUNDLED_FONT_FILES = {
+    "ebgaramond": Path("EB_Garamond/static/EBGaramond-Regular.ttf"),
+    "ebgaramondmedium": Path("EB_Garamond/static/EBGaramond-Medium.ttf"),
+    "ebgaramondsemibold": Path("EB_Garamond/static/EBGaramond-SemiBold.ttf"),
+    "ebgaramondbold": Path("EB_Garamond/static/EBGaramond-Bold.ttf"),
+    "ebgaramonditalic": Path("EB_Garamond/static/EBGaramond-Italic.ttf"),
+    "cinzel": Path("Cinzel/static/Cinzel-Regular.ttf"),
+    "cinzelmedium": Path("Cinzel/static/Cinzel-Medium.ttf"),
+    "cinzelsemibold": Path("Cinzel/static/Cinzel-SemiBold.ttf"),
+    "cinzelbold": Path("Cinzel/static/Cinzel-Bold.ttf"),
+    "cinzelextrabold": Path("Cinzel/static/Cinzel-ExtraBold.ttf"),
+    "cinzelblack": Path("Cinzel/static/Cinzel-Black.ttf"),
+}
 
 
 @lru_cache(maxsize=1)
@@ -118,6 +131,12 @@ def _find_font_by_family(font_family: str) -> Optional[Path]:
     target = "".join(ch for ch in font_family.lower() if ch.isalnum())
     if not target:
         return None
+    bundled_relative = _BUNDLED_FONT_FILES.get(target)
+    if bundled_relative:
+        for root in _font_search_roots():
+            candidate = root / bundled_relative
+            if candidate.exists():
+                return candidate
     for font_path in _available_fonts():
         normalized = "".join(ch for ch in font_path.stem.lower() if ch.isalnum())
         if target in normalized:
