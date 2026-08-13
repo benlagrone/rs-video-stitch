@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import textwrap
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -372,12 +373,18 @@ def _overlay_title(
     crf: str,
     log: Optional["LogFunc"],
 ) -> None:
-    title_file.write_text(title_text, encoding="utf-8")
     try:
         font_size_candidate = float(title_style.get("fontSize")) if title_style.get("fontSize") is not None else 72.0
     except (TypeError, ValueError):
         font_size_candidate = 72.0
     font_size = max(1, int(round(font_size_candidate)))
+    if str(title_style.get("position") or "").lower().startswith("bottom"):
+        wrap_width = max(28, min(72, int(3100 / max(1, font_size))))
+        title_text = "\n".join(
+            textwrap.fill(line, width=wrap_width, break_long_words=False, break_on_hyphens=False)
+            for line in title_text.splitlines()
+        )
+    title_file.write_text(title_text, encoding="utf-8")
     font_color = _normalize_color(title_style.get("fill")) or "white"
     border_color = _normalize_color(title_style.get("outline"), default_alpha=0.65) or "black@0.65"
     x_expr, y_expr = _title_coordinates(title_style.get("position"))
@@ -1120,6 +1127,7 @@ def render_project(
     if hasattr(raw_title_style, "model_dump"):
         raw_title_style = raw_title_style.model_dump()
     title_style = dict(raw_title_style) if isinstance(raw_title_style, dict) else {}
+    scripture_caption_enabled = _truthy(opts.get("scriptureCaptionEnabled"))
     voice_dir = opts.get("voiceDir")
     tts_api = (
         opts.get("ttsApi")
@@ -1409,6 +1417,10 @@ def render_project(
                     log,
                 )
             image_header = image_headers.get(image_name, "")
+            if scripture_caption_enabled:
+                reference = str(scene.get("title") or image_header).strip()
+                verse_text = str(scene.get("VO") or scene.get("description") or "").strip()
+                image_header = "\n".join(part for part in (reference, verse_text) if part)
             if image_header:
                 titled_segment = temp_dir / f"seg_{img_index:02d}_titled.mp4"
                 header_file = temp_dir / f"seg_{img_index:02d}_header.txt"

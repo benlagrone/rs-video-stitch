@@ -139,6 +139,7 @@ class RenderOptions(BaseModel):
     music: Optional[str] = None
     ducking: bool = Field(default=False)
     titleStyle: Optional[TitleStyle] = None
+    scriptureCaptionEnabled: bool = Field(default=False)
     introEnabled: bool = Field(default=False)
     introTitle: Optional[str] = None
     introBackgroundImage: Optional[str] = None
