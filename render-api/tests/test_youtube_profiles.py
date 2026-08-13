@@ -46,6 +46,18 @@ class YouTubeProfileTests(unittest.TestCase):
         with self.assertRaises(youtube_upload.YouTubeUploadConfigurationError):
             youtube_upload.normalize_youtube_profile("cantonese")
 
+    def test_loopback_bridge_removes_manual_callback_requirement(self):
+        config = {"installed": {"client_id": "test"}}
+        redirect_uri = "http://localhost:8082/v1/youtube/auth/callback"
+        with patch.dict(os.environ, {"YOUTUBE_LOOPBACK_BRIDGE": "true"}, clear=False):
+            self.assertFalse(youtube_upload._manual_callback_required(config, redirect_uri))
+
+    def test_loopback_without_bridge_keeps_manual_callback_fallback(self):
+        config = {"installed": {"client_id": "test"}}
+        redirect_uri = "http://localhost:8082/v1/youtube/auth/callback"
+        with patch.dict(os.environ, {"YOUTUBE_LOOPBACK_BRIDGE": "false"}, clear=False):
+            self.assertTrue(youtube_upload._manual_callback_required(config, redirect_uri))
+
 
 if __name__ == "__main__":
     unittest.main()

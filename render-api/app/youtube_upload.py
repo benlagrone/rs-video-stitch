@@ -224,6 +224,23 @@ def _is_loopback_redirect(redirect_uri: str) -> bool:
     return hostname in {"localhost", "127.0.0.1", "::1"}
 
 
+def _loopback_bridge_enabled() -> bool:
+    return os.getenv("YOUTUBE_LOOPBACK_BRIDGE", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _manual_callback_required(config: Optional[dict], redirect_uri: str) -> bool:
+    return (
+        _oauth_client_kind(config) == "installed"
+        and _is_loopback_redirect(redirect_uri)
+        and not _loopback_bridge_enabled()
+    )
+
+
 def _auth_flow(redirect_uri: Optional[str] = None) -> Any:
     google = _google_modules()
     client_secret_file = os.getenv("YOUTUBE_CLIENT_SECRET_FILE")
@@ -244,7 +261,7 @@ def youtube_auth_status(profile: str = DEFAULT_PROFILE) -> dict:
     profile = normalize_youtube_profile(profile)
     config = _client_secret_file_config() or _client_config()
     redirect_uri = _redirect_for_client_config(config)
-    manual_callback = _oauth_client_kind(config) == "installed" and _is_loopback_redirect(redirect_uri)
+    manual_callback = _manual_callback_required(config, redirect_uri)
     configured = bool(
         config
         or _token_file_path(profile).exists()
@@ -285,7 +302,7 @@ def youtube_authorization_url(profile: str = DEFAULT_PROFILE) -> dict[str, Any]:
     profile = normalize_youtube_profile(profile)
     config = _client_secret_file_config() or _client_config()
     redirect_uri = _redirect_for_client_config(config)
-    manual_callback = _oauth_client_kind(config) == "installed" and _is_loopback_redirect(redirect_uri)
+    manual_callback = _manual_callback_required(config, redirect_uri)
     flow = _auth_flow(redirect_uri=redirect_uri)
     state = f"{profile}.{uuid.uuid4().hex}"
     _write_state(profile=profile, state=state, redirect_uri=redirect_uri, manual_callback=manual_callback)

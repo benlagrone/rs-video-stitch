@@ -50,6 +50,15 @@ default to the Mandarin profile, while the final upload remains an explicit
 review action. Connecting the Mandarin profile requires the user to choose the
 intended Google account and channel in Google's OAuth flow once.
 
+The installed-app OAuth client returns to
+`http://localhost:8082/v1/youtube/auth/callback`. On Benjamin's Mac, the Data
+Fabric Inventory nginx frontend owns that loopback port and forwards only this
+exact callback route to Sextant MediaStudio. All other localhost port 8082
+routes remain Data Fabric routes. With `YOUTUBE_LOOPBACK_BRIDGE=true`,
+MediaStudio polls for the completed server token and does not ask the user to
+copy and paste the callback URL. Google may still require its own one-time
+unverified-app acknowledgement until the OAuth consent app is verified.
+
 Sextant keeps Colima's global `portForwarder` disabled. The launchd service
 `com.fortress.mediastudio-relay` publishes only locked port `8082` through
 Colima's authenticated SSH transport. This preserves fail-closed containers
