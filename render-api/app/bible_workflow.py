@@ -149,8 +149,15 @@ def _parse_motion_plan(raw: str, expected_count: int) -> list[dict[str, str]]:
         missing = [key for key, value in item.items() if not value]
         if missing:
             raise RuntimeError(f"Fortress motion planner scene {index} is missing {', '.join(missing)}")
+        if item["continuity"].lower() in {"none", "n/a", "not applicable"}:
+            item["continuity"] = (
+                "Preserve the same palette, light direction, geography, spatial composition, and evolving forms "
+                "from the opening frame through the ending frame"
+            )
         if normalized:
             item["startState"] = normalized[-1]["endState"]
+            if str(scene.get("continuity") or "").strip().lower() in {"none", "n/a", "not applicable"}:
+                item["continuity"] += f"; carry forward {normalized[-1]['continuity']}"
         normalized.append(item)
     return normalized
 

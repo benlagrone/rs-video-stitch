@@ -88,7 +88,7 @@ class BibleWorkflowTest(TestCase):
             {
                 "scenes": [
                     {"startState": "A dark empty sea", "action": "Light spreads across the water", "endState": "The water glows beneath a new light", "camera": "Track slowly forward", "continuity": "The same sea and horizon", "transition": "The glow reveals the waves"},
-                    {"startState": "An unrelated response", "action": "Wind drives ripples across the water", "endState": "Ordered waves fill the frame", "camera": "Glide above the surface", "continuity": "The same sea, horizon, and light", "transition": "The waves carry forward"},
+                    {"startState": "An unrelated response", "action": "Wind drives ripples across the water", "endState": "Ordered waves fill the frame", "camera": "Glide above the surface", "continuity": "none", "transition": "The waves carry forward"},
                 ]
             }
         )
@@ -103,6 +103,8 @@ class BibleWorkflowTest(TestCase):
 
         self.assertEqual(scenes[1]["startState"], scenes[0]["endState"])
         self.assertEqual(scenes[0]["action"], "Light spreads across the water")
+        self.assertNotEqual(scenes[1]["continuity"], "none")
+        self.assertIn("carry forward", scenes[1]["continuity"])
         self.assertIn("The visible action is", scenes[0]["motionPrompt"])
         self.assertIn("Connection to the next shot", scenes[0]["motionPrompt"])
 
