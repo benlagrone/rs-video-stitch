@@ -11,6 +11,11 @@ publishing remains a separate, explicit review action.
 English and Mandarin projects use separate server-side YouTube publishing
 profiles; selecting a Chinese narration language defaults the project to the
 Mandarin channel without replacing the English channel authorization.
+After an upload succeeds, MediaStudio automatically applies the generated
+`thumbnail.jpg` to that YouTube video and records the video ID in project
+state. If YouTube rejects the thumbnail, the upload remains recorded and the
+Render Desk exposes an **Apply thumbnail** retry button; an editable video-ID
+field also supports videos uploaded before MediaStudio began recording IDs.
 The complete runtime and project store are locked to `fortress.sextant`; see
 [`docs/sextant-bible-video-deployment.md`](docs/sextant-bible-video-deployment.md).
 

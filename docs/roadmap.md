@@ -16,7 +16,8 @@
 - Add a Fortress-managed `room_renamer` service profile so room classification does not depend on a separately started local API.
 - Convert saved room annotations into curated `room_renamer/data/train/<room>/` examples.
 - Add thumbnail and YouTube metadata defaults that reuse room names and project fields.
-- Add a render history view with durable output, thumbnail, and YouTube upload state.
+- Add a render history view for durable output and publication events. Current
+  project state already records the latest YouTube video and thumbnail result.
 
 ## Later
 

@@ -36,6 +36,8 @@ from app.schemas import (
     YouTubeAuthCompleteRequest,
     YouTubeDescriptionRequest,
     YouTubeDescriptionResponse,
+    YouTubeThumbnailRequest,
+    YouTubeThumbnailResponse,
     YouTubeUploadRequest,
     YouTubeUploadResponse,
 )
@@ -60,6 +62,7 @@ from app.youtube_upload import (
     YouTubeUploadConfigurationError,
     complete_youtube_auth,
     complete_youtube_auth_from_callback_url,
+    set_youtube_thumbnail,
     upload_video_to_youtube,
     youtube_auth_status,
     youtube_authorization_url,
@@ -1072,7 +1075,95 @@ async def youtube_upload(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"YouTube upload failed: {exc}") from exc
-    return YouTubeUploadResponse(videoId=video_id, url=f"https://youtu.be/{video_id}")
+
+    url = f"https://youtu.be/{video_id}"
+    state = read_project_state(pid) or {}
+    upload_state = {
+        "videoId": video_id,
+        "url": url,
+        "profile": req.profile,
+        "uploadedAt": time.time(),
+        "thumbnailApplied": False,
+        "thumbnailFilename": None,
+        "thumbnailError": None,
+    }
+    state["youtubeUpload"] = upload_state
+    state["updatedAt"] = time.time()
+    save_project_state(pid, state, project_name=str(state.get("title") or pid))
+
+    thumbnail_path = p_output(pid) / "thumbnail.jpg"
+    try:
+        set_youtube_thumbnail(
+            video_id=video_id,
+            thumbnail_path=thumbnail_path,
+            profile=req.profile,
+        )
+        upload_state["thumbnailApplied"] = True
+        upload_state["thumbnailFilename"] = thumbnail_path.name
+    except Exception as exc:  # noqa: BLE001
+        # The video already exists. Return it as a successful upload and expose a
+        # retryable thumbnail error instead of encouraging a duplicate upload.
+        upload_state["thumbnailError"] = str(exc)
+
+    state["youtubeUpload"] = upload_state
+    state["updatedAt"] = time.time()
+    save_project_state(pid, state, project_name=str(state.get("title") or pid))
+    return YouTubeUploadResponse(
+        videoId=video_id,
+        url=url,
+        thumbnailApplied=bool(upload_state["thumbnailApplied"]),
+        thumbnailFilename=upload_state["thumbnailFilename"],
+        thumbnailError=upload_state["thumbnailError"],
+    )
+
+
+@app.post("/v1/projects/{pid}/youtube/thumbnail", response_model=YouTubeThumbnailResponse)
+async def youtube_thumbnail(
+    pid: str,
+    req: YouTubeThumbnailRequest,
+) -> YouTubeThumbnailResponse:
+    state = read_project_state(pid) or {}
+    upload_state = dict(state.get("youtubeUpload") or {})
+    video_id = req.videoId.strip() or str(upload_state.get("videoId") or "").strip()
+    if not video_id:
+        raise HTTPException(status_code=400, detail="YouTube video id is required")
+
+    thumbnail_path = p_output(pid) / Path(req.filename).name
+    if not thumbnail_path.exists():
+        raise HTTPException(status_code=404, detail="thumbnail not found")
+    try:
+        set_youtube_thumbnail(
+            video_id=video_id,
+            thumbnail_path=thumbnail_path,
+            profile=req.profile,
+        )
+    except YouTubeUploadConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"YouTube thumbnail failed: {exc}") from exc
+
+    url = f"https://youtu.be/{video_id}"
+    upload_state.update(
+        {
+            "videoId": video_id,
+            "url": url,
+            "profile": req.profile,
+            "thumbnailApplied": True,
+            "thumbnailFilename": thumbnail_path.name,
+            "thumbnailError": None,
+            "thumbnailAppliedAt": time.time(),
+        }
+    )
+    state["youtubeUpload"] = upload_state
+    state["updatedAt"] = time.time()
+    save_project_state(pid, state, project_name=str(state.get("title") or pid))
+    return YouTubeThumbnailResponse(
+        videoId=video_id,
+        url=url,
+        thumbnailFilename=thumbnail_path.name,
+    )
 
 
 def _tail_logs(job_id: str, limit_bytes: int = 4096) -> str:

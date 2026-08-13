@@ -418,3 +418,36 @@ def upload_video_to_youtube(
     if not video_id:
         raise RuntimeError("YouTube upload response did not include a video id")
     return str(video_id)
+
+
+def set_youtube_thumbnail(
+    *,
+    video_id: str,
+    thumbnail_path: Path,
+    profile: str = DEFAULT_PROFILE,
+) -> None:
+    """Set or replace a video's custom thumbnail using the selected channel profile."""
+    if not video_id.strip():
+        raise ValueError("YouTube video id is required")
+    if not thumbnail_path.exists() or not thumbnail_path.is_file():
+        raise FileNotFoundError(f"Thumbnail file not found: {thumbnail_path}")
+    if thumbnail_path.stat().st_size > 2_000_000:
+        raise ValueError("YouTube thumbnail must be 2 MB or smaller")
+
+    mime_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+    }
+    mime_type = mime_types.get(thumbnail_path.suffix.lower())
+    if not mime_type:
+        raise ValueError("YouTube thumbnail must be a JPEG or PNG image")
+
+    google = _google_modules()
+    youtube = authenticate_youtube(profile)
+    media = google["MediaFileUpload"](
+        str(thumbnail_path),
+        mimetype=mime_type,
+        resumable=False,
+    )
+    youtube.thumbnails().set(videoId=video_id.strip(), media_body=media).execute()

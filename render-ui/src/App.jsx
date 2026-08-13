@@ -261,6 +261,14 @@ function projectStateFromValues(values) {
     youtubeTags: values.youtubeTags,
     youtubePrivacy: values.youtubePrivacy,
     youtubeProfile: values.youtubeProfile,
+    youtubeUpload: values.youtubeVideoId ? {
+      videoId: values.youtubeVideoId,
+      url: values.youtubeResult || `https://youtu.be/${values.youtubeVideoId}`,
+      profile: values.youtubeProfile,
+      thumbnailApplied: values.youtubeThumbnailApplied,
+      thumbnailFilename: values.youtubeThumbnailFilename || null,
+      thumbnailError: values.youtubeThumbnailError || null,
+    } : undefined,
   };
 }
 
@@ -312,9 +320,14 @@ export function App() {
   const [youtubePrivacy, setYoutubePrivacy] = useState('private');
   const [youtubeProfile, setYoutubeProfile] = useState('english');
   const [youtubeResult, setYoutubeResult] = useState('');
+  const [youtubeVideoId, setYoutubeVideoId] = useState('');
+  const [youtubeThumbnailApplied, setYoutubeThumbnailApplied] = useState(false);
+  const [youtubeThumbnailFilename, setYoutubeThumbnailFilename] = useState('');
+  const [youtubeThumbnailError, setYoutubeThumbnailError] = useState('');
   const [youtubeCallbackUrl, setYoutubeCallbackUrl] = useState('');
   const [isConnectingYoutube, setIsConnectingYoutube] = useState(false);
   const [isUploadingYoutube, setIsUploadingYoutube] = useState(false);
+  const [isApplyingYoutubeThumbnail, setIsApplyingYoutubeThumbnail] = useState(false);
   const [job, setJob] = useState(null);
   const [logs, setLogs] = useState('');
   const [videoHref, setVideoHref] = useState('');
@@ -556,6 +569,10 @@ export function App() {
     setYoutubePrivacy('private');
     setYoutubeProfile('english');
     setYoutubeResult('');
+    setYoutubeVideoId('');
+    setYoutubeThumbnailApplied(false);
+    setYoutubeThumbnailFilename('');
+    setYoutubeThumbnailError('');
     setYoutubeCallbackUrl('');
     setJob(null);
     setLogs('');
@@ -627,6 +644,11 @@ export function App() {
       setYoutubeTags(state.youtubeTags || '');
       setYoutubePrivacy(state.youtubePrivacy || 'private');
       setYoutubeProfile(state.youtubeProfile || youtubeProfileForLanguage(savedLanguage));
+      setYoutubeVideoId(state.youtubeUpload?.videoId || '');
+      setYoutubeResult(state.youtubeUpload?.url || '');
+      setYoutubeThumbnailApplied(Boolean(state.youtubeUpload?.thumbnailApplied));
+      setYoutubeThumbnailFilename(state.youtubeUpload?.thumbnailFilename || '');
+      setYoutubeThumbnailError(state.youtubeUpload?.thumbnailError || '');
       setOutputs(result.outputs || []);
       setVideoHref('');
       setJob(null);
@@ -899,6 +921,11 @@ export function App() {
             youtubeTags,
             youtubePrivacy,
             youtubeProfile,
+            youtubeVideoId,
+            youtubeResult,
+            youtubeThumbnailApplied,
+            youtubeThumbnailFilename,
+            youtubeThumbnailError,
           }),
         }),
       });
@@ -1015,13 +1042,50 @@ export function App() {
         }),
       });
       setYoutubeResult(result.url);
-      setStatus('YouTube upload complete');
+      setYoutubeVideoId(result.videoId);
+      setYoutubeThumbnailApplied(Boolean(result.thumbnailApplied));
+      setYoutubeThumbnailFilename(result.thumbnailFilename || '');
+      setYoutubeThumbnailError(result.thumbnailError || '');
+      setStatus(result.thumbnailApplied ? 'YouTube upload and thumbnail complete' : 'YouTube upload complete; thumbnail needs attention');
     } catch (err) {
       setError(err.message || String(err));
       setStatus('YouTube upload failed');
     } finally {
       setIsUploadingYoutube(false);
       refreshYoutubeAuth().catch(() => {});
+    }
+  }
+
+  async function applyYoutubeThumbnail() {
+    const videoId = youtubeVideoId.trim();
+    if (!videoId || !previewPosterName || isApplyingYoutubeThumbnail) return;
+
+    setError('');
+    setIsApplyingYoutubeThumbnail(true);
+    setStatus('Applying YouTube thumbnail');
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/youtube/thumbnail`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          videoId,
+          filename: previewPosterName,
+          profile: youtubeProfile,
+        }),
+      });
+      setYoutubeVideoId(result.videoId);
+      setYoutubeResult(result.url);
+      setYoutubeThumbnailApplied(true);
+      setYoutubeThumbnailFilename(result.thumbnailFilename);
+      setYoutubeThumbnailError('');
+      setStatus('YouTube thumbnail applied');
+    } catch (err) {
+      setYoutubeThumbnailApplied(false);
+      setYoutubeThumbnailError(err.message || String(err));
+      setError(err.message || String(err));
+      setStatus('YouTube thumbnail failed');
+    } finally {
+      setIsApplyingYoutubeThumbnail(false);
     }
   }
 
@@ -1653,6 +1717,9 @@ export function App() {
                   <button type="button" onClick={uploadYoutube} disabled={isUploadingYoutube || !youtubeAuth?.authenticated}>
                     {isUploadingYoutube ? 'Uploading' : 'Upload to YouTube'}
                   </button>
+                  <button type="button" onClick={applyYoutubeThumbnail} disabled={isApplyingYoutubeThumbnail || !youtubeAuth?.authenticated || !youtubeVideoId.trim() || !previewPosterName}>
+                    {isApplyingYoutubeThumbnail ? 'Applying thumbnail' : 'Apply thumbnail'}
+                  </button>
                 </div>
                 {youtubeAuth?.manualCallback && !youtubeAuth?.authenticated && (
                   <div className="manual-auth-panel">
@@ -1678,6 +1745,10 @@ export function App() {
                 <label>Description<textarea className="short-textarea youtube-description-textarea" value={youtubeDescription} onChange={(event) => setYoutubeDescription(event.target.value)} /></label>
                 <label>Tags<input value={youtubeTags} onChange={(event) => setYoutubeTags(event.target.value)} placeholder="comma, separated, tags" /></label>
                 <label>Privacy<select value={youtubePrivacy} onChange={(event) => setYoutubePrivacy(event.target.value)}><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select></label>
+                <label>YouTube video ID<input value={youtubeVideoId} onChange={(event) => { setYoutubeVideoId(event.target.value.trim()); setYoutubeThumbnailApplied(false); }} placeholder="Filled automatically after upload" /></label>
+                {youtubeThumbnailApplied && <p className="success-text">Thumbnail applied{youtubeThumbnailFilename ? `: ${youtubeThumbnailFilename}` : ''}</p>}
+                {!youtubeThumbnailApplied && youtubeThumbnailError && <p>Thumbnail pending: {youtubeThumbnailError}</p>}
+                {!previewPosterName && <p>Generate or refresh a thumbnail before applying it.</p>}
                 {youtubeResult && <a href={youtubeResult} target="_blank" rel="noreferrer">{youtubeResult}</a>}
               </div>
             </div>

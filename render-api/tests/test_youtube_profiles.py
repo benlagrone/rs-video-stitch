@@ -58,6 +58,50 @@ class YouTubeProfileTests(unittest.TestCase):
         with patch.dict(os.environ, {"YOUTUBE_LOOPBACK_BRIDGE": "false"}, clear=False):
             self.assertTrue(youtube_upload._manual_callback_required(config, redirect_uri))
 
+    def test_set_thumbnail_uses_selected_profile(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            thumbnail_path = Path(temp_dir) / "thumbnail.jpg"
+            thumbnail_path.write_bytes(b"jpeg")
+            media_upload = MagicMock()
+            youtube = MagicMock()
+            with patch.object(
+                youtube_upload,
+                "_google_modules",
+                return_value={"MediaFileUpload": media_upload},
+            ), patch.object(
+                youtube_upload,
+                "authenticate_youtube",
+                return_value=youtube,
+            ) as authenticate:
+                youtube_upload.set_youtube_thumbnail(
+                    video_id="video-123",
+                    thumbnail_path=thumbnail_path,
+                    profile="mandarin",
+                )
+
+            authenticate.assert_called_once_with("mandarin")
+            media_upload.assert_called_once_with(
+                str(thumbnail_path),
+                mimetype="image/jpeg",
+                resumable=False,
+            )
+            youtube.thumbnails.return_value.set.assert_called_once_with(
+                videoId="video-123",
+                media_body=media_upload.return_value,
+            )
+            youtube.thumbnails.return_value.set.return_value.execute.assert_called_once_with()
+
+    def test_set_thumbnail_rejects_files_larger_than_two_mb(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            thumbnail_path = Path(temp_dir) / "thumbnail.png"
+            thumbnail_path.write_bytes(b"x" * 2_000_001)
+
+            with self.assertRaisesRegex(ValueError, "2 MB or smaller"):
+                youtube_upload.set_youtube_thumbnail(
+                    video_id="video-123",
+                    thumbnail_path=thumbnail_path,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

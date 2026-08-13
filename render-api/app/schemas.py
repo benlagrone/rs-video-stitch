@@ -219,6 +219,22 @@ class YouTubeUploadRequest(BaseModel):
 class YouTubeUploadResponse(BaseModel):
     videoId: str
     url: str
+    thumbnailApplied: bool = False
+    thumbnailFilename: Optional[str] = None
+    thumbnailError: Optional[str] = None
+
+
+class YouTubeThumbnailRequest(BaseModel):
+    videoId: str = ""
+    filename: str = Field(default="thumbnail.jpg")
+    profile: Literal["english", "mandarin"] = Field(default="english")
+
+
+class YouTubeThumbnailResponse(BaseModel):
+    videoId: str
+    url: str
+    thumbnailApplied: bool = True
+    thumbnailFilename: str
 
 
 class YouTubeAuthCompleteRequest(BaseModel):
