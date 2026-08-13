@@ -390,21 +390,31 @@ def _title_card_prompt(canonical: str, scenes: list[dict[str, Any]], visual_styl
         )
     else:
         visual_subject = f"Use only people, places, objects, and events directly supported by this passage: {subject}"
+    style_requirement = ""
+    if visual_style == "medieval-illuminated-manuscript":
+        style_requirement = (
+            "The result must unmistakably look like a medieval illuminated manuscript: flat painted perspective, "
+            "gold-leaf accents, jewel pigments, and botanical marginalia around the perimeter, with no architecture. "
+        )
     return (
         f"Create a dedicated 16:9 Bible video title-card background for {canonical}. "
         f"Primary visual subject: {visual_subject} Art direction: {style['name']}. {style['prompt']}. "
+        f"{style_requirement}"
         "Compose a reverent, visually specific interpretation of the passage with its principal subject and setting. "
         "Keep the middle third open, calm, and lower contrast for a separately rendered title; place meaningful imagery around the perimeter. "
-        "No words, letters, captions, logos, brokerage branding, real-estate marks, frames, badges, watermarks, or modern objects."
+        "No words, letters, captions, logos, brokerage branding, real-estate marks, branded frames, badges, watermarks, or modern objects."
     )
 
 
-def _title_card_negative_prompt(canonical: str) -> str:
+def _title_card_negative_prompt(canonical: str, visual_style: str = "") -> str:
     if re.match(r"^genesis\s+1(?:\D|$)", canonical.strip(), flags=re.IGNORECASE):
-        return (
+        negative = (
             "church, cathedral, chapel, castle, tower, house, building, city, village, bridge, boat, ship, road, "
-            "person, people, human, animal, decorative title frame, central monument, busy center"
+            "person, people, human, animal, central monument, busy center"
         )
+        if visual_style != "medieval-illuminated-manuscript":
+            negative += ", decorative title frame"
+        return negative
     return "brokerage logo, real estate sign, decorative title frame, busy center"
 
 
@@ -431,7 +441,7 @@ def generate_bible_title_card(
     _generate_still(
         _title_card_prompt(canonical, scenes, visual_style),
         destination,
-        negative_extra=_title_card_negative_prompt(canonical),
+        negative_extra=_title_card_negative_prompt(canonical, visual_style),
     )
     state["titleCardImageName"] = destination.name
     state["titleCardUpdatedAt"] = time.time()
@@ -475,7 +485,7 @@ def prepare_bible_project(
     _generate_still(
         _title_card_prompt(canonical, scenes, str(payload.get("visualStyle") or "cinematic-natural-light")),
         title_card_path,
-        negative_extra=_title_card_negative_prompt(canonical),
+        negative_extra=_title_card_negative_prompt(canonical, str(payload.get("visualStyle") or "cinematic-natural-light")),
     )
     render_options = payload.setdefault("renderOptions", {})
     render_options.update({
