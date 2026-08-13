@@ -188,7 +188,7 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(payload["renderOptions"]["logoImage"], "animal-safari-kids.png")
         self.assertTrue(payload["renderOptions"]["scriptureCaptionEnabled"])
         self.assertEqual(payload["renderOptions"]["titleStyle"]["fontFamily"], "EB Garamond")
-        self.assertEqual(payload["renderOptions"]["titleStyle"]["position"], "bottom-center")
+        self.assertEqual(payload["renderOptions"]["titleStyle"]["position"], "bottom-left")
         extract.assert_called_once_with(first_clip, second_image)
         self.assertEqual(generate_motion.call_count, 2)
         self.assertEqual(generate_motion.call_args_list[1].args[0], second_image)
