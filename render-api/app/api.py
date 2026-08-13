@@ -71,7 +71,12 @@ from app.youtube_upload import (
     youtube_auth_status,
     youtube_authorization_url,
 )
-from app.bible_workflow import capability_health, generate_scene_animation_prompt, scene_animation_context
+from app.bible_workflow import (
+    BIBLE_CHANNEL_ICON,
+    capability_health,
+    generate_scene_animation_prompt,
+    scene_animation_context,
+)
 from app.art_styles import list_art_styles
 
 ALLOW_ORIGINS = (
@@ -432,7 +437,10 @@ async def regenerate_bible_title_card(
         "introBackgroundImage": "bible-title-card.png",
         "introLeaderEnabled": False,
         "thumbnailEnabled": True,
-        "logoEnabled": False,
+        "logoEnabled": True,
+        "logoImage": BIBLE_CHANNEL_ICON,
+        "logoCorner": "bottom-right",
+        "logoMargin": 28,
     })
     job_id = f"j_{uuid.uuid4().hex[:12]}"
     db.add(Job(

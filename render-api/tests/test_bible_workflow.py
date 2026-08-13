@@ -184,7 +184,8 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("No words", title_card_call.args[0])
         self.assertEqual(title_card_call.args[1].name, "bible-title-card.png")
         self.assertFalse(payload["renderOptions"]["introLeaderEnabled"])
-        self.assertFalse(payload["renderOptions"]["logoEnabled"])
+        self.assertTrue(payload["renderOptions"]["logoEnabled"])
+        self.assertEqual(payload["renderOptions"]["logoImage"], "animal-safari-kids.png")
         extract.assert_called_once_with(first_clip, second_image)
         self.assertEqual(generate_motion.call_count, 2)
         self.assertEqual(generate_motion.call_args_list[1].args[0], second_image)
@@ -225,7 +226,8 @@ class BibleWorkflowTest(TestCase):
         self.assertNotIn("decorative title frame", generate_still.call_args.kwargs["negative_extra"])
         self.assertEqual(saved_states[-1]["visualStyle"], "medieval-illuminated-manuscript")
         self.assertFalse(saved_states[-1]["renderOptions"]["introLeaderEnabled"])
-        self.assertFalse(saved_states[-1]["renderOptions"]["logoEnabled"])
+        self.assertTrue(saved_states[-1]["renderOptions"]["logoEnabled"])
+        self.assertEqual(saved_states[-1]["renderOptions"]["logoImage"], "animal-safari-kids.png")
 
     def test_scene_animation_prompt_reuses_structured_motion_plan(self):
         document = {

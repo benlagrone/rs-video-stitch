@@ -145,6 +145,11 @@ button { font: inherit; }
 .offline { color: var(--danger); }
 .publish-card { display: grid; gap: 12px; }
 .publish-card a { color: var(--accent-strong); font-size: 13px; font-weight: 800; }
+.channel-brand { align-items: center; border: 1px solid var(--line); border-radius: 6px; display: flex; gap: 10px; padding: 9px; }
+.channel-brand img { background: var(--field); border-radius: 50%; height: 42px; object-fit: cover; width: 42px; }
+.channel-brand strong, .channel-brand span { display: block; }
+.channel-brand strong { font-size: 12px; }
+.channel-brand span { color: var(--muted); font-size: 10px; margin-top: 3px; }
 
 .publish-modal { align-items: center; background: rgba(0,0,0,.72); display: flex; inset: 0; justify-content: center; padding: 24px; position: fixed; z-index: 30; }
 .publish-modal > div { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: var(--shadow); max-width: 560px; padding: 22px; width: 100%; }
