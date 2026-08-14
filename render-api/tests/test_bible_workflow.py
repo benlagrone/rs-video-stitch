@@ -51,6 +51,8 @@ class BibleWorkflowTest(TestCase):
         prompt = scenes[0]["timeline"][0]["prompt"]
         self.assertIn("Art direction: Baroque", prompt)
         self.assertIn("chiaroscuro", prompt)
+        self.assertIn("unmistakably masculine, mature-to-elderly", prompt)
+        self.assertIn("full silver-white beard", prompt)
 
     def test_fetch_and_build_storyboard_preserves_each_verse(self):
         session = mock.Mock()
@@ -129,6 +131,7 @@ class BibleWorkflowTest(TestCase):
         self.assertTrue(call.args[0].endswith("/api/generate"))
         self.assertEqual(call.kwargs["json"]["model"], bible_workflow.OLLAMA_MODEL)
         self.assertIn("exactly one shot per supplied verse", call.kwargs["json"]["prompt"])
+        self.assertIn("Locked God character design", call.kwargs["json"]["prompt"])
         self.assertEqual(call.kwargs["json"]["format"], "json")
 
     def test_generate_still_writes_first_image(self):
@@ -142,6 +145,8 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual((payload["width"], payload["height"]), (1024, 576))
         self.assertEqual(payload["override_settings"]["sd_model_checkpoint"], bible_workflow.STABLE_DIFFUSION_CHECKPOINT)
         self.assertTrue(payload["override_settings_restore_afterwards"])
+        self.assertIn("female deity representing God", payload["negative_prompt"])
+        self.assertIn("young man representing God", payload["negative_prompt"])
 
     def test_generate_still_appends_title_card_negative_constraints(self):
         session = mock.Mock()
@@ -221,6 +226,7 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("Genesis 1", prompt)
         self.assertIn("Medieval Illuminated Manuscript", prompt)
         self.assertIn("brokerage branding", prompt)
+        self.assertIn("Locked God character design", prompt)
         self.assertIn("Primordial creation", prompt)
         self.assertIn("no people, animals, buildings", prompt)
         self.assertIn("gold-leaf accents", prompt)
@@ -228,6 +234,7 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("church", generate_still.call_args.kwargs["negative_extra"])
         self.assertNotIn("decorative title frame", generate_still.call_args.kwargs["negative_extra"])
         self.assertEqual(saved_states[-1]["visualStyle"], "medieval-illuminated-manuscript")
+        self.assertTrue(saved_states[-1]["characterDesign"]["god"]["locked"])
         self.assertFalse(saved_states[-1]["renderOptions"]["introLeaderEnabled"])
         self.assertTrue(saved_states[-1]["renderOptions"]["logoEnabled"])
         self.assertEqual(saved_states[-1]["renderOptions"]["logoImage"], "animal-safari-kids.png")
@@ -323,7 +330,11 @@ class BibleWorkflowTest(TestCase):
         generate_motion.assert_called_once()
         saved_document = json.loads(save_scenes.call_args.args[1])
         self.assertEqual(saved_document["scenes"][0]["timeline"][0]["video"], "scene_001.mp4")
-        self.assertEqual(saved_document["scenes"][0]["motionPrompt"], "Light expands across the water.")
+        self.assertTrue(saved_document["scenes"][0]["motionPrompt"].startswith("Light expands across the water."))
+        self.assertIn("Locked God character design", saved_document["scenes"][0]["motionPrompt"])
+        motion_prompt = generate_motion.call_args.kwargs["prompt"]
+        self.assertIn("Locked God character design", motion_prompt)
+        self.assertIn("young man representing God", generate_motion.call_args.kwargs["negative_prompt"])
 
     def test_generate_motion_submits_comfyui_workflow_and_downloads_artifact(self):
         session = mock.Mock()
