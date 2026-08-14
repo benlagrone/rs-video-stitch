@@ -74,6 +74,7 @@ from app.youtube_upload import (
 from app.bible_workflow import (
     BIBLE_CAPTION_STYLE,
     BIBLE_CHANNEL_ICON,
+    GOD_CHARACTER_DESIGN,
     capability_health,
     generate_scene_animation_prompt,
     scene_animation_context,
@@ -474,6 +475,11 @@ async def bible_health() -> dict:
 async def bible_styles() -> dict:
     styles = list_art_styles()
     return {"styles": styles, "count": len(styles)}
+
+
+@app.get("/v1/bible/character-policy")
+async def bible_character_policy() -> dict:
+    return {"god": GOD_CHARACTER_DESIGN}
 
 
 @app.get("/v1/bible/fonts")
