@@ -1,0 +1,217 @@
+{
+  "requester": {
+    "name": "Jie Huang",
+    "email": "huangjiett@yahoo.com"
+  },
+  "received": "2026-08-17",
+  "publishingRequested": false,
+  "projects": [
+    {
+      "action": "update",
+      "listing": "7131 Harmony Cove",
+      "mls": "61859197",
+      "projectIds": {
+        "english": "p-jhng01-61859197",
+        "mandarin": "p-jhng01-61859197-zh-cn"
+      },
+      "request": "Add the three supplied photos and highlight the guarded gate, community pool, and gym.",
+      "assets": [
+        {
+          "filename": "7131 Front Gate.jpeg",
+          "role": "guarded community entrance"
+        },
+        {
+          "filename": "7131 Pool.jpg",
+          "role": "community swimming pool"
+        },
+        {
+          "filename": "7131 Gym.jpeg",
+          "role": "community fitness center"
+        }
+      ],
+      "appendBeforeCallToAction": {
+        "english": [
+          {
+            "title": "A Welcoming Gated Entrance",
+            "VO": "Arrive through the community's guarded entrance, an added feature for residents and their guests.",
+            "images": ["7131 Front Gate.jpeg"]
+          },
+          {
+            "title": "Relax by the Community Pool",
+            "VO": "When it is time to unwind, enjoy the neighborhood swimming pool and its inviting outdoor setting.",
+            "images": ["7131 Pool.jpg"]
+          },
+          {
+            "title": "Fitness Close to Home",
+            "VO": "Keep your routine close to home with convenient access to the community fitness center.",
+            "images": ["7131 Gym.jpeg"]
+          }
+        ],
+        "mandarin": [
+          {
+            "title": "有门卫的社区入口",
+            "VO": "社区设有门卫入口，为住户和来访客人提供更安心、便利的出入体验。",
+            "images": ["7131 Front Gate.jpeg"]
+          },
+          {
+            "title": "社区泳池",
+            "VO": "想要放松时，可以到环境舒适的社区泳池享受休闲时光。",
+            "images": ["7131 Pool.jpg"]
+          },
+          {
+            "title": "社区健身房",
+            "VO": "社区健身房就在家门口，让日常锻炼更加方便。",
+            "images": ["7131 Gym.jpeg"]
+          }
+        ]
+      }
+    },
+    {
+      "action": "create",
+      "listing": "9800 Richmond Avenue, Suite 700",
+      "scope": "LeCrown Properties offering on the seventh floor only",
+      "projectIds": {
+        "english": "p-9800-richmond-suite-700",
+        "mandarin": "p-9800-richmond-suite-700-zh-cn"
+      },
+      "source": {
+        "type": "requester-supplied Dropbox photo bundle",
+        "url": "https://www.dropbox.com/scl/fo/pi8agukheoehk37zin1uf/ALpPh8fOXxYzJMOwc9jZE3o?rlkey=ix8mjvvzx9drqnxvofeuwnjhk&dl=0",
+        "note": "Interior photos are representative Suite 700 spaces and are not mapped to exact room numbers."
+      },
+      "selectedAssets": [
+        "GK-1.JPG",
+        "GK-2.JPG",
+        "GK-4.JPG",
+        "GK-7.JPG",
+        "GK-10.JPG",
+        "GK-12.JPG",
+        "GK-18.JPG",
+        "GK-21.JPG",
+        "GK-24.JPG",
+        "GK-26.JPG",
+        "GK-33.JPG",
+        "GK-39.JPG",
+        "GK-47.JPG",
+        "GK-51.JPG",
+        "GK-56.JPG",
+        "GK-60.JPG",
+        "GK-74.JPG",
+        "GK-76.JPG"
+      ],
+      "facts": {
+        "address": "9800 Richmond Avenue, Suite 700, Houston, Texas 77042",
+        "offerings": [
+          "furnished private offices",
+          "dedicated coworking desks"
+        ],
+        "pricing": [
+          "Small private offices from $300 per month",
+          "Interior private offices from $399 per month",
+          "Most exterior private offices from $499 per month",
+          "Larger corner offices from $599 per month",
+          "Dedicated coworking desks from $250 per month"
+        ],
+        "disclaimer": "Availability, room assignment, pricing, and final terms must be confirmed."
+      },
+      "render": {
+        "introEnabled": true,
+        "introDuration": 3.0,
+        "thumbnailEnabled": true,
+        "logoEnabled": true,
+        "logoImage": "logophone.png",
+        "logoCorner": "top-right",
+        "logoMargin": 24,
+        "fps": 30,
+        "crf": 18,
+        "preset": "medium"
+      },
+      "variants": {
+        "english": {
+          "language": "en-US",
+          "introTitle": "Flexible Offices at 9800 Richmond Avenue — Suite 700",
+          "outputName": "9800-richmond-suite-700-en.mp4",
+          "scenes": [
+            {
+              "title": "A Professional Houston Address",
+              "VO": "Welcome to 9800 Richmond Avenue in Houston. LeCrown Properties offers flexible workspace on the seventh floor in Suite 700.",
+              "images": ["GK-1.JPG", "GK-2.JPG", "GK-4.JPG"]
+            },
+            {
+              "title": "An Inviting Arrival",
+              "VO": "A polished lobby and bright shared areas create a professional first impression for you, your team, and your guests.",
+              "images": ["GK-7.JPG", "GK-18.JPG", "GK-21.JPG"]
+            },
+            {
+              "title": "Comfortable Shared Amenities",
+              "VO": "Suite 700 includes comfortable lounge areas and convenient kitchen and café spaces for the workday.",
+              "images": ["GK-10.JPG", "GK-12.JPG", "GK-24.JPG"]
+            },
+            {
+              "title": "Furnished Private Offices",
+              "VO": "Choose from furnished private offices in several sizes, including interior, exterior, and larger corner options, subject to availability.",
+              "images": ["GK-26.JPG", "GK-39.JPG", "GK-47.JPG"]
+            },
+            {
+              "title": "Coworking and Meeting Space",
+              "VO": "Dedicated coworking desks, collaboration areas, and meeting rooms support focused work and growing teams.",
+              "images": ["GK-33.JPG", "GK-51.JPG", "GK-60.JPG"]
+            },
+            {
+              "title": "Flexible Options from $250",
+              "VO": "Dedicated coworking starts from two hundred fifty dollars per month, and private offices start from three hundred dollars per month. Availability, pricing, room assignment, and final terms must be confirmed.",
+              "images": ["GK-56.JPG", "GK-74.JPG", "GK-76.JPG"]
+            },
+            {
+              "title": "Schedule Your Tour",
+              "VO": "Contact LeCrown Properties today to confirm current availability and schedule a tour of Suite 700 at 9800 Richmond Avenue.",
+              "images": ["GK-1.JPG", "GK-24.JPG", "GK-33.JPG"]
+            }
+          ]
+        },
+        "mandarin": {
+          "language": "zh-CN",
+          "introTitle": "休斯顿灵活办公空间｜9800 Richmond Avenue 700室",
+          "outputName": "9800-richmond-suite-700-zh-cn.mp4",
+          "scenes": [
+            {
+              "title": "休斯顿专业办公地址",
+              "VO": "欢迎来到休斯顿 Richmond Avenue 9800号。LeCrown Properties 皇冠物业为您提供七楼700室的灵活办公空间。",
+              "images": ["GK-1.JPG", "GK-2.JPG", "GK-4.JPG"]
+            },
+            {
+              "title": "专业舒适的迎宾空间",
+              "VO": "现代大堂和明亮的公共区域，为您、团队和来访客户留下专业的第一印象。",
+              "images": ["GK-7.JPG", "GK-18.JPG", "GK-21.JPG"]
+            },
+            {
+              "title": "便利的共享设施",
+              "VO": "700室配有舒适的休息区、厨房和咖啡区，让日常办公更加轻松便利。",
+              "images": ["GK-10.JPG", "GK-12.JPG", "GK-24.JPG"]
+            },
+            {
+              "title": "配套家具的独立办公室",
+              "VO": "这里提供多种面积的带家具独立办公室，包括内侧、外侧和较大的转角办公室，具体以实际供应为准。",
+              "images": ["GK-26.JPG", "GK-39.JPG", "GK-47.JPG"]
+            },
+            {
+              "title": "共享工位与会议空间",
+              "VO": "固定共享工位、协作区域和会议室，适合专注办公，也能满足团队发展的需要。",
+              "images": ["GK-33.JPG", "GK-51.JPG", "GK-60.JPG"]
+            },
+            {
+              "title": "灵活方案 每月250美元起",
+              "VO": "固定共享工位每月二百五十美元起，独立办公室每月三百美元起。空房、价格、房间分配和最终条款请以确认结果为准。",
+              "images": ["GK-56.JPG", "GK-74.JPG", "GK-76.JPG"]
+            },
+            {
+              "title": "立即预约参观",
+              "VO": "欢迎立即联系 LeCrown Properties 皇冠物业，确认最新空房，并预约参观 Richmond Avenue 9800号七楼700室。",
+              "images": ["GK-1.JPG", "GK-24.JPG", "GK-33.JPG"]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
