@@ -867,11 +867,17 @@ def _youtube_description_is_complete(description: str, source_text: str) -> bool
 
 def _clean_youtube_description(description: str) -> str:
     description = EMOJI_PATTERN.sub("", description).strip()
-    return re.sub(
+    description = re.sub(
         r"\n+\s*[（(]\s*\d+\s*(?:characters?|chars?|words?|字|个字)\s*[）)]\s*$",
         "",
         description,
         flags=re.IGNORECASE,
+    ).strip()
+    return re.sub(
+        r"\n+\s*[（(]\s*(?:请注意|免责声明|note\s*:)\b.*[）)]\s*$",
+        "",
+        description,
+        flags=re.IGNORECASE | re.DOTALL,
     ).strip()
 
 

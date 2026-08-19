@@ -238,7 +238,11 @@ class ScriptEnhanceApiTest(TestCase):
         with mock.patch.object(
             api.requests,
             "post",
-            return_value=_FakeDescriptionResponse(complete_description + "\n\n(226 characters)"),
+            return_value=_FakeDescriptionResponse(
+                complete_description
+                + "\n\n（请注意：本视频信息仅供参考。）"
+                + "\n\n(226 characters)"
+            ),
         ) as post:
             response = asyncio.run(
                 api.enhance_youtube_description(
