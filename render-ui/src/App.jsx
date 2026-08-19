@@ -1781,6 +1781,9 @@ export function App() {
                     </button>
                   </div>
                 )}
+                {youtubeAuth?.authenticated && youtubeAuth?.metadataAuthorized === false && (
+                  <p>Reconnect this channel once to update details on existing YouTube videos.</p>
+                )}
                 <label>Title<input value={youtubeTitle} onChange={(event) => setYoutubeTitle(event.target.value)} placeholder={title || outputName} /></label>
                 <div className="output-heading compact-heading">
                   <h4>Description</h4>

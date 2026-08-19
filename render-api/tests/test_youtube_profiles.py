@@ -13,6 +13,22 @@ class YouTubeProfileTests(unittest.TestCase):
         self.assertIn("https://www.googleapis.com/auth/youtube.upload", youtube_upload.SCOPES)
         self.assertIn("https://www.googleapis.com/auth/youtube.force-ssl", youtube_upload.SCOPES)
 
+    def test_auth_status_reports_upload_only_token_needs_reconnect(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ,
+            {"YOUTUBE_TOKEN_FILE": str(Path(temp_dir) / "youtube_token.json")},
+            clear=False,
+        ), patch.object(youtube_upload, "_credentials_from_token_file", return_value=MagicMock()):
+            token_path = Path(temp_dir) / "youtube_token.json"
+            token_path.write_text(
+                json.dumps({"scopes": ["https://www.googleapis.com/auth/youtube.upload"]}),
+                encoding="utf-8",
+            )
+            status = youtube_upload.youtube_auth_status("english")
+
+        self.assertTrue(status["authenticated"])
+        self.assertFalse(status["metadataAuthorized"])
+
     def test_mandarin_uses_a_separate_token_file(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
             os.environ,
