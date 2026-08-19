@@ -147,6 +147,28 @@ class YouTubeThumbnailApiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(saved_states[-1]["youtubeDescription"], "A complete description.")
 
+    async def test_metadata_update_explains_upload_only_oauth_scope(self):
+        permission_error = RuntimeError(
+            "Request had insufficient authentication scopes: insufficientPermissions"
+        )
+        with patch.object(
+            api,
+            "read_project_state",
+            return_value={"youtubeUpload": {"videoId": "recorded-789"}},
+        ), patch.object(
+            api,
+            "update_youtube_video_metadata",
+            side_effect=permission_error,
+        ):
+            with self.assertRaises(api.HTTPException) as raised:
+                await api.youtube_metadata(
+                    "project-1",
+                    YouTubeMetadataRequest(title="Listing tour", description="Complete description."),
+                )
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("Connect YouTube", raised.exception.detail)
+
 
 if __name__ == "__main__":
     unittest.main()

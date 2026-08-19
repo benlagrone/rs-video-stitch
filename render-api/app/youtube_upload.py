@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse, urlunparse
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
+]
 DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token"
 DEFAULT_REDIRECT_URI = "http://localhost:8082/v1/youtube/auth/callback"
 DEFAULT_PROFILE = "english"
