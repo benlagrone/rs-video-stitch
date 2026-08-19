@@ -701,15 +701,24 @@ def _extract_ollama_response(payload: dict) -> str:
     return response
 
 
-def _ollama_generate(prompt: str, *, temperature: float = 0.55) -> str:
+def _ollama_generate(
+    prompt: str,
+    *,
+    temperature: float = 0.55,
+    num_predict: Optional[int] = None,
+) -> str:
     url = OLLAMA_BASE_URL.rstrip("/") + "/api/generate"
+    options = {
+        "temperature": temperature,
+    }
+    if num_predict is not None:
+        options["num_predict"] = num_predict
+
     payload = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
-        "options": {
-            "temperature": temperature,
-        },
+        "options": options,
     }
 
     try:
@@ -812,6 +821,7 @@ def _youtube_description_prompt(req: YouTubeDescriptionRequest) -> str:
     return (
         "Write a polished YouTube video description for a real-estate or commercial property listing video.\n"
         "Use a professional, broker-friendly tone. Make it useful for viewers and searchable on YouTube.\n"
+        "Write in the same primary language as the source title and narration. If the source is Chinese, respond in Simplified Chinese.\n"
         "Include a concise opening summary, notable property details, and a clear call to contact the listing broker or schedule a showing.\n"
         "Do not invent prices, phone numbers, URLs, MLS IDs, or broker names.\n"
         "Do not use markdown headings, hashtags, emoji, or bullet lists unless the source text explicitly requires them.\n"
@@ -824,12 +834,46 @@ def _youtube_description_prompt(req: YouTubeDescriptionRequest) -> str:
     )
 
 
+def _youtube_description_is_complete(description: str, source_text: str) -> bool:
+    description = description.strip()
+    if re.search(r"[\u3400-\u9fff]", source_text):
+        return len(description) >= 180
+    return len(description.split()) >= 80
+
+
+def _generate_youtube_description(req: YouTubeDescriptionRequest) -> str:
+    prompt = _youtube_description_prompt(req)
+    source_text = f"{req.title} {req.script} {req.currentDescription}".strip()
+    description = EMOJI_PATTERN.sub(
+        "",
+        _ollama_generate(prompt, temperature=0.45, num_predict=512),
+    ).strip()
+    if _youtube_description_is_complete(description, source_text):
+        return description
+
+    retry_prompt = (
+        f"{prompt}\n\n"
+        "The previous response was incomplete. Write the complete description now, "
+        "following every instruction above and ending with the call to action."
+    )
+    description = EMOJI_PATTERN.sub(
+        "",
+        _ollama_generate(retry_prompt, temperature=0.35, num_predict=512),
+    ).strip()
+    if not _youtube_description_is_complete(description, source_text):
+        raise HTTPException(
+            status_code=502,
+            detail="AI returned an incomplete YouTube description after retrying",
+        )
+    return description
+
+
 @app.post("/v1/youtube/description/enhance", response_model=YouTubeDescriptionResponse)
 async def enhance_youtube_description(req: YouTubeDescriptionRequest) -> YouTubeDescriptionResponse:
     source_text = f"{req.script} {req.currentDescription}".strip()
     if not source_text:
         raise HTTPException(status_code=400, detail="Add script or description text before generating a YouTube description")
-    description = EMOJI_PATTERN.sub("", _ollama_generate(_youtube_description_prompt(req), temperature=0.45)).strip()
+    description = _generate_youtube_description(req)
     return YouTubeDescriptionResponse(description=description, model=OLLAMA_MODEL)
 
 
