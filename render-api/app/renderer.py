@@ -836,8 +836,10 @@ def _create_intro_card_assets(
             [
                 "ffmpeg",
                 "-y",
+                "-ss",
+                "0.250",
                 "-i",
-                str(intro_still),
+                str(intro_video),
                 "-vf",
                 "scale=1280:720",
                 "-frames:v",
