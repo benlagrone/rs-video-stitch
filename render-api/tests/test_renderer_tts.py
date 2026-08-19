@@ -389,6 +389,24 @@ class RendererTTSTest(TestCase):
         self.assertTrue(thumbnail_input.endswith("intro.mp4"))
         self.assertNotIn("intro-card.png", thumbnail_command)
 
+    def test_thumbnail_generator_samples_supplied_finished_video(self):
+        commands = []
+
+        def fake_run(command, log=None):
+            commands.append(command)
+            output = Path(command[-1])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"generated")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(renderer, "run", side_effect=fake_run):
+            root = Path(tmp)
+            finished_video = root / "finished-branded.mp4"
+            finished_video.write_bytes(b"video")
+            renderer._generate_youtube_thumbnail(finished_video, root / "thumbnail.jpg", None)
+
+        thumbnail_input = commands[-1][commands[-1].index("-i") + 1]
+        self.assertEqual(thumbnail_input, str(finished_video))
+
     def test_default_image_durations_match_narration_length(self):
         durations = renderer._default_image_durations(
             scene={},
