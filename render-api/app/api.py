@@ -814,6 +814,12 @@ async def enhance_script(req: ScriptEnhanceRequest) -> ScriptEnhanceResponse:
 
 
 def _youtube_description_prompt(req: YouTubeDescriptionRequest) -> str:
+    source_text = f"{req.title} {req.script} {req.currentDescription}"
+    length_instruction = (
+        "For Chinese, write approximately 220 to 420 Chinese characters.\n"
+        if re.search(r"[\u3400-\u9fff]", source_text)
+        else "For English, keep it between 120 and 220 words.\n"
+    )
     room_context = _room_context(req.roomInfo or [])
     room_context_block = (
         "\nUseful image and room notes:\n"
@@ -832,9 +838,11 @@ def _youtube_description_prompt(req: YouTubeDescriptionRequest) -> str:
         "Use a professional, broker-friendly tone. Make it useful for viewers and searchable on YouTube.\n"
         "Write in the same primary language as the source title and narration. If the source is Chinese, respond in Simplified Chinese.\n"
         "Include a concise opening summary, notable property details, and a clear call to contact the listing broker or schedule a showing.\n"
-        "Do not invent prices, phone numbers, URLs, MLS IDs, or broker names.\n"
+        "Use only facts explicitly supported by the supplied text. Omit a detail when the source does not provide it.\n"
+        "Do not invent prices, amenities, transit claims, phone numbers, URLs, email addresses, MLS IDs, or broker names.\n"
+        "Do not add placeholders, contact fields, disclaimers, notes, or bracketed instructions.\n"
         "Do not use markdown headings, hashtags, emoji, or bullet lists unless the source text explicitly requires them.\n"
-        "Keep it between 120 and 220 words.\n"
+        f"{length_instruction}"
         "Return only the description text.\n\n"
         f"Video title:\n{req.title.strip() or 'Listing video'}\n"
         f"{current_block}"
@@ -845,6 +853,12 @@ def _youtube_description_prompt(req: YouTubeDescriptionRequest) -> str:
 
 def _youtube_description_is_complete(description: str, source_text: str) -> bool:
     description = description.strip()
+    if re.search(
+        r"\[\s*(?:insert|add|enter)\b|\bplaceholder\b|(?:^|\n)\s*[（(]\s*(?:note|注)\s*[:：]",
+        description,
+        flags=re.IGNORECASE,
+    ):
+        return False
     if re.search(r"[\u3400-\u9fff]", source_text):
         return len(description) >= 180
     return len(description.split()) >= 80

@@ -191,6 +191,29 @@ class ScriptEnhanceApiTest(TestCase):
         retry_payload = post.call_args.kwargs["json"]
         self.assertIn("previous response was incomplete", retry_payload["prompt"])
 
+    def test_enhance_youtube_description_retries_placeholder_artifacts(self):
+        artifact_description = (
+            "欢迎了解这处优质房产。" * 15
+            + "\n电话：[INSERT CONTACT PHONE NUMBER]\n（注：信息可能有变化。）"
+        )
+        complete_description = "欢迎了解这处位于休斯顿、空间实用的优质房产。" * 12
+        responses = [
+            _FakeDescriptionResponse(artifact_description),
+            _FakeDescriptionResponse(complete_description),
+        ]
+        with mock.patch.object(api.requests, "post", side_effect=responses) as post:
+            response = asyncio.run(
+                api.enhance_youtube_description(
+                    YouTubeDescriptionRequest(
+                        title="休斯顿优质房产",
+                        script="欢迎参观这处交通便利、空间实用的房产。",
+                    )
+                )
+            )
+
+        self.assertEqual(response.description, complete_description)
+        self.assertEqual(post.call_count, 2)
+
     def test_enhance_youtube_description_rejects_two_truncated_responses(self):
         responses = [
             _FakeDescriptionResponse("Welcome to the property at 980"),
