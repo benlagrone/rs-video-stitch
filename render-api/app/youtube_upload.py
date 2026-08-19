@@ -420,6 +420,40 @@ def upload_video_to_youtube(
     return str(video_id)
 
 
+def update_youtube_video_metadata(
+    *,
+    video_id: str,
+    title: str,
+    description: str,
+    tags: list[str],
+    category_id: str = "22",
+    privacy_status: str = "private",
+    made_for_kids: bool = False,
+    profile: str = DEFAULT_PROFILE,
+) -> None:
+    """Update metadata for an existing video using the selected channel profile."""
+    if not video_id.strip():
+        raise ValueError("YouTube video id is required")
+
+    youtube = authenticate_youtube(profile)
+    youtube.videos().update(
+        part="snippet,status",
+        body={
+            "id": video_id.strip(),
+            "snippet": {
+                "title": title,
+                "description": description,
+                "tags": tags,
+                "categoryId": str(category_id or "22"),
+            },
+            "status": {
+                "privacyStatus": privacy_status or "private",
+                "selfDeclaredMadeForKids": bool(made_for_kids),
+            },
+        },
+    ).execute()
+
+
 def set_youtube_thumbnail(
     *,
     video_id: str,

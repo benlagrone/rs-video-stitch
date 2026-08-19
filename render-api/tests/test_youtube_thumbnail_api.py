@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import api
-from app.schemas import YouTubeThumbnailRequest, YouTubeUploadRequest
+from app.schemas import YouTubeMetadataRequest, YouTubeThumbnailRequest, YouTubeUploadRequest
 
 
 class YouTubeThumbnailApiTests(unittest.IsolatedAsyncioTestCase):
@@ -112,6 +112,40 @@ class YouTubeThumbnailApiTests(unittest.IsolatedAsyncioTestCase):
                 profile="mandarin",
             )
             self.assertTrue(saved_states[-1]["youtubeUpload"]["thumbnailApplied"])
+
+    async def test_metadata_update_uses_recorded_video_and_saves_description(self):
+        saved_states = []
+        with patch.object(
+            api,
+            "read_project_state",
+            return_value={"title": "Listing", "youtubeUpload": {"videoId": "recorded-789"}},
+        ), patch.object(api, "update_youtube_video_metadata") as update_metadata, patch.object(
+            api,
+            "save_project_state",
+            side_effect=lambda _pid, state, **_kwargs: saved_states.append(dict(state)),
+        ):
+            result = await api.youtube_metadata(
+                "project-1",
+                YouTubeMetadataRequest(
+                    title="Listing tour",
+                    description="A complete description.",
+                    tags=["Houston"],
+                    profile="english",
+                ),
+            )
+
+        self.assertEqual(result.videoId, "recorded-789")
+        update_metadata.assert_called_once_with(
+            video_id="recorded-789",
+            title="Listing tour",
+            description="A complete description.",
+            tags=["Houston"],
+            category_id="22",
+            privacy_status="private",
+            made_for_kids=False,
+            profile="english",
+        )
+        self.assertEqual(saved_states[-1]["youtubeDescription"], "A complete description.")
 
 
 if __name__ == "__main__":

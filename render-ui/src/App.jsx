@@ -327,6 +327,7 @@ export function App() {
   const [youtubeCallbackUrl, setYoutubeCallbackUrl] = useState('');
   const [isConnectingYoutube, setIsConnectingYoutube] = useState(false);
   const [isUploadingYoutube, setIsUploadingYoutube] = useState(false);
+  const [isUpdatingYoutubeDetails, setIsUpdatingYoutubeDetails] = useState(false);
   const [isApplyingYoutubeThumbnail, setIsApplyingYoutubeThumbnail] = useState(false);
   const [job, setJob] = useState(null);
   const [logs, setLogs] = useState('');
@@ -877,7 +878,8 @@ export function App() {
     await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/assets`, { method: 'POST', body: form });
   }
 
-  async function saveProject() {
+  async function saveProject(overrides = {}) {
+    if (overrides?.preventDefault) overrides = {};
     setError('');
     setIsSavingProject(true);
     try {
@@ -924,7 +926,7 @@ export function App() {
             language,
             ttsApi,
             youtubeTitle,
-            youtubeDescription,
+            youtubeDescription: overrides.youtubeDescription ?? youtubeDescription,
             youtubeTags,
             youtubePrivacy,
             youtubeProfile,
@@ -1096,6 +1098,38 @@ export function App() {
     }
   }
 
+  async function updateYoutubeDetails() {
+    const videoId = youtubeVideoId.trim();
+    if (!videoId || isUpdatingYoutubeDetails) return;
+
+    setError('');
+    setIsUpdatingYoutubeDetails(true);
+    setStatus('Updating YouTube details');
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/youtube/metadata`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          videoId,
+          title: youtubeTitle.trim() || title || outputName,
+          description: youtubeDescription,
+          tags: youtubeTags.split(',').map((tag) => tag.trim()).filter(Boolean),
+          privacyStatus: youtubePrivacy,
+          categoryId: '22',
+          madeForKids: false,
+          profile: youtubeProfile,
+        }),
+      });
+      setYoutubeResult(result.url);
+      setStatus('YouTube details updated');
+    } catch (err) {
+      setError(err.message || String(err));
+      setStatus('YouTube details update failed');
+    } finally {
+      setIsUpdatingYoutubeDetails(false);
+    }
+  }
+
   async function writeYoutubeDescription() {
     if (isWritingYoutubeDescription || (!script.trim() && !youtubeDescription.trim())) return;
 
@@ -1113,8 +1147,10 @@ export function App() {
           roomInfo: roomInfoPayload,
         }),
       });
-      setYoutubeDescription(result.description || youtubeDescription);
-      setStatus(`YouTube description written with ${result.model || 'Ollama'}`);
+      const nextDescription = result.description || youtubeDescription;
+      setYoutubeDescription(nextDescription);
+      await saveProject({ youtubeDescription: nextDescription });
+      setStatus(`YouTube description written and saved with ${result.model || 'Ollama'}`);
     } catch (err) {
       setError(err.message || String(err));
       setStatus('YouTube description failed');
@@ -1726,6 +1762,9 @@ export function App() {
                   </button>
                   <button type="button" onClick={applyYoutubeThumbnail} disabled={isApplyingYoutubeThumbnail || !youtubeAuth?.authenticated || !youtubeVideoId.trim() || !previewPosterName}>
                     {isApplyingYoutubeThumbnail ? 'Applying thumbnail' : 'Apply thumbnail'}
+                  </button>
+                  <button type="button" onClick={updateYoutubeDetails} disabled={isUpdatingYoutubeDetails || !youtubeAuth?.authenticated || !youtubeVideoId.trim()}>
+                    {isUpdatingYoutubeDetails ? 'Updating details' : 'Update YouTube details'}
                   </button>
                 </div>
                 {youtubeAuth?.manualCallback && !youtubeAuth?.authenticated && (

@@ -102,6 +102,41 @@ class YouTubeProfileTests(unittest.TestCase):
                     thumbnail_path=thumbnail_path,
                 )
 
+    def test_update_metadata_uses_selected_profile(self):
+        youtube = MagicMock()
+        with patch.object(
+            youtube_upload,
+            "authenticate_youtube",
+            return_value=youtube,
+        ) as authenticate:
+            youtube_upload.update_youtube_video_metadata(
+                video_id="video-123",
+                title="Listing tour",
+                description="A complete property description.",
+                tags=["Houston", "real estate"],
+                privacy_status="unlisted",
+                profile="mandarin",
+            )
+
+        authenticate.assert_called_once_with("mandarin")
+        youtube.videos.return_value.update.assert_called_once_with(
+            part="snippet,status",
+            body={
+                "id": "video-123",
+                "snippet": {
+                    "title": "Listing tour",
+                    "description": "A complete property description.",
+                    "tags": ["Houston", "real estate"],
+                    "categoryId": "22",
+                },
+                "status": {
+                    "privacyStatus": "unlisted",
+                    "selfDeclaredMadeForKids": False,
+                },
+            },
+        )
+        youtube.videos.return_value.update.return_value.execute.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()

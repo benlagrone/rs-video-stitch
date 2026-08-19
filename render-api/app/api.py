@@ -40,6 +40,8 @@ from app.schemas import (
     YouTubeAuthCompleteRequest,
     YouTubeDescriptionRequest,
     YouTubeDescriptionResponse,
+    YouTubeMetadataRequest,
+    YouTubeMetadataResponse,
     YouTubeThumbnailRequest,
     YouTubeThumbnailResponse,
     YouTubeUploadRequest,
@@ -67,6 +69,7 @@ from app.youtube_upload import (
     complete_youtube_auth,
     complete_youtube_auth_from_callback_url,
     set_youtube_thumbnail,
+    update_youtube_video_metadata,
     upload_video_to_youtube,
     youtube_auth_status,
     youtube_authorization_url,
@@ -1422,6 +1425,59 @@ async def youtube_thumbnail(
         url=url,
         thumbnailFilename=thumbnail_path.name,
     )
+
+
+@app.post("/v1/projects/{pid}/youtube/metadata", response_model=YouTubeMetadataResponse)
+async def youtube_metadata(
+    pid: str,
+    req: YouTubeMetadataRequest,
+) -> YouTubeMetadataResponse:
+    state = read_project_state(pid) or {}
+    upload_state = dict(state.get("youtubeUpload") or {})
+    video_id = req.videoId.strip() or str(upload_state.get("videoId") or "").strip()
+    if not video_id:
+        raise HTTPException(status_code=400, detail="YouTube video id is required")
+
+    try:
+        update_youtube_video_metadata(
+            video_id=video_id,
+            title=req.title,
+            description=req.description,
+            tags=req.tags,
+            category_id=req.categoryId,
+            privacy_status=req.privacyStatus,
+            made_for_kids=req.madeForKids,
+            profile=req.profile,
+        )
+    except YouTubeUploadConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"YouTube metadata update failed: {exc}") from exc
+
+    url = f"https://youtu.be/{video_id}"
+    upload_state.update(
+        {
+            "videoId": video_id,
+            "url": url,
+            "profile": req.profile,
+            "metadataUpdatedAt": time.time(),
+        }
+    )
+    state.update(
+        {
+            "youtubeTitle": req.title,
+            "youtubeDescription": req.description,
+            "youtubeTags": ", ".join(req.tags),
+            "youtubePrivacy": req.privacyStatus,
+            "youtubeProfile": req.profile,
+            "youtubeUpload": upload_state,
+            "updatedAt": time.time(),
+        }
+    )
+    save_project_state(pid, state, project_name=str(state.get("title") or pid))
+    return YouTubeMetadataResponse(videoId=video_id, url=url)
 
 
 def _youtube_thumbnail_error(exc: Exception) -> str:

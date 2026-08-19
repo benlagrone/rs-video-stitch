@@ -248,6 +248,23 @@ class YouTubeUploadResponse(BaseModel):
     thumbnailError: Optional[str] = None
 
 
+class YouTubeMetadataRequest(BaseModel):
+    videoId: str = ""
+    title: str = Field(min_length=1)
+    description: str = ""
+    tags: List[str] = Field(default_factory=list)
+    categoryId: str = Field(default="22")
+    privacyStatus: str = Field(default="private")
+    madeForKids: bool = Field(default=False)
+    profile: Literal["english", "mandarin"] = Field(default="english")
+
+
+class YouTubeMetadataResponse(BaseModel):
+    videoId: str
+    url: str
+    updated: bool = True
+
+
 class YouTubeThumbnailRequest(BaseModel):
     videoId: str = ""
     filename: str = Field(default="thumbnail.jpg")
