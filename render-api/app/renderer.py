@@ -862,6 +862,17 @@ def _create_intro_card_assets(
     if not thumbnail_enabled:
         return intro_video, None
 
+    generated_thumbnail = _generate_youtube_thumbnail(intro_video, thumbnail_path, log)
+
+    return intro_video, generated_thumbnail
+
+
+def _generate_youtube_thumbnail(
+    source_video: Path,
+    thumbnail_path: Path,
+    log: Optional[LogFunc],
+) -> Optional[Path]:
+    """Sample a YouTube-sized thumbnail from the supplied video."""
     generated_thumbnail: Optional[Path] = None
     for quality in range(3, 22, 2):
         run(
@@ -871,7 +882,7 @@ def _create_intro_card_assets(
                 "-ss",
                 "0.250",
                 "-i",
-                str(intro_video),
+                str(source_video),
                 "-vf",
                 "scale=1280:720",
                 "-frames:v",
@@ -891,7 +902,7 @@ def _create_intro_card_assets(
     elif generated_thumbnail is not None:
         _log(log, f"Generated YouTube thumbnail {generated_thumbnail.name} ({generated_thumbnail.stat().st_size} bytes)")
 
-    return intro_video, generated_thumbnail
+    return generated_thumbnail
 
 
 def _synthesize_flite(text: str, destination: Path, voice: Optional[str], log: Optional[LogFunc]) -> None:
@@ -1597,6 +1608,7 @@ def render_project(
         scene_files.append(scene_file)
 
     update("CONCAT", 0.9)
+    thumbnail_file: Optional[Path] = None
     if intro_enabled and scenes:
         first_images = scenes[0].get("images") or []
         first_image_name = first_images[0] if first_images else None
@@ -1686,6 +1698,11 @@ def render_project(
             crf,
             log,
         )
+
+    if thumbnail_enabled and intro_enabled and thumbnail_file:
+        # Sample the finished output so the thumbnail contains the same branding
+        # overlay and layout as the published video.
+        _generate_youtube_thumbnail(final_path, thumbnail_file, log)
 
     update("FINALIZE", 0.98)
     return final_path
