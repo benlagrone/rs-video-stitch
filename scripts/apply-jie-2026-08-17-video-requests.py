@@ -7,7 +7,7 @@ import json
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import requests
 
@@ -58,7 +58,7 @@ def wait_for_job(base: str, job_id: str) -> dict[str, Any]:
 
 
 def render_options(state: dict[str, Any], intro_title: str) -> dict[str, Any]:
-    return {
+    options = {
         "fps": 30,
         "minShot": 2.5,
         "maxShot": 8,
@@ -81,6 +81,10 @@ def render_options(state: dict[str, Any], intro_title: str) -> dict[str, Any]:
         "logoCorner": state.get("logoCorner") or "bottom-right",
         "logoMargin": int(state.get("logoMargin") or 24),
     }
+    title_style = (state.get("renderOptions") or {}).get("titleStyle")
+    if title_style:
+        options["titleStyle"] = title_style
+    return options
 
 
 def mark_render_complete(
@@ -114,6 +118,7 @@ def update_7131(
     project_id: str,
     additions: list[dict[str, Any]],
     source_paths: list[Path],
+    mandarin_font: Optional[Path] = None,
 ) -> tuple[str, str]:
     project = request_json("GET", f"{base}/v1/projects/{project_id}")
     spec = project.get("scenes")
@@ -122,6 +127,16 @@ def update_7131(
         raise RuntimeError(f"{project_id} has no saved scenes")
 
     upload_files(base, project_id, "images", source_paths)
+    if mandarin_font:
+        upload_files(base, project_id, "logo", [mandarin_font])
+        state.setdefault("renderOptions", {})["titleStyle"] = {
+            "fontFile": f"input/logo/{mandarin_font.name}",
+            "fontSize": 58,
+            "fill": "#ffffff",
+            "outline": "#000000",
+            "position": "top-center",
+        }
+        state.setdefault("pipeline", {})["mandarinTitleFont"] = "CJK verified"
     spec["scenes"] = merge_update_scenes(spec["scenes"], additions)
     request_json("PUT", f"{base}/v1/projects/{project_id}/scenes", json=spec)
 
@@ -174,7 +189,7 @@ def build_new_state(
         "LeCrown Properties",
         "Jie Huang, Broker" if variant["language"] == "en-US" else "经纪人 Jie Huang",
     ]
-    return {
+    state = {
         "schemaVersion": 1,
         "kind": "real-estate-video-project",
         "title": listing["listing"],
@@ -235,6 +250,18 @@ def build_new_state(
             "scope": "Suite 700 and seventh-floor offering only",
         },
     }
+    if variant["language"] == "zh-CN":
+        state["renderOptions"] = {
+            "titleStyle": {
+                "fontFile": "input/logo/Arial-Unicode.ttf",
+                "fontSize": 58,
+                "fill": "#ffffff",
+                "outline": "#000000",
+                "position": "top-center",
+            }
+        }
+        state["pipeline"]["mandarinTitleFont"] = "CJK verified"
+    return state
 
 
 def create_9800(
@@ -244,6 +271,7 @@ def create_9800(
     photo_root: Path,
     brand_root: Path,
     voice_source: dict[str, Any],
+    mandarin_font: Optional[Path] = None,
 ) -> tuple[str, str]:
     project_id = listing["projectIds"][language_key]
     variant = listing["variants"][language_key]
@@ -252,8 +280,14 @@ def create_9800(
     upload_files(base, project_id, "images", photo_paths)
     upload_files(base, project_id, "logo", [brand_root / "logo" / "lecrown-compliant-contact-badge.png"])
     upload_files(base, project_id, "leader", [brand_root / "leader" / "leader.png"])
+    if mandarin_font:
+        upload_files(base, project_id, "logo", [mandarin_font])
 
     state = build_new_state(project_id, listing, variant, voice_source, selected)
+    if mandarin_font:
+        state["renderOptions"]["titleStyle"]["fontFile"] = (
+            f"input/logo/{mandarin_font.name}"
+        )
     spec = {
         "info": {
             "name": listing["listing"],
@@ -313,10 +347,17 @@ def main() -> None:
     parser.add_argument("--base-url", default="http://fortress-sextant.lan:8082")
     parser.add_argument("--asset-root", type=Path, required=True)
     parser.add_argument("--download-dir", type=Path, required=True)
+    parser.add_argument(
+        "--mandarin-font",
+        type=Path,
+        default=Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+    )
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     update, new_listing = manifest["projects"]
+    if not args.mandarin_font.is_file():
+        raise FileNotFoundError(f"Mandarin font not found: {args.mandarin_font}")
 
     request_json("GET", f"{base}/healthz")
     english_project = request_json("GET", f"{base}/v1/projects/{update['projectIds']['english']}")
@@ -347,6 +388,7 @@ def main() -> None:
                 update["projectIds"][language_key],
                 update["appendBeforeCallToAction"][language_key],
                 source_paths,
+                args.mandarin_font if language_key == "mandarin" else None,
             )
         )
     for language_key in ("english", "mandarin"):
@@ -358,6 +400,7 @@ def main() -> None:
                 args.asset_root / "9800-mls",
                 args.asset_root / "7131-source",
                 voice_sources[language_key],
+                args.mandarin_font if language_key == "mandarin" else None,
             )
         )
     for project_id, output_name in completed:
