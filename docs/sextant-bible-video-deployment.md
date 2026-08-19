@@ -120,3 +120,9 @@ Validated on 2026-08-10 from commit `d7cd292`:
   video was uploaded. The upload-only scope does not permit a read-only channel
   identity lookup, so the UI's explicit final publishing review remains the
   channel confirmation gate.
+
+MediaStudio now requests both `youtube.upload` and `youtube.force-ssl` so a
+reviewed operator can update the title, description, tags, and visibility of an
+existing uploaded video without uploading a duplicate. Tokens created before
+this capability was added remain upload-only until the operator reconnects the
+selected English or Mandarin channel and approves the additional access.

@@ -9,6 +9,10 @@ from app import youtube_upload
 
 
 class YouTubeProfileTests(unittest.TestCase):
+    def test_oauth_requests_upload_and_metadata_scopes(self):
+        self.assertIn("https://www.googleapis.com/auth/youtube.upload", youtube_upload.SCOPES)
+        self.assertIn("https://www.googleapis.com/auth/youtube.force-ssl", youtube_upload.SCOPES)
+
     def test_mandarin_uses_a_separate_token_file(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
             os.environ,

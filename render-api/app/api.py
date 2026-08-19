@@ -1463,6 +1463,16 @@ async def youtube_metadata(
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
+        message = str(exc)
+        if "insufficient authentication scopes" in message.lower() or "insufficientpermissions" in message.lower():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This YouTube connection has upload-only permission. "
+                    "Click Connect YouTube for the selected channel, approve the requested access, "
+                    "and then click Update YouTube details again."
+                ),
+            ) from exc
         raise HTTPException(status_code=502, detail=f"YouTube metadata update failed: {exc}") from exc
 
     url = f"https://youtu.be/{video_id}"
