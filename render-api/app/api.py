@@ -841,6 +841,7 @@ def _youtube_description_prompt(req: YouTubeDescriptionRequest) -> str:
         "Use only facts explicitly supported by the supplied text. Omit a detail when the source does not provide it.\n"
         "Do not invent prices, amenities, transit claims, phone numbers, URLs, email addresses, MLS IDs, or broker names.\n"
         "Do not add placeholders, contact fields, disclaimers, notes, or bracketed instructions.\n"
+        "Do not report the description's word count or character count.\n"
         "Do not use markdown headings, hashtags, emoji, or bullet lists unless the source text explicitly requires them.\n"
         f"{length_instruction}"
         "Return only the description text.\n\n"
@@ -864,13 +865,22 @@ def _youtube_description_is_complete(description: str, source_text: str) -> bool
     return len(description.split()) >= 80
 
 
+def _clean_youtube_description(description: str) -> str:
+    description = EMOJI_PATTERN.sub("", description).strip()
+    return re.sub(
+        r"\n+\s*[（(]\s*\d+\s*(?:characters?|chars?|words?|字|个字)\s*[）)]\s*$",
+        "",
+        description,
+        flags=re.IGNORECASE,
+    ).strip()
+
+
 def _generate_youtube_description(req: YouTubeDescriptionRequest) -> str:
     prompt = _youtube_description_prompt(req)
     source_text = f"{req.title} {req.script} {req.currentDescription}".strip()
-    description = EMOJI_PATTERN.sub(
-        "",
-        _ollama_generate(prompt, temperature=0.45, num_predict=512),
-    ).strip()
+    description = _clean_youtube_description(
+        _ollama_generate(prompt, temperature=0.45, num_predict=512)
+    )
     if _youtube_description_is_complete(description, source_text):
         return description
 
@@ -879,10 +889,9 @@ def _generate_youtube_description(req: YouTubeDescriptionRequest) -> str:
         "The previous response was incomplete. Write the complete description now, "
         "following every instruction above and ending with the call to action."
     )
-    description = EMOJI_PATTERN.sub(
-        "",
-        _ollama_generate(retry_prompt, temperature=0.35, num_predict=512),
-    ).strip()
+    description = _clean_youtube_description(
+        _ollama_generate(retry_prompt, temperature=0.35, num_predict=512)
+    )
     if not _youtube_description_is_complete(description, source_text):
         raise HTTPException(
             status_code=502,
