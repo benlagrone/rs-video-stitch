@@ -285,9 +285,24 @@ class RendererTTSTest(TestCase):
             self.assertTrue(result.exists())
             self.assertEqual(len(flite_outputs), 1)
 
-    def test_intro_title_preserves_three_explicit_lines(self):
+    def test_intro_title_preserves_up_to_five_explicit_lines(self):
         wrapped = renderer._wrap_intro_title("Line One\nLine Two\nLine Three\nLine Four")
-        self.assertEqual(wrapped, "Line One\nLine Two\nLine Three")
+        self.assertEqual(wrapped, "Line One\nLine Two\nLine Three\nLine Four")
+
+    def test_intro_title_rewraps_long_explicit_line_without_dropping_other_rows(self):
+        wrapped = renderer._wrap_intro_title(
+            "9800 Richmond Ave — Suite 700\nLeCrown Properties\nJie Huang, Broker"
+        )
+
+        self.assertEqual(
+            wrapped,
+            "9800 Richmond Ave —\nSuite 700\nLeCrown Properties\nJie Huang, Broker",
+        )
+
+    def test_intro_title_counts_cjk_glyphs_as_wide_characters(self):
+        wrapped = renderer._wrap_intro_title("休斯顿灵活办公空间欢迎参观", max_line_chars=12)
+
+        self.assertEqual(wrapped, "休斯顿灵活办\n公空间欢迎参\n观")
 
     def test_intro_title_draws_each_line_centered(self):
         with tempfile.TemporaryDirectory() as tmp:

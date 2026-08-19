@@ -6,6 +6,7 @@ import os
 import subprocess
 import textwrap
 import time
+import unicodedata
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -670,26 +671,57 @@ def _overlay_logo_on_video(
     )
 
 
-def _wrap_intro_title(title: str, max_line_chars: int = 26) -> str:
-    explicit_lines = [line.strip() for line in title.splitlines() if line.strip()]
-    if explicit_lines:
-        return "\n".join(explicit_lines[:3])
+def _intro_text_width(value: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1 for char in value)
 
-    words = title.strip().split()
+
+def _split_intro_token(token: str, max_line_width: int) -> List[str]:
+    chunks: List[str] = []
+    current = ""
+    for char in token:
+        if current and _intro_text_width(current + char) > max_line_width:
+            chunks.append(current)
+            current = char
+        else:
+            current += char
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _wrap_intro_line(line: str, max_line_width: int) -> List[str]:
+    words = line.strip().split()
     if not words:
-        return ""
+        return []
+
     lines: List[str] = []
     current = ""
     for word in words:
+        if _intro_text_width(word) > max_line_width:
+            if current:
+                lines.append(current)
+                current = ""
+            chunks = _split_intro_token(word, max_line_width)
+            lines.extend(chunks[:-1])
+            current = chunks[-1]
+            continue
+
         proposed = f"{current} {word}".strip()
-        if current and len(proposed) > max_line_chars:
+        if current and _intro_text_width(proposed) > max_line_width:
             lines.append(current)
             current = word
         else:
             current = proposed
     if current:
         lines.append(current)
-    return "\n".join(lines[:3])
+    return lines
+
+
+def _wrap_intro_title(title: str, max_line_chars: int = 22, max_lines: int = 5) -> str:
+    lines: List[str] = []
+    for explicit_line in title.splitlines() or [title]:
+        lines.extend(_wrap_intro_line(explicit_line, max_line_chars))
+    return "\n".join(lines[:max_lines])
 
 
 def _intro_title_drawtext_filter(
