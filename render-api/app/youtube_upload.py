@@ -142,7 +142,10 @@ def _credentials_from_token_file(token_file: Path) -> Optional[Any]:
     if not token_file.exists():
         return None
     google = _google_modules()
-    credentials = google["Credentials"].from_authorized_user_file(str(token_file), SCOPES)
+    # Preserve the scopes already granted to older tokens. Passing the newly
+    # expanded scope list here makes Google reject refreshes with invalid_scope;
+    # the expanded list belongs on new consent flows, not legacy token loads.
+    credentials = google["Credentials"].from_authorized_user_file(str(token_file))
     if credentials.expired and credentials.refresh_token:
         credentials.refresh(google["GoogleAuthRequest"]())
         _save_credentials(token_file, credentials)

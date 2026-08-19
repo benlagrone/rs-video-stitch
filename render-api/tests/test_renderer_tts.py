@@ -339,6 +339,41 @@ class RendererTTSTest(TestCase):
         self.assertNotIn("leader.png", " ".join(intro_command))
         self.assertNotIn("[leader]", intro_command[intro_command.index("-filter_complex") + 1])
 
+    def test_thumbnail_samples_the_rendered_intro_video(self):
+        commands = []
+
+        def fake_run(command, log=None):
+            commands.append(command)
+            output = Path(command[-1])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"generated")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(renderer, "run", side_effect=fake_run):
+            root = Path(tmp)
+            background = root / "background.jpg"
+            leader = root / "leader.png"
+            background.write_bytes(b"image")
+            leader.write_bytes(b"leader")
+            renderer._create_intro_card_assets(
+                background_image=background,
+                leader_template=leader,
+                title="休斯顿办公空间",
+                work_dir=root / "work",
+                output_dir=root / "output",
+                fps=30,
+                duration=4.0,
+                title_font_path=root / "font.ttf",
+                preset="medium",
+                crf="18",
+                log=None,
+                thumbnail_enabled=True,
+            )
+
+        thumbnail_command = commands[-1]
+        thumbnail_input = thumbnail_command[thumbnail_command.index("-i") + 1]
+        self.assertTrue(thumbnail_input.endswith("intro.mp4"))
+        self.assertNotIn("intro-card.png", thumbnail_command)
+
     def test_default_image_durations_match_narration_length(self):
         durations = renderer._default_image_durations(
             scene={},

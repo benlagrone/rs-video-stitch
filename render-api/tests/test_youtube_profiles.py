@@ -29,6 +29,23 @@ class YouTubeProfileTests(unittest.TestCase):
         self.assertTrue(status["authenticated"])
         self.assertFalse(status["metadataAuthorized"])
 
+    def test_existing_token_load_preserves_its_granted_scopes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token_path = Path(temp_dir) / "youtube_token.json"
+            token_path.write_text("{}", encoding="utf-8")
+            credentials_class = MagicMock()
+            credentials = MagicMock(expired=False)
+            credentials_class.from_authorized_user_file.return_value = credentials
+            with patch.object(
+                youtube_upload,
+                "_google_modules",
+                return_value={"Credentials": credentials_class},
+            ):
+                result = youtube_upload._credentials_from_token_file(token_path)
+
+        self.assertIs(result, credentials)
+        credentials_class.from_authorized_user_file.assert_called_once_with(str(token_path))
+
     def test_mandarin_uses_a_separate_token_file(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
             os.environ,
