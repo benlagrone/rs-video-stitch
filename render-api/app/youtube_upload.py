@@ -149,6 +149,18 @@ def _credentials_from_token_file(token_file: Path) -> Optional[Any]:
     return credentials
 
 
+def _token_granted_scopes(profile: str = DEFAULT_PROFILE) -> set[str]:
+    token_file = _token_file_path(profile)
+    if not token_file.exists():
+        return set()
+    try:
+        payload = json.loads(token_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    scopes = payload.get("scopes") or []
+    return {str(scope) for scope in scopes}
+
+
 def authenticate_youtube(profile: str = DEFAULT_PROFILE):
     profile = normalize_youtube_profile(profile)
     token_file = _token_file_path(profile)
@@ -284,6 +296,7 @@ def youtube_auth_status(profile: str = DEFAULT_PROFILE) -> dict:
             "label": YOUTUBE_PROFILES[profile],
             "configured": configured,
             "authenticated": bool(credentials),
+            "metadataAuthorized": "https://www.googleapis.com/auth/youtube.force-ssl" in _token_granted_scopes(profile),
             "redirectUri": redirect_uri,
             "serverCallbackUri": youtube_redirect_uri(),
             "manualCallback": manual_callback,
@@ -294,6 +307,7 @@ def youtube_auth_status(profile: str = DEFAULT_PROFILE) -> dict:
             "label": YOUTUBE_PROFILES[profile],
             "configured": configured,
             "authenticated": False,
+            "metadataAuthorized": False,
             "redirectUri": redirect_uri,
             "serverCallbackUri": youtube_redirect_uri(),
             "manualCallback": manual_callback,
