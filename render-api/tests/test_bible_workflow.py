@@ -271,6 +271,8 @@ class BibleWorkflowTest(TestCase):
 
         self.assertIn("Scene 1 — Genesis 1:1", prompt)
         self.assertIn("Light travels across the same dark water", prompt)
+        self.assertNotIn("Locked God character design", prompt)
+        self.assertEqual(session.post.call_args.kwargs["json"]["model"], bible_workflow.OLLAMA_PROMPT_MODEL)
         writer_input = session.post.call_args.kwargs["json"]["prompt"]
         self.assertIn("Light travels across the water", writer_input)
         self.assertIn("Slow forward push", writer_input)
@@ -374,7 +376,7 @@ class BibleWorkflowTest(TestCase):
         saved_document = json.loads(save_scenes.call_args.args[1])
         self.assertEqual(saved_document["scenes"][0]["timeline"][0]["video"], "scene_001.mp4")
         self.assertTrue(saved_document["scenes"][0]["motionPrompt"].startswith("Light expands across the water."))
-        self.assertIn("Locked God character design", saved_document["scenes"][0]["motionPrompt"])
+        self.assertNotIn("Locked God character design", saved_document["scenes"][0]["motionPrompt"])
         motion_prompt = generate_motion.call_args.kwargs["prompt"]
         self.assertIn("Locked God character design", motion_prompt)
         self.assertIn("young man representing God", generate_motion.call_args.kwargs["negative_prompt"])

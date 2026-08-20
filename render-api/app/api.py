@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.db import SessionLocal, init_db
 from app.models import Job, Project
@@ -316,7 +317,7 @@ async def create_bible_video(req: BibleVideoRequest, db: Session = Depends(get_d
 )
 async def scene_animation_prompt(pid: str, scene_index: int) -> SceneAnimationPromptResponse:
     try:
-        prompt = generate_scene_animation_prompt(pid, scene_index)
+        prompt = await run_in_threadpool(generate_scene_animation_prompt, pid, scene_index)
     except (FileNotFoundError, IndexError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

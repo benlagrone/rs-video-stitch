@@ -31,6 +31,7 @@ MEDIASTUDIO_RUNTIME_HOST = os.getenv("MEDIASTUDIO_RUNTIME_HOST", "")
 SEXTANT_ORCHESTRATOR_URL = os.getenv("SEXTANT_ORCHESTRATOR_URL", "")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://fortress.lan:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mixtral:latest")
+OLLAMA_PROMPT_MODEL = os.getenv("OLLAMA_PROMPT_MODEL", "mistral:latest")
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
 BIBLE_CHANNEL_NAME = os.getenv("BIBLE_CHANNEL_NAME", "Animal Safari Kids")
 BIBLE_CHANNEL_ID = os.getenv("BIBLE_CHANNEL_ID", "UCU1T3KZjLceczyfHr2aqpeQ")
@@ -232,7 +233,6 @@ def _motion_prompt(scene: dict[str, Any], visual_style: str) -> str:
         f"The visible action is: {scene['action']}. End exactly with: {scene['endState']}. "
         f"Camera movement: {scene['camera']}. Preserve throughout: {scene['continuity']}. "
         f"Connection to the next shot: {scene['transition']}. {style['prompt']}. "
-        f"Locked God character design: {GOD_CHARACTER_ANCHOR} "
         "Natural body mechanics, purposeful movement throughout the shot, coherent lighting, no cuts."
     )
 
@@ -319,7 +319,8 @@ def _scene_animation_writer_prompt(
         "with purposeful subject movement, a specific camera move, and an ending state that can flow into the next scene. "
         "Preserve faces, bodies, garments, architecture, palette, composition, and light direction. Do not add new people "
         "or objects, cut to another shot, morph anatomy, or render text. Use 70 to 120 words in one paragraph. Return only "
-        "the animation prompt, without a heading, quotation marks, analysis, or the scripture text verbatim.\n\n"
+        "the animation prompt, without a heading, quotation marks, analysis, the scripture text verbatim, or the locked "
+        "character-policy wording. Apply the character policy silently instead of repeating it.\n\n"
         f"Passage: {value(document.get('info') or {}, 'passage') or value(document.get('info') or {}, 'name')}\n"
         f"Current scene: {scene_index} of {len(scenes)}\n"
         f"Reference: {value(scene, 'title')}\n"
@@ -346,10 +347,10 @@ def generate_scene_animation_prompt(project_id: str, scene_index: int, *, sessio
     response = session.post(
         f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
         json={
-            "model": OLLAMA_MODEL,
+            "model": OLLAMA_PROMPT_MODEL,
             "prompt": _scene_animation_writer_prompt(document, scene, scene_index, visual_style),
             "stream": False,
-            "options": {"temperature": 0.55, "num_predict": 220},
+            "options": {"temperature": 0.35, "num_predict": 160},
         },
         timeout=OLLAMA_TIMEOUT_SECONDS,
     )
@@ -365,10 +366,7 @@ def generate_scene_animation_prompt(project_id: str, scene_index: int, *, sessio
     if not generated:
         raise RuntimeError("Fortress animation prompt writer returned an empty response")
     title = re.sub(r"\s+", " ", str(scene.get("title") or f"Scene {scene_index}")).strip()
-    result = f"Scene {scene_index} — {title}. {generated}"
-    if GOD_CHARACTER_ANCHOR not in result:
-        result = f"{result} Locked God character design: {GOD_CHARACTER_ANCHOR}"
-    return result
+    return f"Scene {scene_index} — {title}. {generated}"
 
 
 def animate_bible_scene(
@@ -385,15 +383,16 @@ def animate_bible_scene(
         progress("WRITING_MOTION_PROMPT", 0.12)
         log(f"Generating a continuity-safe animation prompt for scene {scene_index}")
         resolved_prompt = generate_scene_animation_prompt(project_id, scene_index)
-    if GOD_CHARACTER_ANCHOR not in resolved_prompt:
-        resolved_prompt = f"{resolved_prompt} Locked God character design: {GOD_CHARACTER_ANCHOR}"
+    provider_prompt = resolved_prompt
+    if GOD_CHARACTER_ANCHOR not in provider_prompt:
+        provider_prompt = f"{provider_prompt} Locked God character design: {GOD_CHARACTER_ANCHOR}"
 
     progress("MOTION_GENERATION", 0.25)
     log(f"Animating scene {scene_index} from {still_path.name}")
     generate_motion_clip(
         still_path,
         clip_path,
-        prompt=resolved_prompt,
+        prompt=provider_prompt,
         negative_prompt=(
             "static tableau, frozen pose, slideshow, no movement, scene cut, jump cut, jitter, flicker, "
             f"face morph, anatomy distortion, identity change, clothing change, text, watermark, {GOD_CHARACTER_NEGATIVE}"
@@ -632,7 +631,7 @@ def prepare_bible_project(
             generate_motion_clip(
                 still_path,
                 clip_path,
-                prompt=scene["motionPrompt"],
+                prompt=f"{scene['motionPrompt']} Locked God character design: {GOD_CHARACTER_ANCHOR}",
                 negative_prompt=(
                     "static tableau, frozen pose, slideshow, no movement, scene cut, jump cut, jitter, flicker, "
                     f"face morph, anatomy distortion, identity change, clothing change, text, watermark, {GOD_CHARACTER_NEGATIVE}"
