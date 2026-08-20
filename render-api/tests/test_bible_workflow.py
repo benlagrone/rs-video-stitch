@@ -734,7 +734,11 @@ class BibleWorkflowTest(TestCase):
                 motion_provider, "_stabilize_locked_camera", return_value={"p95TranslationPixels": 2.0}
             ) as stabilize, mock.patch.object(
                 motion_provider, "_measure_source_frame_fidelity", return_value=0.88
-            ) as fidelity, mock.patch.object(motion_provider, "_verify_video") as verify, mock.patch.object(
+            ) as fidelity, mock.patch.object(
+                motion_provider,
+                "_measure_sequence_integrity",
+                return_value={"sampleCount": 81, "maxSaturationJump": 0.8, "maxLumaFrameDifference": 3.0},
+            ) as integrity, mock.patch.object(motion_provider, "_verify_video") as verify, mock.patch.object(
                 motion_provider, "_protect_decorative_frame"
             ) as protect_frame:
                 quality = motion_provider.generate_motion_clip(
@@ -751,6 +755,7 @@ class BibleWorkflowTest(TestCase):
             protect_frame.assert_called_once()
             stabilize.assert_called_once_with(destination)
             fidelity.assert_called_once()
+            integrity.assert_called_once_with(destination)
             self.assertEqual(quality["sourceSizing"], "fit-and-pad-no-crop")
             self.assertEqual(quality["sourceFrameSsim"], 0.88)
 
@@ -821,6 +826,34 @@ class BibleWorkflowTest(TestCase):
             preserved_video = video.read_bytes()
 
         self.assertEqual(preserved_video, b"raw-motion")
+
+    def test_sequence_gate_rejects_sudden_color_block_corruption(self):
+        log = "\n".join(
+            [
+                "frame:0 pts:0 pts_time:0",
+                "lavfi.signalstats.SATAVG=11.0",
+                "lavfi.signalstats.YDIF=0.0",
+                "frame:1 pts:1 pts_time:0.0625",
+                "lavfi.signalstats.SATAVG=11.4",
+                "lavfi.signalstats.YDIF=2.0",
+                "frame:2 pts:2 pts_time:0.125",
+                "lavfi.signalstats.SATAVG=17.0",
+                "lavfi.signalstats.YDIF=10.7",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "scene.mp4"
+            video.write_bytes(b"motion")
+
+            def create_stats(command, **_kwargs):
+                filter_value = command[command.index("-vf") + 1]
+                stats_path = Path(filter_value.split("file=", 1)[1])
+                stats_path.write_text(log, encoding="utf-8")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_stats):
+                with self.assertRaisesRegex(motion_provider.MotionProviderError, "color-block"):
+                    motion_provider._measure_sequence_integrity(video)
 
     def test_decorative_frame_protection_restores_source_border(self):
         with tempfile.TemporaryDirectory() as tmp:

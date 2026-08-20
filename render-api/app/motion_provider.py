@@ -27,6 +27,8 @@ FRAME_PROTECTION_FEATHER = 4
 LOCKED_CAMERA_P95_TRANSLATION_LIMIT = float(os.getenv("LOCKED_CAMERA_P95_TRANSLATION_LIMIT", "12"))
 LOCKED_CAMERA_LARGE_CORRECTION_RATIO = float(os.getenv("LOCKED_CAMERA_LARGE_CORRECTION_RATIO", "0.20"))
 SOURCE_FRAME_MIN_SSIM = float(os.getenv("SOURCE_FRAME_MIN_SSIM", "0.28"))
+SEQUENCE_SATURATION_JUMP_LIMIT = float(os.getenv("SEQUENCE_SATURATION_JUMP_LIMIT", "4.0"))
+SEQUENCE_LUMA_JUMP_LIMIT = float(os.getenv("SEQUENCE_LUMA_JUMP_LIMIT", "8.0"))
 
 
 class MotionProviderError(RuntimeError):
@@ -281,6 +283,59 @@ def _measure_source_frame_fidelity(image_path: Path, video_path: Path) -> float:
         stats_path.unlink(missing_ok=True)
 
 
+def _measure_sequence_integrity(video_path: Path) -> dict[str, float | int]:
+    stats_path = video_path.with_name(f"{video_path.stem}.signalstats.log")
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(video_path),
+        "-vf", f"signalstats,metadata=print:file={stats_path}", "-f", "null", "-",
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        rows: list[dict[str, float]] = []
+        current: dict[str, float] = {}
+        for line in stats_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("frame:"):
+                if current:
+                    rows.append(current)
+                current = {}
+            elif line.startswith("lavfi.signalstats.") and "=" in line:
+                key, raw_value = line.split("=", 1)
+                try:
+                    current[key.rsplit(".", 1)[-1]] = float(raw_value)
+                except ValueError:
+                    continue
+        if current:
+            rows.append(current)
+        if len(rows) < 2:
+            raise MotionProviderError("Unable to measure animation sequence integrity")
+        saturation_jumps = [
+            abs(rows[index].get("SATAVG", 0.0) - rows[index - 1].get("SATAVG", 0.0))
+            for index in range(1, len(rows))
+        ]
+        jump_index = max(range(len(saturation_jumps)), key=saturation_jumps.__getitem__) + 1
+        max_saturation_jump = saturation_jumps[jump_index - 1]
+        luma_at_saturation_jump = rows[jump_index].get("YDIF", 0.0)
+        metrics = {
+            "sampleCount": len(rows),
+            "maxSaturationJump": round(max_saturation_jump, 4),
+            "lumaDifferenceAtSaturationJump": round(luma_at_saturation_jump, 4),
+            "maxLumaFrameDifference": round(max(row.get("YDIF", 0.0) for row in rows), 4),
+        }
+        if (
+            max_saturation_jump > SEQUENCE_SATURATION_JUMP_LIMIT
+            and luma_at_saturation_jump > SEQUENCE_LUMA_JUMP_LIMIT
+        ):
+            raise MotionProviderError(
+                "Animation rejected for sudden color-block or scene-corruption artifacts: "
+                f"saturation jump {max_saturation_jump:.2f}, luma difference {luma_at_saturation_jump:.2f}"
+            )
+        return metrics
+    except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
+        raise MotionProviderError(f"Unable to validate animation sequence integrity: {exc}") from exc
+    finally:
+        stats_path.unlink(missing_ok=True)
+
+
 def _protect_decorative_frame(image_path: Path, video_path: Path) -> None:
     protected_path = video_path.with_name(f"{video_path.stem}.frame-protected{video_path.suffix}")
     inner_width = FRAME_PROTECTION_WIDTH - (FRAME_PROTECTION_X * 2)
@@ -356,6 +411,7 @@ def generate_motion_clip(
         if camera_behavior == "locked":
             quality["stabilization"] = _stabilize_locked_camera(destination)
         quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
+        quality["sequenceIntegrity"] = _measure_sequence_integrity(destination)
         if protect_style_frame:
             _protect_decorative_frame(prepared_source, destination)
             quality["decorativeFrameProtected"] = True
