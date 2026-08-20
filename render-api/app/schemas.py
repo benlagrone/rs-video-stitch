@@ -237,7 +237,7 @@ class YouTubeUploadRequest(BaseModel):
     categoryId: str = Field(default="22")
     privacyStatus: str = Field(default="private")
     madeForKids: bool = Field(default=False)
-    profile: Literal["english", "mandarin"] = Field(default="english")
+    profile: Literal["english", "mandarin", "bible"] = Field(default="english")
 
 
 class YouTubeUploadResponse(BaseModel):
@@ -256,7 +256,7 @@ class YouTubeMetadataRequest(BaseModel):
     categoryId: str = Field(default="22")
     privacyStatus: str = Field(default="private")
     madeForKids: bool = Field(default=False)
-    profile: Literal["english", "mandarin"] = Field(default="english")
+    profile: Literal["english", "mandarin", "bible"] = Field(default="english")
 
 
 class YouTubeMetadataResponse(BaseModel):
@@ -268,7 +268,7 @@ class YouTubeMetadataResponse(BaseModel):
 class YouTubeThumbnailRequest(BaseModel):
     videoId: str = ""
     filename: str = Field(default="thumbnail.jpg")
-    profile: Literal["english", "mandarin"] = Field(default="english")
+    profile: Literal["english", "mandarin", "bible"] = Field(default="english")
 
 
 class YouTubeThumbnailResponse(BaseModel):

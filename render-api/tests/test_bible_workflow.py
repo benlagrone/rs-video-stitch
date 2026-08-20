@@ -175,7 +175,7 @@ class BibleWorkflowTest(TestCase):
             bible_workflow, "p_input", return_value=Path(tmp) / "input"
         ), mock.patch.object(bible_workflow, "save_scenes"), mock.patch.object(
             bible_workflow, "save_project_state"
-        ), mock.patch.object(bible_workflow, "_generate_still") as generate_still, mock.patch.object(
+        ) as save_project_state, mock.patch.object(bible_workflow, "_generate_still") as generate_still, mock.patch.object(
             bible_workflow, "generate_motion_clip"
         ) as generate_motion, mock.patch.object(bible_workflow, "extract_last_frame") as extract:
             bible_workflow.prepare_bible_project("bible-test", payload, progress=mock.Mock(), log=mock.Mock())
@@ -194,6 +194,7 @@ class BibleWorkflowTest(TestCase):
         self.assertTrue(payload["renderOptions"]["scriptureCaptionEnabled"])
         self.assertEqual(payload["renderOptions"]["titleStyle"]["fontFamily"], "EB Garamond")
         self.assertEqual(payload["renderOptions"]["titleStyle"]["position"], "bottom-left")
+        self.assertEqual(save_project_state.call_args.args[1]["youtubeProfile"], "bible")
         extract.assert_called_once_with(first_clip, second_image)
         self.assertEqual(generate_motion.call_count, 2)
         self.assertEqual(generate_motion.call_args_list[1].args[0], second_image)

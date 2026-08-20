@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { BibleStudio } from './BibleStudio.jsx';
+import { YouTubeChannelSelector } from './YouTubeChannelSelector.jsx';
 
 const DEFAULT_RENDER_OPTIONS = {
   fps: 30,
@@ -326,6 +327,7 @@ export function App() {
   const [youtubeTags, setYoutubeTags] = useState('');
   const [youtubePrivacy, setYoutubePrivacy] = useState('private');
   const [youtubeProfile, setYoutubeProfile] = useState('english');
+  const [youtubeChannels, setYoutubeChannels] = useState([]);
   const [youtubeResult, setYoutubeResult] = useState('');
   const [youtubeVideoId, setYoutubeVideoId] = useState('');
   const [youtubeThumbnailApplied, setYoutubeThumbnailApplied] = useState(false);
@@ -479,6 +481,11 @@ export function App() {
   useEffect(() => {
     refreshYoutubeAuth().catch(() => {});
   }, [apiBase, authToken, youtubeProfile]);
+  useEffect(() => {
+    request('/v1/youtube/channels')
+      .then((result) => setYoutubeChannels(result.channels || []))
+      .catch(() => setYoutubeChannels([]));
+  }, [apiBase, authToken]);
   useEffect(() => {
     const previews = images.map((image) => ({
       name: image.name,
@@ -1022,6 +1029,8 @@ export function App() {
           const statusResult = await request(`/v1/youtube/auth/status?profile=${encodeURIComponent(youtubeProfile)}`);
           setYoutubeAuth(statusResult);
           if (statusResult.authenticated) {
+            const catalog = await request('/v1/youtube/channels?force=true');
+            setYoutubeChannels(catalog.channels || []);
             setStatus('YouTube connected');
             return;
           }
@@ -1820,7 +1829,7 @@ export function App() {
                   <button type="button" onClick={refreshYoutubeAuth}>Check auth</button>
                 </div>
                 <p>{youtubeAuth?.authenticated ? 'Connected on server' : 'Not connected on server'}</p>
-                <label>Publishing channel<select value={youtubeProfile} onChange={(event) => setYoutubeProfile(event.target.value)}><option value="english">English channel</option><option value="mandarin">Mandarin channel</option></select></label>
+                <YouTubeChannelSelector channels={youtubeChannels} value={youtubeProfile} onChange={setYoutubeProfile} disabled={isConnectingYoutube || isUploadingYoutube} />
                 <div className="youtube-actions">
                   <button type="button" onClick={connectYoutube} disabled={isConnectingYoutube}>
                     {isConnectingYoutube ? 'Connecting' : 'Connect YouTube'}

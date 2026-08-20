@@ -74,6 +74,7 @@ from app.youtube_upload import (
     upload_video_to_youtube,
     youtube_auth_status,
     youtube_authorization_url,
+    youtube_channel_catalog,
 )
 from app.bible_workflow import (
     BIBLE_CAPTION_STYLE,
@@ -529,6 +530,11 @@ async def youtube_status(profile: str = "english") -> dict:
         return youtube_auth_status(profile)
     except YouTubeUploadConfigurationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/v1/youtube/channels")
+async def youtube_channels(force: bool = False) -> dict:
+    return {"channels": await run_in_threadpool(lambda: youtube_channel_catalog(force=force))}
 
 
 @app.post("/v1/youtube/auth/start")
@@ -1359,6 +1365,7 @@ async def youtube_upload(
         "thumbnailError": None,
     }
     state["youtubeUpload"] = upload_state
+    state["youtubeProfile"] = req.profile
     state["updatedAt"] = time.time()
     save_project_state(pid, state, project_name=str(state.get("title") or pid))
 

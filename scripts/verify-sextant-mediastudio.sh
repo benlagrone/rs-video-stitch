@@ -58,4 +58,27 @@ if not status.get("authenticated"):
     raise SystemExit("Sextant MediaStudio YouTube upload authorization is not active")
 ' "$youtube"
 
+youtube_channels=$(curl --fail --silent --show-error "$base_url/v1/youtube/channels?force=true")
+python3 -c '
+import json, sys
+channels = {item.get("profile"): item for item in json.loads(sys.argv[1]).get("channels", [])}
+expected = {
+    "english": "LeCrown Properties",
+    "mandarin": "皇冠物业",
+    "bible": "Animal Safari Kids",
+}
+missing = sorted(set(expected) - set(channels))
+if missing:
+    raise SystemExit("Missing YouTube publishing profiles: " + ", ".join(missing))
+for profile, name in expected.items():
+    channel = channels[profile]
+    if channel.get("channelName") != name:
+        raise SystemExit("Unexpected %s YouTube channel: %s" % (profile, channel.get("channelName")))
+    if not channel.get("iconUrl"):
+        raise SystemExit(f"Missing {profile} YouTube channel icon")
+for profile in ("english", "mandarin"):
+    if channels[profile].get("matchesExpectedChannel") is not True:
+        raise SystemExit(f"{profile} YouTube profile is connected to the wrong account")
+' "$youtube_channels"
+
 printf 'Full MediaStudio is healthy on %s with migrated real-estate and Bible projects.\n' "$expected_host"

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { YouTubeChannelSelector } from './YouTubeChannelSelector.jsx';
 
 const FALLBACK_STYLES = [
   { id: 'cinematic-natural-light', name: 'Cinematic natural light', category: 'Sacred & historical', prompt: 'Cinematic natural light and grounded historical realism' },
@@ -50,6 +51,9 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
   const [youtubeTitle, setYoutubeTitle] = useState('');
   const [youtubeDescription, setYoutubeDescription] = useState('');
   const [youtubePrivacy, setYoutubePrivacy] = useState('private');
+  const [youtubeChannels, setYoutubeChannels] = useState([]);
+  const [youtubeProfile, setYoutubeProfile] = useState('bible');
+  const [isConnectingYoutube, setIsConnectingYoutube] = useState(false);
   const [animationPrompts, setAnimationPrompts] = useState({});
   const [animationJobs, setAnimationJobs] = useState({});
   const [writingPromptFor, setWritingPromptFor] = useState(0);
@@ -84,9 +88,14 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     setCaptionFont(state.renderOptions?.titleStyle?.fontFamily || 'EB Garamond');
     setYoutubeTitle(state.youtubeTitle || state.title || state.passage || projectId);
     setYoutubeDescription(state.youtubeDescription || `A narrated visual presentation of ${state.passage || state.title || projectId}.`);
+    setYoutubeProfile(state.youtubeProfile || state.youtubeUpload?.profile || 'bible');
     setAnimationPrompts(Object.fromEntries(loadedScenes.map((scene, index) => [index + 1, scene.motionPrompt || ''])));
     return loaded;
   }
+
+  useEffect(() => {
+    request('/v1/youtube/channels').then((result) => setYoutubeChannels(result.channels || [])).catch(() => setYoutubeChannels([]));
+  }, [effectiveApiBase, authToken]);
 
   useEffect(() => {
     request('/v1/bible/health').then(setHealth).catch(() => setHealth({ mediastudio: { ok: false } }));
@@ -221,6 +230,10 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
   const activeVoiceProvider = voiceProviders.find((provider) => (
     provider.ttsApi === ttsApi && provider.voices.includes(voice)
   ));
+  const selectedYoutubeChannel = youtubeChannels.find((channel) => channel.profile === youtubeProfile) || null;
+  const canPublishToYoutube = Boolean(
+    selectedYoutubeChannel?.authenticated && selectedYoutubeChannel?.matchesExpectedChannel !== false,
+  );
 
   function selectNarrator(event) {
     const [nextTtsApi, ...voiceParts] = event.target.value.split('::');
@@ -363,6 +376,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
           description: youtubeDescription,
           tags: ['Bible', 'Scripture', passage.split(/\s+/)[0]],
           privacyStatus: youtubePrivacy,
+          profile: youtubeProfile,
         }),
       });
       setYoutubeResult(result.url);
@@ -371,6 +385,30 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
       setError(publishError.message || String(publishError));
     } finally {
       setIsPublishing(false);
+    }
+  }
+
+  async function connectYoutube() {
+    setError('');
+    setIsConnectingYoutube(true);
+    try {
+      const result = await request(`/v1/youtube/auth/start?profile=${encodeURIComponent(youtubeProfile)}`, { method: 'POST' });
+      window.open(result.authUrl, '_blank', 'noopener,noreferrer');
+      if (!result.manualCallback) {
+        for (let attempt = 0; attempt < 60; attempt += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 2000));
+          const status = await request(`/v1/youtube/auth/status?profile=${encodeURIComponent(youtubeProfile)}`);
+          if (status.authenticated) {
+            const catalog = await request('/v1/youtube/channels?force=true');
+            setYoutubeChannels(catalog.channels || []);
+            return;
+          }
+        }
+      }
+    } catch (connectError) {
+      setError(connectError.message || String(connectError));
+    } finally {
+      setIsConnectingYoutube(false);
     }
   }
 
@@ -409,11 +447,11 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
           <section><div className="bible-section-heading"><div><h2>Video preview</h2><p>16:9 · 1080p MP4</p></div></div>{videoHref ? <video controls src={videoHref} /> : <div className="video-placeholder"><span>{progress}%</span><p>{job ? stageLabel(job.stage) : 'Waiting for a job'}</p></div>}</section>
           <section className="progress-card"><h2>Render progress</h2><progress value={job?.progress || 0} max="1" /><div><span>{stageLabel(job?.stage)}</span><strong>{progress}%</strong></div></section>
           <section className="health-card"><h2>Worker health</h2>{healthRows.map(([label, value]) => <div className="health-row" key={label}><span>{label}</span><strong className={value?.ok ? 'healthy' : 'offline'}>{value?.ok ? 'Healthy' : 'Unavailable'}</strong></div>)}</section>
-          <section className="publish-card"><h2>YouTube publishing</h2><div className="channel-brand"><img src={apiUrl(effectiveApiBase, '/media-studio/brand-assets/animal-safari-kids.png')} alt="Animal Safari Kids channel icon" /><div><strong>{project?.state?.youtubeChannelName || 'Animal Safari Kids'}</strong><span>Bible channel branding</span></div></div><label>Title<input value={youtubeTitle} onChange={(event) => setYoutubeTitle(event.target.value)} disabled={!project} /></label><label>Privacy<select value={youtubePrivacy} onChange={(event) => setYoutubePrivacy(event.target.value)} disabled={!project}><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select></label><button type="button" className="primary-action" disabled={!project || isPublishing} onClick={() => setPublishReview(true)}>Review &amp; Publish</button>{youtubeResult && <a href={youtubeResult} target="_blank" rel="noreferrer">Open published video</a>}</section>
+          <section className="publish-card"><h2>YouTube publishing</h2><YouTubeChannelSelector channels={youtubeChannels} value={youtubeProfile} onChange={setYoutubeProfile} disabled={isPublishing || isConnectingYoutube} />{selectedYoutubeChannel && !selectedYoutubeChannel.authenticated && <button type="button" className="secondary-action" onClick={connectYoutube} disabled={isConnectingYoutube}>{isConnectingYoutube ? 'Connecting…' : `Connect ${selectedYoutubeChannel.channelName}`}</button>}{selectedYoutubeChannel?.matchesExpectedChannel === false && <p className="youtube-channel-warning">This profile is connected to the wrong YouTube account. Reconnect it before publishing.</p>}<small className="youtube-branding-note">Destination selection does not replace the branding already rendered into the video.</small><label>Title<input value={youtubeTitle} onChange={(event) => setYoutubeTitle(event.target.value)} disabled={!project} /></label><label>Privacy<select value={youtubePrivacy} onChange={(event) => setYoutubePrivacy(event.target.value)} disabled={!project}><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select></label><button type="button" className="primary-action" disabled={!project || isPublishing || !canPublishToYoutube} onClick={() => setPublishReview(true)}>Review &amp; Publish</button>{youtubeResult && <a href={youtubeResult} target="_blank" rel="noreferrer">Open published video</a>}</section>
         </aside>
       </form>
 
-      {publishReview && <div className="publish-modal" role="dialog" aria-modal="true"><div><h2>Final publishing review</h2><p>This uploads <strong>{youtubeTitle}</strong> to YouTube as <strong>{youtubePrivacy}</strong>. Publishing is not automatic.</p><label>Description<textarea value={youtubeDescription} onChange={(event) => setYoutubeDescription(event.target.value)} /></label><div><button type="button" className="secondary-action" onClick={() => setPublishReview(false)}>Cancel</button><button type="button" className="primary-action" onClick={publish} disabled={isPublishing}>{isPublishing ? 'Publishing' : 'Confirm YouTube Publish'}</button></div></div></div>}
+      {publishReview && <div className="publish-modal" role="dialog" aria-modal="true"><div><h2>Final publishing review</h2>{selectedYoutubeChannel && <div className="channel-brand"><img src={selectedYoutubeChannel.iconUrl || selectedYoutubeChannel.fallbackIconUrl} alt={`${selectedYoutubeChannel.channelName} channel icon`} /><div><strong>{selectedYoutubeChannel.channelName}</strong><span>{selectedYoutubeChannel.handle || 'YouTube channel'}</span></div></div>}<p>This uploads <strong>{youtubeTitle}</strong> to <strong>{selectedYoutubeChannel?.channelName}</strong> as <strong>{youtubePrivacy}</strong>. Publishing is not automatic.</p><label>Description<textarea value={youtubeDescription} onChange={(event) => setYoutubeDescription(event.target.value)} /></label><div><button type="button" className="secondary-action" onClick={() => setPublishReview(false)}>Cancel</button><button type="button" className="primary-action" onClick={publish} disabled={isPublishing || !canPublishToYoutube}>{isPublishing ? 'Publishing' : 'Confirm YouTube Publish'}</button></div></div></div>}
     </main>
   );
 }

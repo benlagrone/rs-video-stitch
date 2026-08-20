@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import socket
+import threading
 import time
 import uuid
 import json
@@ -17,10 +18,30 @@ SCOPES = [
 DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token"
 DEFAULT_REDIRECT_URI = "http://localhost:8082/v1/youtube/auth/callback"
 DEFAULT_PROFILE = "english"
-YOUTUBE_PROFILES = {
-    "english": "English channel",
-    "mandarin": "Mandarin channel",
+YOUTUBE_CHANNEL_PROFILES = {
+    "english": {
+        "label": "LeCrown Properties",
+        "expectedChannelId": "UC_grGcaDW3AUszA8_MVGyJg",
+        "handle": "@lecrownproperties",
+        "fallbackIconUrl": "/media-studio/brand-assets/logo3.png",
+    },
+    "mandarin": {
+        "label": "皇冠物业",
+        "expectedChannelId": "UCn0cWV7cyNxzfXhUKgPcWeQ",
+        "handle": "@皇冠物业",
+        "fallbackIconUrl": "/media-studio/brand-assets/logo3.png",
+    },
+    "bible": {
+        "label": "Animal Safari Kids",
+        "expectedChannelId": "UCU1T3KZjLceczyfHr2aqpeQ",
+        "handle": "",
+        "fallbackIconUrl": "/media-studio/brand-assets/animal-safari-kids.png",
+    },
 }
+YOUTUBE_PROFILES = {profile: details["label"] for profile, details in YOUTUBE_CHANNEL_PROFILES.items()}
+_CHANNEL_CATALOG_TTL_SECONDS = 300
+_channel_catalog_cache: tuple[float, list[dict[str, Any]]] = (0.0, [])
+_channel_catalog_lock = threading.Lock()
 
 
 class YouTubeUploadConfigurationError(RuntimeError):
@@ -316,6 +337,60 @@ def youtube_auth_status(profile: str = DEFAULT_PROFILE) -> dict:
             "manualCallback": manual_callback,
             "error": str(exc),
         }
+
+
+def youtube_channel_catalog(*, force: bool = False) -> list[dict[str, Any]]:
+    """Return safe channel identities for every selectable server-side OAuth profile."""
+    global _channel_catalog_cache
+    now = time.monotonic()
+    cached_at, cached_channels = _channel_catalog_cache
+    if not force and cached_channels and now - cached_at < _CHANNEL_CATALOG_TTL_SECONDS:
+        return cached_channels
+
+    with _channel_catalog_lock:
+        cached_at, cached_channels = _channel_catalog_cache
+        if not force and cached_channels and now - cached_at < _CHANNEL_CATALOG_TTL_SECONDS:
+            return cached_channels
+
+        channels = []
+        for profile, configured_identity in YOUTUBE_CHANNEL_PROFILES.items():
+            status = youtube_auth_status(profile)
+            channel = {
+                "profile": profile,
+                "label": configured_identity["label"],
+                "channelName": configured_identity["label"],
+                "channelId": "",
+                "handle": configured_identity["handle"],
+                "iconUrl": configured_identity["fallbackIconUrl"],
+                "fallbackIconUrl": configured_identity["fallbackIconUrl"],
+                "expectedChannelId": configured_identity["expectedChannelId"],
+                "matchesExpectedChannel": None,
+                **status,
+            }
+            if status.get("authenticated") and status.get("metadataAuthorized"):
+                try:
+                    response = authenticate_youtube(profile).channels().list(part="snippet", mine=True).execute()
+                    item = (response.get("items") or [None])[0]
+                    if item:
+                        snippet = item.get("snippet") or {}
+                        thumbnails = snippet.get("thumbnails") or {}
+                        thumbnail = thumbnails.get("default") or thumbnails.get("medium") or {}
+                        channel_id = str(item.get("id") or "")
+                        channel.update(
+                            {
+                                "channelName": str(snippet.get("title") or configured_identity["label"]),
+                                "channelId": channel_id,
+                                "handle": str(snippet.get("customUrl") or configured_identity["handle"]),
+                                "iconUrl": str(thumbnail.get("url") or configured_identity["fallbackIconUrl"]),
+                                "matchesExpectedChannel": channel_id == configured_identity["expectedChannelId"],
+                            }
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    channel["identityError"] = str(exc)
+            channels.append(channel)
+
+        _channel_catalog_cache = (now, channels)
+        return channels
 
 
 def youtube_authorization_url(profile: str = DEFAULT_PROFILE) -> dict[str, Any]:

@@ -682,6 +682,7 @@ def prepare_bible_project(
             "youtubeDescription": f"A narrated visual presentation of {canonical}.",
             "youtubeTags": f"Bible, Scripture, {canonical.split()[0]}",
             "youtubePrivacy": "private",
+            "youtubeProfile": "bible",
             "youtubeChannelName": BIBLE_CHANNEL_NAME,
             "youtubeChannelId": BIBLE_CHANNEL_ID,
             "titleCardImageName": title_card_name,
