@@ -190,12 +190,16 @@ class BibleWorkflowTest(TestCase):
         session.post.return_value = _Response({"images": [base64.b64encode(b"png-data").decode("ascii")]})
         with tempfile.TemporaryDirectory() as tmp:
             destination = Path(tmp) / "scene.png"
-            bible_workflow._generate_still("a scene", destination, session=session)
+            generation = bible_workflow._generate_still("a scene", destination, session=session)
             self.assertEqual(destination.read_bytes(), b"png-data")
         payload = session.post.call_args.kwargs["json"]
         self.assertEqual((payload["width"], payload["height"]), (1024, 576))
         self.assertEqual(payload["override_settings"]["sd_model_checkpoint"], bible_workflow.STABLE_DIFFUSION_CHECKPOINT)
         self.assertTrue(payload["override_settings_restore_afterwards"])
+        self.assertEqual(generation["prompt"], "a scene")
+        self.assertEqual(generation["seed"], payload["seed"])
+        self.assertEqual(generation["model"], bible_workflow.STABLE_DIFFUSION_CHECKPOINT)
+        self.assertEqual(generation["negativePrompt"], payload["negative_prompt"])
         self.assertIn("female deity representing God", payload["negative_prompt"])
         self.assertIn("young man representing God", payload["negative_prompt"])
 
@@ -229,6 +233,12 @@ class BibleWorkflowTest(TestCase):
         ) as save_project_state, mock.patch.object(bible_workflow, "_generate_still") as generate_still, mock.patch.object(
             bible_workflow, "generate_motion_clip"
         ) as generate_motion, mock.patch.object(bible_workflow, "extract_last_frame") as extract:
+            generate_still.return_value = {
+                "prompt": "generated scene",
+                "negativePrompt": "bad scene",
+                "seed": 101,
+                "model": bible_workflow.STABLE_DIFFUSION_CHECKPOINT,
+            }
             bible_workflow.prepare_bible_project("bible-test", payload, progress=mock.Mock(), log=mock.Mock())
 
         first_clip = Path(tmp) / "input" / "motion" / "scene_001.mp4"
@@ -400,7 +410,16 @@ class BibleWorkflowTest(TestCase):
                 "title": "Genesis 1:1",
                 "VO": "In the beginning.",
                 "images": ["scene_001.png"],
-                "timeline": [{"image": "scene_001.png"}],
+                "timeline": [{
+                    "image": "scene_001.png",
+                    "prompt": "A dark primordial ocean with a gold illuminated border.",
+                    "imageGeneration": {
+                        "prompt": "A dark primordial ocean with a gold illuminated border.",
+                        "negativePrompt": "people, buildings",
+                        "seed": 4242,
+                        "model": "test-checkpoint",
+                    },
+                }],
             }],
         }
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
@@ -433,9 +452,15 @@ class BibleWorkflowTest(TestCase):
         self.assertTrue(saved_document["scenes"][0]["motionPrompt"].startswith("Light expands across the water."))
         self.assertNotIn("Locked God character design", saved_document["scenes"][0]["motionPrompt"])
         motion_prompt = generate_motion.call_args.kwargs["prompt"]
+        self.assertIn("Locked source-image description: A dark primordial ocean", motion_prompt)
+        self.assertIn("Motion direction: Light expands across the water.", motion_prompt)
         self.assertIn("Genesis 1 scenery-first composition", motion_prompt)
         self.assertNotIn("full silver-white beard", motion_prompt)
         self.assertIn("young man representing God", generate_motion.call_args.kwargs["negative_prompt"])
+        self.assertIn("people, buildings", generate_motion.call_args.kwargs["negative_prompt"])
+        self.assertEqual(generate_motion.call_args.kwargs["seed"], saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["motionSeed"])
+        self.assertEqual(saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["sourceImageSeed"], 4242)
+        self.assertEqual(saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["sourceImageModel"], "test-checkpoint")
 
     def test_regenerate_scene_still_rewrites_prompt_and_detaches_stale_motion(self):
         document = {
@@ -454,6 +479,12 @@ class BibleWorkflowTest(TestCase):
         ), mock.patch.object(bible_workflow, "_generate_still") as generate_still, mock.patch.object(
             bible_workflow, "save_scenes"
         ) as save_scenes, mock.patch.object(bible_workflow, "save_project_state") as save_state:
+            generate_still.return_value = {
+                "prompt": "regenerated",
+                "negativePrompt": "people",
+                "seed": 717,
+                "model": bible_workflow.STABLE_DIFFUSION_CHECKPOINT,
+            }
             input_dir = Path(tmp) / "input"
             (input_dir / "images").mkdir(parents=True)
             (input_dir / "images" / "scene_001.png").write_bytes(b"old-men-image")
@@ -474,6 +505,8 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("robed figure", generate_still.call_args.kwargs["negative_extra"])
         saved_document = json.loads(save_scenes.call_args.args[1])
         self.assertNotIn("video", saved_document["scenes"][0]["timeline"][0])
+        self.assertEqual(saved_document["scenes"][0]["timeline"][0]["imageGeneration"]["seed"], 717)
+        self.assertNotIn("motionGeneration", saved_document["scenes"][0]["timeline"][0])
         self.assertTrue(saved_document["scenes"][0]["imageHistory"][0].startswith("history/scene_001-"))
         self.assertEqual(save_state.call_args.args[1]["characterDesign"]["god"]["version"], 2)
 
@@ -510,6 +543,7 @@ class BibleWorkflowTest(TestCase):
                     destination,
                     prompt="a scene",
                     negative_prompt="scene cut",
+                    seed=8675309,
                     session=session,
                 )
             self.assertEqual(destination.read_bytes(), b"mp4-data")
@@ -524,6 +558,7 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["7"]["inputs"]["text"], "scene cut")
         self.assertEqual(workflow["55"]["inputs"]["length"], 81)
         self.assertEqual(workflow["57"]["inputs"]["fps"], 16)
+        self.assertEqual(workflow["3"]["inputs"]["seed"], 8675309)
 
     def test_motion_quality_gate_rejects_short_artifact(self):
         probe = {

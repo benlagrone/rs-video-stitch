@@ -61,7 +61,13 @@ def _upload_image(session, image_path: Path) -> str:
     return str(response.json().get("name") or image_path.name)
 
 
-def _patched_workflow(image_name: str, prompt: str, negative_prompt: str, filename_prefix: str) -> dict:
+def _patched_workflow(
+    image_name: str,
+    prompt: str,
+    negative_prompt: str,
+    filename_prefix: str,
+    seed: int | None = None,
+) -> dict:
     workflow = json.loads(WORKFLOW_PATH.read_text(encoding="utf-8"))
     values = {
         "prompt": prompt,
@@ -71,7 +77,7 @@ def _patched_workflow(image_name: str, prompt: str, negative_prompt: str, filena
         "height": 320,
         "frames": 81,
         "fps": 16,
-        "seed": random.randint(1, 2**63 - 1),
+        "seed": seed if seed is not None else random.randint(1, 2**63 - 1),
         "steps": 20,
         "cfg": 3.5,
         "sampler_name": "uni_pc",
@@ -158,13 +164,14 @@ def generate_motion_clip(
     *,
     prompt: str,
     negative_prompt: str,
+    seed: int | None = None,
     session=requests,
 ) -> None:
     model_health = session.get(f"{COMFYUI_MODEL_API_URL.rstrip('/')}/system_stats", timeout=10)
     model_health.raise_for_status()
     uploaded_name = _upload_image(session, image_path)
     prefix = f"mediastudio/{uuid.uuid4().hex}"
-    workflow = _patched_workflow(uploaded_name, prompt, negative_prompt, prefix)
+    workflow = _patched_workflow(uploaded_name, prompt, negative_prompt, prefix, seed=seed)
     queued = session.post(
         f"{COMFYUI_MODEL_API_URL.rstrip('/')}/prompt",
         json={"client_id": f"mediastudio-sextant-{uuid.uuid4().hex}", "prompt": workflow},

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import time
@@ -447,7 +449,10 @@ def _scene_animation_writer_prompt(
         return re.sub(r"\s+", " ", str(item.get(key) or "")).strip()
 
     timeline = scene.get("timeline") or [{}]
-    still_description = re.sub(r"\s+", " ", str(timeline[0].get("prompt") or "")).strip()
+    image_generation = timeline[0].get("imageGeneration") or {}
+    still_description = re.sub(
+        r"\s+", " ", str(image_generation.get("prompt") or timeline[0].get("prompt") or "")
+    ).strip()
     still_description = still_description.split("Locked God character design:", 1)[0].strip()
     existing_prompt = value(scene, "motionPrompt").split("Locked God character design:", 1)[0].strip()
     return (
@@ -512,6 +517,57 @@ def generate_scene_animation_prompt(project_id: str, scene_index: int, *, sessio
     return f"Scene {scene_index} — {title}. {generated}"
 
 
+def _motion_provenance(scene: dict[str, Any], still_path: Path, scene_index: int, motion_prompt: str) -> dict[str, Any]:
+    timeline = (scene.get("timeline") or [{}])[0]
+    image_generation = timeline.get("imageGeneration") or {}
+    image_prompt = re.sub(
+        r"\s+", " ", str(image_generation.get("prompt") or timeline.get("prompt") or "")
+    ).strip()
+    image_negative = re.sub(r"\s+", " ", str(image_generation.get("negativePrompt") or "")).strip()
+    image_seed = image_generation.get("seed")
+    fingerprint_source = still_path.read_bytes() if still_path.exists() else f"{still_path.name}|{image_prompt}".encode("utf-8")
+    fingerprint = hashlib.sha256(fingerprint_source).hexdigest()
+    seed_material = f"{image_seed or fingerprint}|{scene_index}|{motion_prompt}".encode("utf-8")
+    motion_seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big") % (2**63 - 1) or 1
+    return {
+        "sourceImagePrompt": image_prompt,
+        "sourceImageNegativePrompt": image_negative,
+        "sourceImageSeed": image_seed,
+        "sourceImageModel": image_generation.get("model") or STABLE_DIFFUSION_CHECKPOINT,
+        "sourceImageFingerprint": fingerprint,
+        "motionSeed": motion_seed,
+    }
+
+
+def _motion_provider_prompt(resolved_prompt: str, scene: dict[str, Any], provenance: dict[str, Any]) -> str:
+    reference = str(scene.get("title") or "")
+    verse = str(scene.get("VO") or scene.get("description") or "")
+    source_prompt = str(provenance.get("sourceImagePrompt") or "").strip()
+    visual_anchor = (
+        "The supplied source image is the authoritative first frame. Preserve its exact subjects, count, identities, "
+        "anatomy, environment, composition, palette, materials, lighting, and art treatment; animate it without "
+        "restaging or introducing new elements."
+    )
+    if source_prompt:
+        visual_anchor += f" Locked source-image description: {source_prompt}"
+    return (
+        f"{visual_anchor} Motion direction: {resolved_prompt} Composition policy: "
+        f"{_god_portrayal_instruction(reference, verse)}"
+    )
+
+
+def _motion_negative_prompt(scene: dict[str, Any], provenance: dict[str, Any]) -> str:
+    source_negative = str(provenance.get("sourceImageNegativePrompt") or "").strip()
+    parts = [
+        "static tableau, frozen pose, slideshow, no movement, scene cut, jump cut, jitter, flicker",
+        "face morph, anatomy distortion, identity change, clothing change, text, watermark",
+        source_negative,
+        _scene_negative_prompt(str(scene.get("title") or "")),
+        GOD_CHARACTER_NEGATIVE,
+    ]
+    return ", ".join(part for part in parts if part)
+
+
 def animate_bible_scene(
     project_id: str,
     scene_index: int,
@@ -526,10 +582,8 @@ def animate_bible_scene(
         progress("WRITING_MOTION_PROMPT", 0.12)
         log(f"Generating a continuity-safe animation prompt for scene {scene_index}")
         resolved_prompt = generate_scene_animation_prompt(project_id, scene_index)
-    provider_prompt = (
-        f"{resolved_prompt} Composition policy: "
-        f"{_god_portrayal_instruction(str(scene.get('title') or ''), str(scene.get('VO') or scene.get('description') or ''))}"
-    )
+    provenance = _motion_provenance(scene, still_path, scene_index, resolved_prompt)
+    provider_prompt = _motion_provider_prompt(resolved_prompt, scene, provenance)
 
     progress("MOTION_GENERATION", 0.25)
     log(f"Animating scene {scene_index} from {still_path.name}")
@@ -537,16 +591,14 @@ def animate_bible_scene(
         still_path,
         clip_path,
         prompt=provider_prompt,
-        negative_prompt=(
-            "static tableau, frozen pose, slideshow, no movement, scene cut, jump cut, jitter, flicker, "
-            f"face morph, anatomy distortion, identity change, clothing change, text, watermark, "
-            f"{_scene_negative_prompt(str(scene.get('title') or ''))}, {GOD_CHARACTER_NEGATIVE}"
-        ),
+        negative_prompt=_motion_negative_prompt(scene, provenance),
+        seed=int(provenance["motionSeed"]),
     )
     timeline = scene.setdefault("timeline", [{"image": still_path.name}])
     if not timeline:
         timeline.append({"image": still_path.name})
     timeline[0]["video"] = clip_path.name
+    timeline[0]["motionGeneration"] = provenance
     scene["motionPrompt"] = resolved_prompt
     scene["animationUpdatedAt"] = time.time()
     project_name = str((document.get("info") or {}).get("name") or project_id)
@@ -598,13 +650,14 @@ def build_storyboard(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]
     return canonical, scenes
 
 
-def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "", session=requests) -> None:
+def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "", session=requests) -> dict[str, Any]:
     negative_prompt = (
         "text, watermark, logo, modern clothing, modern architecture, deformed anatomy, extra limbs, "
         f"duplicate people, face morph, blur, low detail, {GOD_CHARACTER_NEGATIVE}"
     )
     if negative_extra.strip():
         negative_prompt = f"{negative_prompt}, {negative_extra.strip()}"
+    seed = random.randint(1, 2**63 - 1)
     response = session.post(
         STABLE_DIFFUSION_API_URL,
         json={
@@ -615,6 +668,7 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
             "steps": 24,
             "cfg_scale": 7,
             "sampler_name": "DPM++ 2M Karras",
+            "seed": seed,
             "override_settings": {"sd_model_checkpoint": STABLE_DIFFUSION_CHECKPOINT},
             "override_settings_restore_afterwards": True,
         },
@@ -626,6 +680,17 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
         raise RuntimeError("Stable Diffusion returned no image")
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(base64.b64decode(images[0]))
+    return {
+        "prompt": prompt,
+        "negativePrompt": negative_prompt,
+        "seed": seed,
+        "model": STABLE_DIFFUSION_CHECKPOINT,
+        "sampler": "DPM++ 2M Karras",
+        "steps": 24,
+        "cfgScale": 7,
+        "width": 1024,
+        "height": 576,
+    }
 
 
 def _title_card_prompt(canonical: str, scenes: list[dict[str, Any]], visual_style: str) -> str:
@@ -756,10 +821,12 @@ def regenerate_bible_scene_stills(
             shutil.copy2(destination, backup_dir / backup_name)
             scene.setdefault("imageHistory", []).append(f"history/{backup_name}")
         log(f"Regenerating scenery-first still {position}/{len(indexes)} for {reference}")
-        _generate_still(prompt, destination, negative_extra=_scene_negative_prompt(reference))
+        generation = _generate_still(prompt, destination, negative_extra=_scene_negative_prompt(reference))
         timeline[0]["image"] = destination.name
         timeline[0]["prompt"] = prompt
+        timeline[0]["imageGeneration"] = generation
         timeline[0].pop("video", None)
+        timeline[0].pop("motionGeneration", None)
         scene["imageUpdatedAt"] = time.time()
         last_path = destination
         progress("IMAGE_REGENERATION", 0.05 + (position / len(indexes)) * 0.9)
@@ -825,29 +892,26 @@ def prepare_bible_project(
             extract_last_frame(previous_motion_path, still_path)
         else:
             log(f"Generating still {index}/{len(scenes)} for {scene['title']}")
-            _generate_still(
+            generation = _generate_still(
                 timeline["prompt"],
                 still_path,
                 negative_extra=_scene_negative_prompt(str(scene.get("title") or "")),
             )
+            timeline["imageGeneration"] = generation
         if payload.get("mode") == "motion":
             clip_name = f"scene_{index:03d}.mp4"
             clip_path = motion_dir / clip_name
             log(f"Generating motion clip {index}/{len(scenes)} for {scene['title']}")
+            provenance = _motion_provenance(scene, still_path, index, scene["motionPrompt"])
             generate_motion_clip(
                 still_path,
                 clip_path,
-                prompt=(
-                    f"{scene['motionPrompt']} Composition policy: "
-                    f"{_god_portrayal_instruction(str(scene.get('title') or ''), str(scene.get('VO') or ''))}"
-                ),
-                negative_prompt=(
-                    "static tableau, frozen pose, slideshow, no movement, scene cut, jump cut, jitter, flicker, "
-                    f"face morph, anatomy distortion, identity change, clothing change, text, watermark, "
-                    f"{_scene_negative_prompt(str(scene.get('title') or ''))}, {GOD_CHARACTER_NEGATIVE}"
-                ),
+                prompt=_motion_provider_prompt(scene["motionPrompt"], scene, provenance),
+                negative_prompt=_motion_negative_prompt(scene, provenance),
+                seed=int(provenance["motionSeed"]),
             )
             timeline["video"] = clip_name
+            timeline["motionGeneration"] = provenance
             previous_motion_path = clip_path
         progress("MOTION_GENERATION" if payload.get("mode") == "motion" else "IMAGE_GENERATION", 0.05 + (index / len(scenes)) * 0.45)
 
