@@ -784,8 +784,8 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["55"]["inputs"]["length"], 81)
         self.assertEqual(workflow["57"]["inputs"]["fps"], 16)
         self.assertEqual(workflow["3"]["inputs"]["seed"], 8675309)
-        self.assertEqual(workflow["3"]["inputs"]["denoise"], 0.65)
-        self.assertEqual(quality["modelDenoise"], 0.65)
+        self.assertEqual(workflow["3"]["inputs"]["denoise"], 1.0)
+        self.assertEqual(quality["modelDenoise"], 1.0)
 
     def test_motion_quality_gate_rejects_short_artifact(self):
         probe = {
@@ -870,6 +870,33 @@ class BibleWorkflowTest(TestCase):
 
             with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_stats):
                 with self.assertRaisesRegex(motion_provider.MotionProviderError, "color-block"):
+                    motion_provider._measure_sequence_integrity(video)
+
+    def test_sequence_gate_rejects_large_visual_discontinuity(self):
+        log = "\n".join(
+            [
+                "frame:0 pts:0 pts_time:0",
+                "lavfi.signalstats.SATAVG=11.0",
+                "lavfi.signalstats.YDIF=0.0",
+                "frame:1 pts:1 pts_time:0.0625",
+                "lavfi.signalstats.SATAVG=11.4",
+                "lavfi.signalstats.YDIF=2.0",
+                "frame:2 pts:2 pts_time:0.125",
+                "lavfi.signalstats.SATAVG=12.0",
+                "lavfi.signalstats.YDIF=25.8",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "scene.mp4"
+            video.write_bytes(b"motion")
+
+            def create_stats(command, **_kwargs):
+                filter_value = command[command.index("-vf") + 1]
+                Path(filter_value.split("file=", 1)[1]).write_text(log, encoding="utf-8")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_stats):
+                with self.assertRaisesRegex(motion_provider.MotionProviderError, "visual jump"):
                     motion_provider._measure_sequence_integrity(video)
 
     def test_decorative_frame_protection_restores_source_border(self):

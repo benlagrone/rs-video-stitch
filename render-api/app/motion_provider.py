@@ -29,6 +29,7 @@ LOCKED_CAMERA_LARGE_CORRECTION_RATIO = float(os.getenv("LOCKED_CAMERA_LARGE_CORR
 SOURCE_FRAME_MIN_SSIM = float(os.getenv("SOURCE_FRAME_MIN_SSIM", "0.28"))
 SEQUENCE_SATURATION_JUMP_LIMIT = float(os.getenv("SEQUENCE_SATURATION_JUMP_LIMIT", "4.0"))
 SEQUENCE_LUMA_JUMP_LIMIT = float(os.getenv("SEQUENCE_LUMA_JUMP_LIMIT", "8.0"))
+SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE = float(os.getenv("SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE", "15.0"))
 
 
 class MotionProviderError(RuntimeError):
@@ -330,6 +331,12 @@ def _measure_sequence_integrity(video_path: Path) -> dict[str, float | int]:
                 "Animation rejected for sudden color-block or scene-corruption artifacts: "
                 f"saturation jump {max_saturation_jump:.2f}, luma difference {luma_at_saturation_jump:.2f}"
             )
+        if metrics["maxLumaFrameDifference"] > SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE:
+            raise MotionProviderError(
+                "Animation rejected for discontinuous scene corruption or an uncontrolled visual jump: "
+                f"maximum luma-frame difference {metrics['maxLumaFrameDifference']:.2f} exceeds "
+                f"{SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE:.2f}"
+            )
         return metrics
     except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
         raise MotionProviderError(f"Unable to validate animation sequence integrity: {exc}") from exc
@@ -381,7 +388,7 @@ def generate_motion_clip(
         _prepare_source_image(image_path, prepared_source)
         uploaded_name = _upload_image(session, prepared_source)
         prefix = f"mediastudio/{uuid.uuid4().hex}"
-        model_denoise = 0.65 if camera_behavior == "locked" else 0.80
+        model_denoise = 1.0
         workflow = _patched_workflow(
             uploaded_name,
             prompt,
