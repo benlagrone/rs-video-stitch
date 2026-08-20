@@ -58,22 +58,23 @@ class YouTubeProfileTests(unittest.TestCase):
                 Path(temp_dir) / "youtube_token_mandarin.json",
             )
 
-    def test_bible_uses_a_separate_token_file(self):
+    def test_animals_uses_a_separate_token_file(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
             os.environ,
             {"YOUTUBE_TOKEN_FILE": str(Path(temp_dir) / "youtube_token.json")},
             clear=False,
         ):
             self.assertEqual(
-                youtube_upload._token_file_path("bible"),
-                Path(temp_dir) / "youtube_token_bible.json",
+                youtube_upload._token_file_path("animals"),
+                Path(temp_dir) / "youtube_token_animals.json",
             )
+            self.assertEqual(youtube_upload._token_file_path("bible"), Path(temp_dir) / "youtube_token_animals.json")
 
     def test_channel_catalog_returns_every_profile_with_live_identity_when_connected(self):
         status_by_profile = {
             "english": {"profile": "english", "authenticated": True, "metadataAuthorized": True},
             "mandarin": {"profile": "mandarin", "authenticated": False, "metadataAuthorized": False},
-            "bible": {"profile": "bible", "authenticated": False, "metadataAuthorized": False},
+            "animals": {"profile": "animals", "authenticated": False, "metadataAuthorized": False},
         }
         youtube = MagicMock()
         youtube.channels.return_value.list.return_value.execute.return_value = {
@@ -95,12 +96,12 @@ class YouTubeProfileTests(unittest.TestCase):
         ), patch.object(youtube_upload, "authenticate_youtube", return_value=youtube):
             catalog = youtube_upload.youtube_channel_catalog(force=True)
 
-        self.assertEqual([channel["profile"] for channel in catalog], ["english", "mandarin", "bible"])
+        self.assertEqual([channel["profile"] for channel in catalog], ["english", "mandarin", "animals"])
         self.assertEqual(catalog[0]["channelName"], "LeCrown Properties")
         self.assertEqual(catalog[0]["iconUrl"], "https://example.test/lecrown.jpg")
         self.assertTrue(catalog[0]["matchesExpectedChannel"])
         self.assertEqual(catalog[1]["channelName"], "皇冠物业")
-        self.assertEqual(catalog[2]["channelName"], "Animal Safari Kids")
+        self.assertEqual(catalog[2]["channelName"], "Animals")
         self.assertIn("animal-safari-kids.png", catalog[2]["iconUrl"])
 
     def test_authorization_state_identifies_the_profile(self):

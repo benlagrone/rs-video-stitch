@@ -33,7 +33,7 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://fortress.lan:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mixtral:latest")
 OLLAMA_PROMPT_MODEL = os.getenv("OLLAMA_PROMPT_MODEL", "mistral:latest")
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
-BIBLE_CHANNEL_NAME = os.getenv("BIBLE_CHANNEL_NAME", "Animal Safari Kids")
+BIBLE_CHANNEL_NAME = os.getenv("BIBLE_CHANNEL_NAME", "Animals")
 BIBLE_CHANNEL_ID = os.getenv("BIBLE_CHANNEL_ID", "UCU1T3KZjLceczyfHr2aqpeQ")
 BIBLE_CHANNEL_ICON = os.getenv("BIBLE_CHANNEL_ICON", "animal-safari-kids.png")
 BIBLE_CAPTION_STYLE = {
@@ -682,7 +682,7 @@ def prepare_bible_project(
             "youtubeDescription": f"A narrated visual presentation of {canonical}.",
             "youtubeTags": f"Bible, Scripture, {canonical.split()[0]}",
             "youtubePrivacy": "private",
-            "youtubeProfile": "bible",
+            "youtubeProfile": "animals",
             "youtubeChannelName": BIBLE_CHANNEL_NAME,
             "youtubeChannelId": BIBLE_CHANNEL_ID,
             "titleCardImageName": title_card_name,

@@ -194,7 +194,7 @@ class BibleWorkflowTest(TestCase):
         self.assertTrue(payload["renderOptions"]["scriptureCaptionEnabled"])
         self.assertEqual(payload["renderOptions"]["titleStyle"]["fontFamily"], "EB Garamond")
         self.assertEqual(payload["renderOptions"]["titleStyle"]["position"], "bottom-left")
-        self.assertEqual(save_project_state.call_args.args[1]["youtubeProfile"], "bible")
+        self.assertEqual(save_project_state.call_args.args[1]["youtubeProfile"], "animals")
         extract.assert_called_once_with(first_clip, second_image)
         self.assertEqual(generate_motion.call_count, 2)
         self.assertEqual(generate_motion.call_args_list[1].args[0], second_image)

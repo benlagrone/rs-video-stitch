@@ -65,7 +65,7 @@ channels = {item.get("profile"): item for item in json.loads(sys.argv[1]).get("c
 expected = {
     "english": "LeCrown Properties",
     "mandarin": "皇冠物业",
-    "bible": "Animal Safari Kids",
+    "animals": "Animals",
 }
 missing = sorted(set(expected) - set(channels))
 if missing:

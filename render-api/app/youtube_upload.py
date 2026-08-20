@@ -31,14 +31,15 @@ YOUTUBE_CHANNEL_PROFILES = {
         "handle": "@皇冠物业",
         "fallbackIconUrl": "/media-studio/brand-assets/logo3.png",
     },
-    "bible": {
-        "label": "Animal Safari Kids",
+    "animals": {
+        "label": "Animals",
         "expectedChannelId": "UCU1T3KZjLceczyfHr2aqpeQ",
         "handle": "",
         "fallbackIconUrl": "/media-studio/brand-assets/animal-safari-kids.png",
     },
 }
 YOUTUBE_PROFILES = {profile: details["label"] for profile, details in YOUTUBE_CHANNEL_PROFILES.items()}
+YOUTUBE_PROFILE_ALIASES = {"bible": "animals"}
 _CHANNEL_CATALOG_TTL_SECONDS = 300
 _channel_catalog_cache: tuple[float, list[dict[str, Any]]] = (0.0, [])
 _channel_catalog_lock = threading.Lock()
@@ -50,6 +51,7 @@ class YouTubeUploadConfigurationError(RuntimeError):
 
 def normalize_youtube_profile(profile: str = DEFAULT_PROFILE) -> str:
     normalized = str(profile or DEFAULT_PROFILE).strip().lower()
+    normalized = YOUTUBE_PROFILE_ALIASES.get(normalized, normalized)
     if normalized not in YOUTUBE_PROFILES:
         raise YouTubeUploadConfigurationError(f"Unknown YouTube profile: {profile}")
     return normalized
