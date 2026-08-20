@@ -46,6 +46,8 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
   const [health, setHealth] = useState({});
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingProject, setIsSavingProject] = useState(false);
+  const [settingsNotice, setSettingsNotice] = useState('');
   const [publishReview, setPublishReview] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [youtubeResult, setYoutubeResult] = useState('');
@@ -83,7 +85,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     const loadedScenes = loaded.scenes?.scenes || [];
     setProject(loaded);
     setPassage(state.passage || state.title || passage);
-    setThemeInterpretation(state.themeInterpretation || '');
+    setThemeInterpretation(state.themeInterpretation ?? loaded.scenes?.info?.themeInterpretation ?? '');
     setTranslation(state.translation || 'kjv');
     setMode(state.mode || 'still');
     setVisualStyle(state.visualStyle || FALLBACK_STYLES[0].id);
@@ -379,6 +381,53 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     }
   }
 
+  async function saveProjectSettings() {
+    if (!project?.projectId) return;
+    setError('');
+    setSettingsNotice('');
+    setIsSavingProject(true);
+    try {
+      const renderOptions = {
+        ...(project.state?.renderOptions || {}),
+        tts: voice,
+        ttsLanguage: 'en-US',
+        ttsApi,
+        scriptureCaptionEnabled: true,
+        titleStyle: {
+          ...(project.state?.renderOptions?.titleStyle || {}),
+          fontFamily: captionFont,
+          fontSize: 48,
+          fill: '#ffffff',
+          outline: '#000000',
+          position: 'bottom-left',
+        },
+      };
+      await request(`/v1/projects/${encodeURIComponent(project.projectId)}/state`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          state: {
+            ...project.state,
+            passage,
+            themeInterpretation,
+            translation,
+            mode,
+            visualStyle,
+            voice,
+            ttsApi,
+            renderOptions,
+          },
+        }),
+      });
+      await loadBibleProject(project.projectId);
+      setSettingsNotice('Project settings saved');
+    } catch (saveError) {
+      setError(saveError.message || String(saveError));
+    } finally {
+      setIsSavingProject(false);
+    }
+  }
+
   async function buildVideo(event) {
     event.preventDefault();
     setError('');
@@ -462,7 +511,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
 
       <form className="bible-workspace" onSubmit={buildVideo}>
         <aside className="bible-config">
-          <section><h2>Scripture source</h2><label>Passage<input value={passage} onChange={(event) => setPassage(event.target.value)} required /></label><label>Theme / interpretation<textarea value={themeInterpretation} onChange={(event) => setThemeInterpretation(event.target.value)} maxLength={2000} placeholder="Optional — describe the video’s theme, interpretation, symbolism, emotional arc, setting, or portrayal details" /></label><span className="caption-font-note">This direction is mixed with the selected art style and applied to title art, scenes, motion, and permitted portrayal details. Leave blank to follow the scripture text closely without an added interpretation.</span></section>
+          <section><h2>Scripture source</h2><label>Passage<input value={passage} onChange={(event) => { setPassage(event.target.value); setSettingsNotice(''); }} required /></label><label>Theme / interpretation<textarea value={themeInterpretation} onChange={(event) => { setThemeInterpretation(event.target.value); setSettingsNotice(''); }} maxLength={2000} placeholder="Optional — describe the video’s theme, interpretation, symbolism, emotional arc, setting, or portrayal details" /></label><span className="caption-font-note">This direction is mixed with the selected art style and applied to title art, scenes, motion, and permitted portrayal details. Leave blank to follow the scripture text closely without an added interpretation.</span>{project && <><button type="button" className="secondary-action" onClick={saveProjectSettings} disabled={isSavingProject}>{isSavingProject ? 'Saving project settings…' : 'Save project settings'}</button>{settingsNotice && <span className="project-save-notice" role="status">{settingsNotice}</span>}</>}</section>
           <section><h2>Video mode</h2><div className="mode-switch"><button type="button" className={mode === 'still' ? 'active' : ''} onClick={() => setMode('still')}>Still</button><button type="button" className={mode === 'motion' ? 'active' : ''} onClick={() => setMode('motion')}>Motion</button></div></section>
           <section><label>Translation<select value={translation} onChange={(event) => setTranslation(event.target.value)}><option value="kjv">KJV</option><option value="web">World English Bible</option></select></label><div className="style-picker"><label>Find a visual style<input type="search" value={styleQuery} onChange={(event) => setStyleQuery(event.target.value)} placeholder="Search all styles" /></label><label>Visual style<select value={visualStyle} onChange={(event) => setVisualStyle(event.target.value)}>{Object.entries(styleGroups).map(([category, styles]) => <optgroup label={category} key={category}>{styles.map((style) => <option value={style.id} key={style.id}>{style.name}</option>)}</optgroup>)}</select></label><p><strong>{visualStyles.length} styles</strong> available · {selectedStyle?.prompt}</p></div><div className="character-policy"><strong>Locked God portrayal</strong><span>{characterPolicy.god?.summary}</span><small>Applied to title cards, still images, motion planning, animation prompts, and negative prompts.</small></div><label>Scripture caption font<select value={captionFont} onChange={(event) => setCaptionFont(event.target.value)}>{captionFonts.map((font) => <option value={font.id} key={font.id}>{font.name}</option>)}</select></label><span className="caption-font-note">The verse reference and full text print along the bottom of every scene.</span>{project && <div className="bible-title-card-control">{project.state?.titleCardImageName && <img src={`${apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(project.projectId)}/assets/leader/${encodeURIComponent(project.state.titleCardImageName)}`)}?v=${encodeURIComponent(project.state?.titleCardUpdatedAt || '')}`} alt={`${project.state?.passage || passage} title card background`} />}<button type="button" className="secondary-action" onClick={regenerateTitleCard} disabled={titleCardJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(titleCardJob.status)}>{titleCardJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(titleCardJob.status) ? `${stageLabel(titleCardJob.stage)} · ${Math.round((titleCardJob.progress || 0) * 100)}%` : (project.state?.titleCardImageName ? 'Regenerate title card preview' : 'Generate title card preview')}</button>{project.state?.titleCardImageName && <button type="button" className="secondary-action" onClick={rebuildWithTitleCard} disabled={titleCardJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(titleCardJob.status)}>Save font &amp; rebuild video</button>}<small>Review the passage-specific art first. Rebuilding reuses the approved image with the selected channel mark—never the brokerage contact template.</small></div>}<label>Narrator voice<select value={`${ttsApi}::${voice}`} onChange={selectNarrator}>{voiceProviders.length ? voiceProviders.map((provider) => <optgroup label={provider.label} key={provider.id}>{provider.voices.map((voiceName) => <option value={`${provider.ttsApi}::${voiceName}`} key={`${provider.id}-${voiceName}`}>{voiceName}</option>)}</optgroup>) : <option value="vibevoice-proxy::Carter">Carter</option>}</select></label>{activeVoiceProvider && <span className="voice-source-note">Source: {activeVoiceProvider.label}</span>}</section>
           <button className="primary-action bible-build" type="submit" disabled={isSubmitting || (job && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(job.status))}>{isSubmitting ? 'Queuing' : `Generate ${mode === 'motion' ? 'Motion' : 'Still'} Video`}</button>
