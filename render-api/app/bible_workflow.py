@@ -165,20 +165,22 @@ def _scene_negative_prompt(reference: str) -> str:
     negative = "duplicate deity, two Gods, twin divine figures, multiple old bearded men, repeated character portrait"
     genesis_one = re.match(r"^genesis\s+1(?::(\d+))?\b", reference.strip(), flags=re.IGNORECASE)
     if genesis_one:
+        verse_number = int(genesis_one.group(1) or 0)
+        if verse_number in {26, 27, 28, 29, 31}:
+            return (
+                "deity figure, divine portrait, old man, elderly person, gray hair, white beard, same-sex pair, "
+                "identical twins, duplicate person, third figure, extra figure, crowd, child, wedding, bride, groom, "
+                "formal gown, modern dress, architecture, building, house, palace, church, temple, arches, columns, "
+                "city, village, road, paved path"
+            )
         negative += (
             ", anthropomorphic God, human deity, portrait of God, elderly deity, two elderly men, architecture, "
             "building, house, palace, church, temple, arches, columns, city, village, road, paved path"
         )
-        verse_number = int(genesis_one.group(1) or 0)
         if not verse_number or verse_number <= 25 or verse_number == 30:
             negative += (
                 ", person, people, man, woman, male figure, female figure, human, humanoid, face, portrait, "
                 "robed figure, angel, goddess, deity, crowd, pair of figures"
-            )
-        elif verse_number in {26, 27, 28, 29, 31}:
-            negative += (
-                ", third person, extra person, three people, crowd, group, two men, two women, same-sex pair, "
-                "duplicate person, elderly man, old man, bearded elder, wedding, bride, groom, formal gown, modern dress"
             )
     return negative
 
@@ -214,26 +216,26 @@ def _genesis_one_visual_subject(reference: str) -> str:
         24: "Wild animals, livestock, and small ground creatures emerging across varied habitats",
         25: "A balanced living landscape populated by distinct wild animals, livestock, and ground creatures",
         26: (
-            "Exactly two full-body ancient Near Eastern adults outdoors: one visibly masculine adult man with short "
-            "dark hair and one visibly feminine adult woman with long dark hair, both in simple undyed linen garments, "
-            "standing separately amid plants and animals"
+            "Exactly two full-body people outdoors, Adam and Eve: (one visibly masculine young adult man:1.4) with "
+            "short dark hair and (one visibly feminine young adult woman:1.4) with long dark hair, both in simple "
+            "ancient undyed linen garments, standing separately amid plants and animals"
         ),
         27: (
-            "Exactly two full-body ancient Near Eastern adults: one visibly masculine adult man and one visibly "
-            "feminine adult woman, equal in dignity, standing separately in a wild garden landscape"
+            "Exactly two full-body people, Adam and Eve: (one clearly masculine young adult man:1.4) and (one clearly "
+            "feminine young adult woman:1.4), equal in dignity, standing separately outdoors in a wild garden landscape"
         ),
         28: (
-            "Exactly one adult man and one adult woman beginning their stewardship together outdoors amid fertile "
-            "land, birds, fish, and animals"
+            "Adam and Eve together, exactly (one young adult man:1.4) and (one young adult woman:1.4), beginning their "
+            "stewardship outdoors amid fertile land, birds, fish, and animals"
         ),
         29: (
-            "Exactly one adult man and one adult woman receiving abundant seed-bearing plants and fruit trees in a "
-            "wild outdoor landscape"
+            "Adam and Eve together, exactly (one young adult man:1.4) and (one young adult woman:1.4), gathering from "
+            "abundant seed-bearing plants and fruit trees in a wild outdoor landscape"
         ),
         30: "Land animals, birds, and small creatures feeding peacefully among abundant green plants",
         31: (
-            "A panoramic view of the complete living world with exactly one adult man and one adult woman visible "
-            "together as small figures within the vast wild landscape"
+            "A panoramic view of the complete living world with Adam and Eve, exactly one young adult man and one "
+            "young adult woman, visible together as small figures within the vast wild landscape"
         ),
     }
     return subjects.get(verse_number, "The physical creation of the cosmos unfolding through distinct natural forms")
