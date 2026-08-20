@@ -434,6 +434,50 @@ async def animate_all_scenes(
     }
 
 
+def _queue_scene_still_job(pid: str, scene_indexes: list[int], db: Session) -> dict:
+    scenes_path = p_input(pid) / "scenes.json"
+    if not scenes_path.exists():
+        raise HTTPException(status_code=404, detail=f"Project {pid} has no scenes.json")
+    try:
+        scenes = (json.loads(scenes_path.read_text(encoding="utf-8")).get("scenes") or [])
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Project {pid} has invalid scene data") from exc
+    if not scenes or any(index < 1 or index > len(scenes) for index in scene_indexes):
+        raise HTTPException(status_code=404, detail="One or more Bible scenes do not exist")
+    project = db.get(Project, pid)
+    if project is None:
+        project = Project(id=pid)
+        db.add(project)
+    job_id = f"j_{uuid.uuid4().hex[:12]}"
+    db.add(Job(
+        id=job_id,
+        project_id=pid,
+        status="QUEUED",
+        payload={"workflow": "bible-scene-stills", "sceneIndexes": scene_indexes},
+        progress=0.0,
+        stage="QUEUED",
+    ))
+    db.commit()
+    return {"projectId": pid, "sceneIndexes": scene_indexes, "jobId": job_id, "status": "QUEUED"}
+
+
+@app.post("/v1/projects/{pid}/scenes/{scene_index}/regenerate-still", status_code=202)
+async def regenerate_scene_still(pid: str, scene_index: int, db: Session = Depends(get_db)) -> dict:
+    return _queue_scene_still_job(pid, [scene_index], db)
+
+
+@app.post("/v1/projects/{pid}/scenes/regenerate-stills", status_code=202)
+async def regenerate_all_scene_stills(pid: str, db: Session = Depends(get_db)) -> dict:
+    scenes_path = p_input(pid) / "scenes.json"
+    if not scenes_path.exists():
+        raise HTTPException(status_code=404, detail=f"Project {pid} has no scenes.json")
+    try:
+        count = len(json.loads(scenes_path.read_text(encoding="utf-8")).get("scenes") or [])
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Project {pid} has invalid scene data") from exc
+    return _queue_scene_still_job(pid, list(range(1, count + 1)), db)
+
+
 @app.post("/v1/projects/{pid}/bible-title-card", status_code=202)
 async def regenerate_bible_title_card(
     pid: str,

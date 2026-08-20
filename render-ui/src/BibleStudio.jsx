@@ -58,6 +58,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
   const [animationJobs, setAnimationJobs] = useState({});
   const [writingPromptFor, setWritingPromptFor] = useState(0);
   const [isQueuingAllAnimations, setIsQueuingAllAnimations] = useState(false);
+  const [stillRegenerationJob, setStillRegenerationJob] = useState(null);
   const [titleCardJob, setTitleCardJob] = useState(null);
 
   const headers = (extra = {}) => ({
@@ -93,6 +94,20 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     setAnimationPrompts(Object.fromEntries(loadedScenes.map((scene, index) => [index + 1, scene.motionPrompt || ''])));
     return loaded;
   }
+
+  useEffect(() => {
+    if (!stillRegenerationJob?.jobId || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(stillRegenerationJob.status)) return undefined;
+    const timer = window.setInterval(async () => {
+      try {
+        const current = await request(`/v1/jobs/${encodeURIComponent(stillRegenerationJob.jobId)}`);
+        setStillRegenerationJob((previous) => ({ ...previous, ...current }));
+        if (current.status === 'SUCCEEDED' && project?.projectId) await loadBibleProject(project.projectId);
+      } catch (pollError) {
+        setError(pollError.message || String(pollError));
+      }
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [stillRegenerationJob?.jobId, stillRegenerationJob?.status, project?.projectId, effectiveApiBase, authToken]);
 
   useEffect(() => {
     request('/v1/youtube/channels').then((result) => setYoutubeChannels(result.channels || [])).catch(() => setYoutubeChannels([]));
@@ -300,6 +315,20 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     }
   }
 
+  async function regenerateStills(sceneIndex = 0) {
+    if (!project?.projectId) return;
+    setError('');
+    try {
+      const path = sceneIndex
+        ? `/v1/projects/${encodeURIComponent(project.projectId)}/scenes/${sceneIndex}/regenerate-still`
+        : `/v1/projects/${encodeURIComponent(project.projectId)}/scenes/regenerate-stills`;
+      const created = await request(path, { method: 'POST' });
+      setStillRegenerationJob({ ...created, status: 'QUEUED', stage: 'QUEUED', progress: 0 });
+    } catch (regenerationError) {
+      setError(regenerationError.message || String(regenerationError));
+    }
+  }
+
   async function regenerateTitleCard() {
     if (!project?.projectId) return;
     setError('');
@@ -431,16 +460,17 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
         </aside>
 
         <section className="bible-storyboard">
-          <div className="bible-section-heading"><div><h2>Storyboard</h2><p>{scenes.length ? `${scenes.length} scenes from ${project?.state?.passage || passage}` : 'Scenes appear here as the job completes.'}</p></div><div className="storyboard-actions"><strong>{motionClipCount ? `${motionClipCount} MOTION · ${scenes.length - motionClipCount} STILL` : (mode === 'motion' ? 'MOTION · CONTINUITY PLANNED' : 'STILL')}</strong>{scenes.length > 0 && <button type="button" className="primary-action animate-all-action" onClick={animateAllScenes} disabled={isQueuingAllAnimations || activeAnimationCount > 0 || remainingAnimationCount === 0}>{isQueuingAllAnimations ? 'Queuing scenes…' : activeAnimationCount > 0 ? `Animating ${activeAnimationCount} scene${activeAnimationCount === 1 ? '' : 's'}…` : remainingAnimationCount === 0 ? 'All scenes animated' : 'Animate all scenes'}</button>}</div></div>
+          <div className="bible-section-heading"><div><h2>Storyboard</h2><p>{scenes.length ? `${scenes.length} scenes from ${project?.state?.passage || passage}` : 'Scenes appear here as the job completes.'}</p></div><div className="storyboard-actions"><strong>{motionClipCount ? `${motionClipCount} MOTION · ${scenes.length - motionClipCount} STILL` : (mode === 'motion' ? 'MOTION · CONTINUITY PLANNED' : 'STILL')}</strong>{scenes.length > 0 && <button type="button" className="secondary-action" onClick={() => regenerateStills()} disabled={stillRegenerationJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(stillRegenerationJob.status)}>{stillRegenerationJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(stillRegenerationJob.status) ? `${stageLabel(stillRegenerationJob.stage)} · ${Math.round((stillRegenerationJob.progress || 0) * 100)}%` : 'Regenerate all stills'}</button>}{scenes.length > 0 && <button type="button" className="primary-action animate-all-action" onClick={animateAllScenes} disabled={isQueuingAllAnimations || activeAnimationCount > 0 || remainingAnimationCount === 0 || (stillRegenerationJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(stillRegenerationJob.status))}>{isQueuingAllAnimations ? 'Queuing scenes…' : activeAnimationCount > 0 ? `Animating ${activeAnimationCount} scene${activeAnimationCount === 1 ? '' : 's'}…` : remainingAnimationCount === 0 ? 'All scenes animated' : 'Animate all scenes'}</button>}</div></div>
           {scenes.length ? <div className="bible-scene-list">{scenes.map((scene, index) => {
             const sceneIndex = index + 1;
             const image = scene.images?.[0];
-            const imageUrl = apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(project.projectId)}/assets/images/${encodeURIComponent(image)}`);
+            const imageUrl = `${apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(project.projectId)}/assets/images/${encodeURIComponent(image)}`)}?v=${encodeURIComponent(scene.imageUpdatedAt || project.state?.updatedAt || '')}`;
             const clip = scene.timeline?.[0]?.video;
             const motionUrl = clip ? apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(project.projectId)}/assets/motion/${encodeURIComponent(clip)}`) : '';
             const animationJob = animationJobs[sceneIndex];
             const animationBusy = animationJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(animationJob.status);
-            return <article className="bible-scene" key={`${scene.title}-${index}`}><span className="scene-number">{sceneIndex}</span><div className="scene-media">{motionUrl ? <video controls preload="metadata" poster={imageUrl} src={motionUrl} /> : <img src={imageUrl} alt="" />}<span>{motionUrl ? 'Motion clip' : 'Still image'}</span></div><div><h3>{scene.title}</h3><p>{scene.VO}</p>{scene.action && <dl className="motion-beat"><div><dt>Action</dt><dd>{scene.action}</dd></div><div><dt>Camera</dt><dd>{scene.camera}</dd></div><div><dt>Continuity</dt><dd>{scene.continuity}</dd></div><div><dt>Ends with</dt><dd>{scene.endState}</dd></div></dl>}<div className="scene-animation-tools"><label>Animation prompt<textarea value={animationPrompts[sceneIndex] || ''} onChange={(event) => setAnimationPrompts((previous) => ({ ...previous, [sceneIndex]: event.target.value }))} placeholder="Optional — leave blank and Fortress will write a continuity-safe prompt" /></label><div><button type="button" className="secondary-action" onClick={() => autoWriteAnimationPrompt(sceneIndex)} disabled={writingPromptFor === sceneIndex || animationBusy}>{writingPromptFor === sceneIndex ? 'Writing prompt…' : 'Auto-write prompt'}</button><button type="button" className="primary-action" onClick={() => animateScene(sceneIndex)} disabled={animationBusy}>{animationBusy ? `${stageLabel(animationJob.stage)} · ${Math.round((animationJob.progress || 0) * 100)}%` : (clip ? 'Re-animate image' : 'Animate image')}</button></div>{animationJob?.status === 'FAILED' && <small className="scene-animation-error">Animation failed: {animationJob.error || animationJob.stage}</small>}</div><small>{Math.round(scene.duration || 0)} sec · {clip ? 'Motion clip attached; original still preserved' : 'Still image ready to animate'}</small></div></article>;
+            const stillBusy = stillRegenerationJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(stillRegenerationJob.status) && (stillRegenerationJob.sceneIndexes || []).includes(sceneIndex);
+            return <article className="bible-scene" key={`${scene.title}-${index}`}><span className="scene-number">{sceneIndex}</span><div className="scene-media">{motionUrl ? <video controls preload="metadata" poster={imageUrl} src={motionUrl} /> : <img src={imageUrl} alt="" />}<span>{motionUrl ? 'Motion clip' : 'Still image'}</span></div><div><h3>{scene.title}</h3><p>{scene.VO}</p>{scene.action && <dl className="motion-beat"><div><dt>Action</dt><dd>{scene.action}</dd></div><div><dt>Camera</dt><dd>{scene.camera}</dd></div><div><dt>Continuity</dt><dd>{scene.continuity}</dd></div><div><dt>Ends with</dt><dd>{scene.endState}</dd></div></dl>}<div className="scene-animation-tools"><label>Animation prompt<textarea value={animationPrompts[sceneIndex] || ''} onChange={(event) => setAnimationPrompts((previous) => ({ ...previous, [sceneIndex]: event.target.value }))} placeholder="Optional — leave blank and Fortress will write a continuity-safe prompt" /></label><div><button type="button" className="secondary-action" onClick={() => regenerateStills(sceneIndex)} disabled={stillBusy || animationBusy}>{stillBusy ? 'Regenerating still…' : 'Regenerate still'}</button><button type="button" className="secondary-action" onClick={() => autoWriteAnimationPrompt(sceneIndex)} disabled={writingPromptFor === sceneIndex || animationBusy || stillBusy}>{writingPromptFor === sceneIndex ? 'Writing prompt…' : 'Auto-write prompt'}</button><button type="button" className="primary-action" onClick={() => animateScene(sceneIndex)} disabled={animationBusy || stillBusy}>{animationBusy ? `${stageLabel(animationJob.stage)} · ${Math.round((animationJob.progress || 0) * 100)}%` : (clip ? 'Re-animate image' : 'Animate image')}</button></div>{animationJob?.status === 'FAILED' && <small className="scene-animation-error">Animation failed: {animationJob.error || animationJob.stage}</small>}</div><small>{Math.round(scene.duration || 0)} sec · {clip ? 'Motion clip attached; regenerating the still will detach it' : 'Still image ready to animate'}</small></div></article>;
           })}</div> : <div className="storyboard-empty"><div className="empty-frame">16:9</div><h3>Name a passage. Sextant handles the rest.</h3><p>Motion mode plans the whole passage as one continuous sequence, gives every scene a visible action, and carries each scene's final frame into the next shot.</p></div>}
         </section>
 

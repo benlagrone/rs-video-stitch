@@ -51,8 +51,10 @@ class BibleWorkflowTest(TestCase):
         prompt = scenes[0]["timeline"][0]["prompt"]
         self.assertIn("Art direction: Baroque", prompt)
         self.assertIn("chiaroscuro", prompt)
-        self.assertIn("unmistakably masculine, mature-to-elderly", prompt)
-        self.assertIn("full silver-white beard", prompt)
+        self.assertIn("Genesis 1 scenery-first composition", prompt)
+        self.assertIn("Do not depict God as a human figure", prompt)
+        self.assertIn("no pair of men", prompt)
+        self.assertNotIn("full silver-white beard", prompt)
 
     def test_fetch_and_build_storyboard_preserves_each_verse(self):
         session = mock.Mock()
@@ -74,6 +76,17 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual([scene["title"] for scene in scenes], ["John 3:16", "John 3:17"])
         self.assertEqual(scenes[0]["VO"], "For God so loved the world.")
         self.assertIn("no modern objects", scenes[0]["timeline"][0]["prompt"])
+
+    def test_visible_god_passage_allows_one_consistent_masculine_figure(self):
+        prompt = bible_workflow._scene_prompt(
+            "Genesis 18:1",
+            "And the LORD appeared unto him in the plains of Mamre.",
+            "baroque",
+        )
+
+        self.assertIn("exactly one divine figure", prompt)
+        self.assertIn("unmistakably masculine, mature-to-elderly", prompt)
+        self.assertIn("never a pair or duplicate", prompt)
 
     def test_motion_storyboard_has_visible_actions_and_locked_scene_handoffs(self):
         session = mock.Mock()
@@ -131,7 +144,8 @@ class BibleWorkflowTest(TestCase):
         self.assertTrue(call.args[0].endswith("/api/generate"))
         self.assertEqual(call.kwargs["json"]["model"], bible_workflow.OLLAMA_MODEL)
         self.assertIn("exactly one shot per supplied verse", call.kwargs["json"]["prompt"])
-        self.assertIn("Locked God character design", call.kwargs["json"]["prompt"])
+        self.assertIn("Genesis 1 scenery-first composition", call.kwargs["json"]["prompt"])
+        self.assertNotIn("full silver-white beard", call.kwargs["json"]["prompt"])
         self.assertEqual(call.kwargs["json"]["format"], "json")
 
     def test_generate_still_writes_first_image(self):
@@ -227,7 +241,8 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("Genesis 1", prompt)
         self.assertIn("Medieval Illuminated Manuscript", prompt)
         self.assertIn("brokerage branding", prompt)
-        self.assertIn("Locked God character design", prompt)
+        self.assertIn("Genesis 1 scenery-first composition", prompt)
+        self.assertNotIn("full silver-white beard", prompt)
         self.assertIn("Primordial creation", prompt)
         self.assertIn("no people, animals, buildings", prompt)
         self.assertIn("gold-leaf accents", prompt)
@@ -381,8 +396,45 @@ class BibleWorkflowTest(TestCase):
         self.assertTrue(saved_document["scenes"][0]["motionPrompt"].startswith("Light expands across the water."))
         self.assertNotIn("Locked God character design", saved_document["scenes"][0]["motionPrompt"])
         motion_prompt = generate_motion.call_args.kwargs["prompt"]
-        self.assertIn("Locked God character design", motion_prompt)
+        self.assertIn("Genesis 1 scenery-first composition", motion_prompt)
+        self.assertNotIn("full silver-white beard", motion_prompt)
         self.assertIn("young man representing God", generate_motion.call_args.kwargs["negative_prompt"])
+
+    def test_regenerate_scene_still_rewrites_prompt_and_detaches_stale_motion(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)", "visualStyle": "byzantine-iconography"},
+            "scenes": [{
+                "title": "Genesis 1:3",
+                "VO": "And God said, Let there be light: and there was light.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png", "video": "scene_001.mp4", "prompt": "two old men"}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(
+            bible_workflow, "read_project_state", return_value={"title": "Genesis 1 (KJV)", "visualStyle": "byzantine-iconography"}
+        ), mock.patch.object(bible_workflow, "_generate_still") as generate_still, mock.patch.object(
+            bible_workflow, "save_scenes"
+        ) as save_scenes, mock.patch.object(bible_workflow, "save_project_state") as save_state:
+            input_dir = Path(tmp) / "input"
+            input_dir.mkdir(parents=True)
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+            result = bible_workflow.regenerate_bible_scene_stills(
+                "bible-test",
+                [1],
+                progress=mock.Mock(),
+                log=mock.Mock(),
+            )
+
+        self.assertEqual(result.name, "scene_001.png")
+        generated_prompt = generate_still.call_args.args[0]
+        self.assertIn("Genesis 1 scenery-first composition", generated_prompt)
+        self.assertIn("Do not depict God as a human figure", generated_prompt)
+        self.assertIn("two elderly men", generate_still.call_args.kwargs["negative_extra"])
+        saved_document = json.loads(save_scenes.call_args.args[1])
+        self.assertNotIn("video", saved_document["scenes"][0]["timeline"][0])
+        self.assertEqual(save_state.call_args.args[1]["characterDesign"]["god"]["version"], 2)
 
     def test_generate_motion_submits_comfyui_workflow_and_downloads_artifact(self):
         session = mock.Mock()

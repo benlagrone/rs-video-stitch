@@ -94,6 +94,23 @@ class SceneAnimationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["queuedCount"], 1)
         self.assertEqual(result["skippedSceneIndexes"], [])
 
+    async def test_regenerate_all_stills_queues_one_ordered_batch(self):
+        database = _Database()
+        document = {"scenes": [{"title": "Genesis 1:1"}, {"title": "Genesis 1:2"}]}
+        scenes_path = mock.MagicMock()
+        scenes_path.exists.return_value = True
+        scenes_path.read_text.return_value = __import__("json").dumps(document)
+        with mock.patch.object(api, "p_input") as project_input:
+            project_input.return_value.__truediv__.return_value = scenes_path
+            result = await api.regenerate_all_scene_stills("bible-genesis-1", db=database)
+
+        queued_job = next(value for value in database.added if hasattr(value, "payload"))
+        self.assertEqual(result["status"], "QUEUED")
+        self.assertEqual(result["sceneIndexes"], [1, 2])
+        self.assertEqual(queued_job.payload["workflow"], "bible-scene-stills")
+        self.assertEqual(queued_job.payload["sceneIndexes"], [1, 2])
+        self.assertTrue(database.committed)
+
 
 if __name__ == "__main__":
     unittest.main()

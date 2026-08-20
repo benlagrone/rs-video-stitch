@@ -9,7 +9,12 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models import Artifact, Job
 from app.renderer import render_project
-from app.bible_workflow import animate_bible_scene, generate_bible_title_card, prepare_bible_project
+from app.bible_workflow import (
+    animate_bible_scene,
+    generate_bible_title_card,
+    prepare_bible_project,
+    regenerate_bible_scene_stills,
+)
 from app.storage import ROOT as STORAGE_ROOT, job_log_path, p_input
 
 POLL_INTERVAL = 1.0
@@ -77,12 +82,20 @@ def loop(stop_event: Event | None = None) -> None:
             try:
                 is_bible_video = payload.get("workflow") == "bible-video"
                 is_scene_animation = payload.get("workflow") == "scene-animation"
+                is_scene_stills = payload.get("workflow") == "bible-scene-stills"
                 is_bible_title_card = payload.get("workflow") == "bible-title-card"
                 if is_scene_animation:
                     final_path = animate_bible_scene(
                         job.project_id,
                         int(payload.get("sceneIndex") or 0),
                         str(payload.get("prompt") or ""),
+                        progress=progress,
+                        log=log,
+                    )
+                elif is_scene_stills:
+                    final_path = regenerate_bible_scene_stills(
+                        job.project_id,
+                        [int(index) for index in (payload.get("sceneIndexes") or [])] or None,
                         progress=progress,
                         log=log,
                     )
@@ -141,7 +154,12 @@ def loop(stop_event: Event | None = None) -> None:
                     project_id=job.project_id,
                     job_id=job.id,
                     path=str(rel_path),
-                    kind="motion" if is_scene_animation else ("title-card" if is_bible_title_card and not payload.get("renderVideo", False) else "video"),
+                    kind=(
+                        "motion" if is_scene_animation
+                        else "still-image" if is_scene_stills
+                        else "title-card" if is_bible_title_card and not payload.get("renderVideo", False)
+                        else "video"
+                    ),
                     size=size,
                 )
                 session.add(artifact)

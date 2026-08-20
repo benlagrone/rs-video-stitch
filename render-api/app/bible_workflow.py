@@ -45,11 +45,11 @@ BIBLE_CAPTION_STYLE = {
 }
 GOD_CHARACTER_DESIGN = {
     "id": "god-masculine-elder",
-    "version": 1,
+    "version": 2,
     "locked": True,
     "gender": "masculine",
     "age": "mature-to-elderly",
-    "summary": "Masculine, mature-to-elderly, never feminine, never young",
+    "summary": "Scenery-first; if God is shown, masculine and mature, never feminine, young, or duplicated",
     "positiveAnchor": (
         "When God is visibly represented, He is always the same unmistakably masculine, mature-to-elderly "
         "adult male divine figure: a mature weathered masculine face, broad brow, deep-set eyes, long "
@@ -61,7 +61,8 @@ GOD_CHARACTER_DESIGN = {
     "negativeAnchor": (
         "God as a woman, feminine God, female deity representing God, goddess representing God, feminine face "
         "or body for God, youthful God, young man representing God, adolescent God, boy deity, child God, "
-        "clean-shaven youthful God, gender change for God, age regression for God"
+        "clean-shaven youthful God, gender change for God, age regression for God, duplicate God figure, "
+        "two Gods, twin deity figures, multiple old bearded men representing God"
     ),
 }
 
@@ -130,6 +131,42 @@ def _verse_reference(verse: dict[str, Any], fallback: str) -> str:
     return f"{book} {chapter}:{number}" if book and chapter and number else fallback
 
 
+def _god_portrayal_instruction(reference: str, verse: str) -> str:
+    context = f"{reference} {verse}".lower()
+    if re.match(r"^genesis\s+1(?::|\b)", reference.strip(), flags=re.IGNORECASE):
+        return (
+            "Genesis 1 scenery-first composition: make the physical creation event described by this verse the clear "
+            "subject—cosmic space, light, waters, sky, land, vegetation, celestial bodies, animals, or the humans named "
+            "in the verse. Do not depict God as a human figure in this creation scene. Convey divine agency through the "
+            "visible transformation, ordered movement, light, scale, wind, and atmosphere. No portrait of elderly men, "
+            "no pair of men, and no duplicated divine figure."
+        )
+    visibly_embodied = any(
+        cue in context
+        for cue in (
+            "appeared unto", "appeared to", "the lord appeared", "stood before", "walked in", "ancient of days",
+            "saw the lord", "face to face", "upon the throne", "seated on the throne",
+        )
+    )
+    if visibly_embodied:
+        return (
+            f"A visible depiction of God is supported in this scene. Show exactly one divine figure, never a pair or "
+            f"duplicate. {GOD_CHARACTER_ANCHOR}"
+        )
+    return (
+        "Make the verse's place, event, people, and visible action the primary subject. Do not add a human figure merely "
+        "because the text names God. If a visible depiction of God is artistically appropriate, show exactly one figure, "
+        f"never a pair or duplicate, and apply this design: {GOD_CHARACTER_ANCHOR}"
+    )
+
+
+def _scene_negative_prompt(reference: str) -> str:
+    negative = "duplicate deity, two Gods, twin divine figures, multiple old bearded men, repeated character portrait"
+    if re.match(r"^genesis\s+1(?::|\b)", reference.strip(), flags=re.IGNORECASE):
+        negative += ", anthropomorphic God, human deity, portrait of God, elderly deity, two elderly men"
+    return negative
+
+
 def _scene_prompt(reference: str, verse: str, visual_style: str, opening_state: str = "") -> str:
     style = resolve_art_style(visual_style)
     opening = f" Opening frame: {opening_state}." if opening_state else ""
@@ -137,7 +174,7 @@ def _scene_prompt(reference: str, verse: str, visual_style: str, opening_state: 
         f"Biblically and historically grounded visual interpretation of {reference}: {verse}. "
         f"{opening} "
         f"Art direction: {style['name']}. {style['prompt']}. "
-        f"Locked God character design: {GOD_CHARACTER_ANCHOR} "
+        f"Composition policy: {_god_portrayal_instruction(reference, verse)} "
         "Ancient Near Eastern setting appropriate to the passage, natural human anatomy, "
         "modest composition, expressive but restrained emotion, cinematic 16:9 framing, coherent lighting, "
         "no text, no lettering, no watermark, no modern objects."
@@ -155,7 +192,8 @@ def _motion_plan_prompt(canonical: str, verses: list[dict[str, str]], visual_sty
         "tableau, mood, symbol, or generic camera drift. The endState of shot N must be the literal startState of "
         "shot N+1. Keep recurring people, faces, age, clothing, geography, architecture, light direction, weather, "
         "props, and screen direction consistent unless the scripture requires a visible transformation. "
-        f"Locked God character design for every shot: {GOD_CHARACTER_ANCHOR} "
+        "Composition policy for the entire plan: "
+        f"{_god_portrayal_instruction(canonical, ' '.join(verse['text'] for verse in verses))} "
         "When time or place changes, describe an on-camera transition that carries the viewer into the new state. "
         "Do not alter, summarize, or add to the scripture. Avoid text, lettering, modern objects, scene cuts inside a shot, "
         "and abstract theological imagery. Make each action achievable in about five seconds.\n\n"
@@ -292,7 +330,7 @@ def _safe_fallback_animation_prompt(scene: dict[str, Any]) -> str:
         "visible subject, garment, face, structure, decorative element, palette, and light direction consistent. Motion "
         "continues throughout the five-second shot and settles into a clear final composition that can flow directly into "
         "the following scene without introducing anything new. "
-        f"Locked God character design: {GOD_CHARACTER_ANCHOR}"
+        f"Composition policy: {_god_portrayal_instruction(title, verse)}"
     )
 
 
@@ -389,9 +427,10 @@ def animate_bible_scene(
         progress("WRITING_MOTION_PROMPT", 0.12)
         log(f"Generating a continuity-safe animation prompt for scene {scene_index}")
         resolved_prompt = generate_scene_animation_prompt(project_id, scene_index)
-    provider_prompt = resolved_prompt
-    if GOD_CHARACTER_ANCHOR not in provider_prompt:
-        provider_prompt = f"{provider_prompt} Locked God character design: {GOD_CHARACTER_ANCHOR}"
+    provider_prompt = (
+        f"{resolved_prompt} Composition policy: "
+        f"{_god_portrayal_instruction(str(scene.get('title') or ''), str(scene.get('VO') or scene.get('description') or ''))}"
+    )
 
     progress("MOTION_GENERATION", 0.25)
     log(f"Animating scene {scene_index} from {still_path.name}")
@@ -401,7 +440,8 @@ def animate_bible_scene(
         prompt=provider_prompt,
         negative_prompt=(
             "static tableau, frozen pose, slideshow, no movement, scene cut, jump cut, jitter, flicker, "
-            f"face morph, anatomy distortion, identity change, clothing change, text, watermark, {GOD_CHARACTER_NEGATIVE}"
+            f"face morph, anatomy distortion, identity change, clothing change, text, watermark, "
+            f"{_scene_negative_prompt(str(scene.get('title') or ''))}, {GOD_CHARACTER_NEGATIVE}"
         ),
     )
     timeline = scene.setdefault("timeline", [{"image": still_path.name}])
@@ -511,7 +551,7 @@ def _title_card_prompt(canonical: str, scenes: list[dict[str, Any]], visual_styl
         f"Create a dedicated 16:9 Bible video title-card background for {canonical}. "
         f"Primary visual subject: {visual_subject} Art direction: {style['name']}. {style['prompt']}. "
         f"{style_requirement}"
-        f"Locked God character design: {GOD_CHARACTER_ANCHOR} "
+        f"Composition policy: {_god_portrayal_instruction(canonical, subject)} "
         "Compose a reverent, visually specific interpretation of the passage with its principal subject and setting. "
         "Keep the middle third open, calm, and lower contrast for a separately rendered title; place meaningful imagery around the perimeter. "
         "No words, letters, captions, logos, brokerage branding, real-estate marks, branded frames, badges, watermarks, or modern objects."
@@ -579,6 +619,57 @@ def generate_bible_title_card(
     return destination
 
 
+def regenerate_bible_scene_stills(
+    project_id: str,
+    scene_indexes: list[int] | None = None,
+    *,
+    progress: Progress,
+    log: Log,
+) -> Path:
+    scenes_path = p_input(project_id) / "scenes.json"
+    if not scenes_path.exists():
+        raise FileNotFoundError(f"Project {project_id} has no scenes.json")
+    document = json.loads(scenes_path.read_text(encoding="utf-8"))
+    scenes = document.get("scenes") or []
+    if not scenes:
+        raise ValueError(f"Project {project_id} has no Bible scenes")
+    indexes = scene_indexes or list(range(1, len(scenes) + 1))
+    if any(index < 1 or index > len(scenes) for index in indexes):
+        raise IndexError("One or more Bible scene indexes do not exist")
+
+    state = read_project_state(project_id) or {}
+    visual_style = str(state.get("visualStyle") or (document.get("info") or {}).get("visualStyle") or "cinematic-natural-light")
+    last_path: Path | None = None
+    for position, scene_index in enumerate(indexes, start=1):
+        scene = scenes[scene_index - 1]
+        reference = str(scene.get("title") or f"Scene {scene_index}")
+        verse = str(scene.get("VO") or scene.get("description") or "")
+        timeline = scene.setdefault("timeline", [{}])
+        if not timeline:
+            timeline.append({})
+        prompt = _scene_prompt(reference, verse, visual_style, str(scene.get("startState") or ""))
+        image_name = str((scene.get("images") or [f"scene_{scene_index:03d}.png"])[0])
+        destination = p_input(project_id) / "images" / Path(image_name).name
+        log(f"Regenerating scenery-first still {position}/{len(indexes)} for {reference}")
+        _generate_still(prompt, destination, negative_extra=_scene_negative_prompt(reference))
+        timeline[0]["image"] = destination.name
+        timeline[0]["prompt"] = prompt
+        timeline[0].pop("video", None)
+        scene["imageUpdatedAt"] = time.time()
+        last_path = destination
+        progress("IMAGE_REGENERATION", 0.05 + (position / len(indexes)) * 0.9)
+
+    project_name = str((document.get("info") or {}).get("name") or state.get("title") or project_id)
+    save_scenes(project_id, json.dumps(document, indent=2), project_name=project_name)
+    state["hasMotionScenes"] = any(
+        bool(((scene.get("timeline") or [{}])[0]).get("video")) for scene in scenes
+    )
+    state["characterDesign"] = {"god": dict(GOD_CHARACTER_DESIGN)}
+    state["updatedAt"] = time.time()
+    save_project_state(project_id, state, project_name=project_name)
+    return last_path or scenes_path
+
+
 def prepare_bible_project(
     project_id: str,
     payload: dict[str, Any],
@@ -629,7 +720,11 @@ def prepare_bible_project(
             extract_last_frame(previous_motion_path, still_path)
         else:
             log(f"Generating still {index}/{len(scenes)} for {scene['title']}")
-            _generate_still(timeline["prompt"], still_path)
+            _generate_still(
+                timeline["prompt"],
+                still_path,
+                negative_extra=_scene_negative_prompt(str(scene.get("title") or "")),
+            )
         if payload.get("mode") == "motion":
             clip_name = f"scene_{index:03d}.mp4"
             clip_path = motion_dir / clip_name
@@ -637,10 +732,14 @@ def prepare_bible_project(
             generate_motion_clip(
                 still_path,
                 clip_path,
-                prompt=f"{scene['motionPrompt']} Locked God character design: {GOD_CHARACTER_ANCHOR}",
+                prompt=(
+                    f"{scene['motionPrompt']} Composition policy: "
+                    f"{_god_portrayal_instruction(str(scene.get('title') or ''), str(scene.get('VO') or ''))}"
+                ),
                 negative_prompt=(
                     "static tableau, frozen pose, slideshow, no movement, scene cut, jump cut, jitter, flicker, "
-                    f"face morph, anatomy distortion, identity change, clothing change, text, watermark, {GOD_CHARACTER_NEGATIVE}"
+                    f"face morph, anatomy distortion, identity change, clothing change, text, watermark, "
+                    f"{_scene_negative_prompt(str(scene.get('title') or ''))}, {GOD_CHARACTER_NEGATIVE}"
                 ),
             )
             timeline["video"] = clip_name
