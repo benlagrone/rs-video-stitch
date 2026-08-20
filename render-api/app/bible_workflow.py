@@ -311,6 +311,8 @@ def _scene_animation_writer_prompt(
 
     timeline = scene.get("timeline") or [{}]
     still_description = re.sub(r"\s+", " ", str(timeline[0].get("prompt") or "")).strip()
+    still_description = still_description.split("Locked God character design:", 1)[0].strip()
+    existing_prompt = value(scene, "motionPrompt").split("Locked God character design:", 1)[0].strip()
     return (
         "Write one production-ready image-to-video animation prompt for exactly the current Bible scene below. "
         "Make this scene unmistakably different from adjacent scenes. Ground the action in this verse and in objects or "
@@ -318,15 +320,16 @@ def _scene_animation_writer_prompt(
         "current verse and still specifically support it. Describe a concrete opening state, one continuous visible action "
         "with purposeful subject movement, a specific camera move, and an ending state that can flow into the next scene. "
         "Preserve faces, bodies, garments, architecture, palette, composition, and light direction. Do not add new people "
-        "or objects, cut to another shot, morph anatomy, or render text. Use 70 to 120 words in one paragraph. Return only "
+        "or objects, cut to another shot, morph anatomy, or render text. Use 60 to 90 words in one paragraph. Return only "
         "the animation prompt, without a heading, quotation marks, analysis, the scripture text verbatim, or the locked "
-        "character-policy wording. Apply the character policy silently instead of repeating it.\n\n"
+        "character-policy wording. The renderer enforces character design separately: do not describe God's age, gender, "
+        "hair, beard, face, body, garments, or character-policy traits in this prompt.\n\n"
         f"Passage: {value(document.get('info') or {}, 'passage') or value(document.get('info') or {}, 'name')}\n"
         f"Current scene: {scene_index} of {len(scenes)}\n"
         f"Reference: {value(scene, 'title')}\n"
         f"Verse meaning and event: {value(scene, 'VO') or value(scene, 'description')}\n"
         f"Still-image description: {still_description}\n"
-        f"Existing prompt to replace, not copy: {value(scene, 'motionPrompt') or 'none'}\n"
+        f"Existing prompt to replace, not copy: {existing_prompt or 'none'}\n"
         f"Planned start: {value(scene, 'startState') or 'infer only from the existing still'}\n"
         f"Planned action: {value(scene, 'action') or 'derive one verse-specific visible action'}\n"
         f"Planned ending: {value(scene, 'endState') or 'settle into a state compatible with the next scene'}\n"
@@ -335,8 +338,7 @@ def _scene_animation_writer_prompt(
         f"Planned transition: {value(scene, 'transition') or 'end in visual continuity with the next scene'}\n"
         f"Previous scene ending: {value(previous_scene, 'endState') or value(previous_scene, 'VO') or 'opening scene'}\n"
         f"Next scene event: {value(next_scene, 'VO') or value(next_scene, 'description') or 'final scene'}\n"
-        f"Visual style: {resolve_art_style(visual_style)['name']}\n"
-        f"Locked God character design: {GOD_CHARACTER_ANCHOR}"
+        f"Visual style: {resolve_art_style(visual_style)['name']}"
     )
 
 
@@ -365,6 +367,10 @@ def generate_scene_animation_prompt(project_id: str, scene_index: int, *, sessio
     generated = re.sub(r"\s+", " ", generated).strip()
     if not generated:
         raise RuntimeError("Fortress animation prompt writer returned an empty response")
+    if generated[-1] not in ".!?":
+        complete_sentences = re.match(r"^(.+[.!?])(?:\s+[^.!?]*)?$", generated)
+        if complete_sentences:
+            generated = complete_sentences.group(1).strip()
     title = re.sub(r"\s+", " ", str(scene.get("title") or f"Scene {scene_index}")).strip()
     return f"Scene {scene_index} — {title}. {generated}"
 

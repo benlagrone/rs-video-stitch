@@ -277,6 +277,7 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("Light travels across the water", writer_input)
         self.assertIn("Slow forward push", writer_input)
         self.assertIn("The horizon glows", writer_input)
+        self.assertNotIn("long silver-white hair", writer_input)
 
     def test_scene_animation_writer_grounds_unplanned_scene_in_verse_and_still(self):
         document = {
@@ -321,7 +322,7 @@ class BibleWorkflowTest(TestCase):
             ],
         }
         session = mock.Mock()
-        session.post.return_value = _Response({"response": "Wind crosses only the dark deep while the camera follows the moving surface toward the first light."})
+        session.post.return_value = _Response({"response": "Wind crosses only the dark deep while the camera follows the moving surface toward the first light. An unfinished sentence that should be removed"})
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
             bible_workflow, "p_input", return_value=Path(tmp) / "input"
         ), mock.patch.object(bible_workflow, "read_project_state", return_value={"visualStyle": "baroque"}):
@@ -333,6 +334,7 @@ class BibleWorkflowTest(TestCase):
 
         self.assertNotEqual(prompt, "Generic old prompt.")
         self.assertTrue(prompt.startswith("Scene 2 — Genesis 1:2."))
+        self.assertTrue(prompt.endswith("first light."))
         writer_input = session.post.call_args.kwargs["json"]["prompt"]
         self.assertIn("Previous scene ending: Light reaches the water.", writer_input)
         self.assertIn("Next scene event: Let there be light.", writer_input)
