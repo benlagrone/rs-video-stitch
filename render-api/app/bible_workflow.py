@@ -71,9 +71,27 @@ GOD_CHARACTER_DESIGN = {
 
 GOD_CHARACTER_ANCHOR = GOD_CHARACTER_DESIGN["positiveAnchor"]
 GOD_CHARACTER_NEGATIVE = GOD_CHARACTER_DESIGN["negativeAnchor"]
+DEFAULT_THEME_INTERPRETATION = (
+    "Follow the scripture text closely. Make each visible subject, action, setting, and transition arise from the "
+    "passage itself; do not impose an unrelated allegory, era, plot, or character role."
+)
 
 Progress = Callable[[str, float], None]
 Log = Callable[[str], None]
+
+
+def _theme_instruction(value: str | None) -> str:
+    cleaned = re.sub(r"\s+", " ", str(value or "")).strip()
+    return cleaned or DEFAULT_THEME_INTERPRETATION
+
+
+def _theme_prompt(value: str | None) -> str:
+    return (
+        f"Theme and interpretation direction: {_theme_instruction(value)} "
+        "Mix this direction with the selected art style and scripture. It may refine mood, symbolism, setting, "
+        "recurring visual motifs, costume, and permitted portrayal details, but it must not contradict the supplied "
+        "scripture or override locked portrayal constraints."
+    )
 
 
 def capability_health(*, session=requests) -> dict[str, Any]:
@@ -243,7 +261,13 @@ def _genesis_one_visual_subject(reference: str) -> str:
     return subjects.get(verse_number, "The physical creation of the cosmos unfolding through distinct natural forms")
 
 
-def _scene_prompt(reference: str, verse: str, visual_style: str, opening_state: str = "") -> str:
+def _scene_prompt(
+    reference: str,
+    verse: str,
+    visual_style: str,
+    opening_state: str = "",
+    theme_interpretation: str = "",
+) -> str:
     style = resolve_art_style(visual_style)
     opening = f" Opening frame: {opening_state}." if opening_state else ""
     is_genesis_one = bool(re.match(r"^genesis\s+1(?::|\b)", reference.strip(), flags=re.IGNORECASE))
@@ -264,6 +288,7 @@ def _scene_prompt(reference: str, verse: str, visual_style: str, opening_state: 
             f"Primary visible subject and action: {_genesis_one_visual_subject(reference)}."
             f"{opening} "
             f"Art treatment: {style_name}. {style_direction}. "
+            f"{_theme_prompt(theme_interpretation)} "
             "Creation-era cosmic and natural setting with no civilization; make the physical transformation, scale, "
             "atmosphere, and living world fill the frame. Modest composition, cinematic 16:9 framing, coherent "
             "lighting, no text, no lettering, no watermark, no modern objects."
@@ -275,6 +300,7 @@ def _scene_prompt(reference: str, verse: str, visual_style: str, opening_state: 
         f"Biblically and historically grounded visual interpretation of {reference}: {verse}. "
         f"{opening} "
         f"Art direction: {style['name']}. {style_direction}. "
+        f"{_theme_prompt(theme_interpretation)} "
         f"Composition policy: {_god_portrayal_instruction(reference, verse)} "
         f"{setting_policy} "
         "modest composition, expressive but restrained emotion, cinematic 16:9 framing, coherent lighting, "
@@ -282,7 +308,12 @@ def _scene_prompt(reference: str, verse: str, visual_style: str, opening_state: 
     )
 
 
-def _motion_plan_prompt(canonical: str, verses: list[dict[str, str]], visual_style: str) -> str:
+def _motion_plan_prompt(
+    canonical: str,
+    verses: list[dict[str, str]],
+    visual_style: str,
+    theme_interpretation: str = "",
+) -> str:
     numbered_verses = "\n".join(
         f"{index}. {verse['reference']} — {verse['text']}"
         for index, verse in enumerate(verses, start=1)
@@ -295,6 +326,7 @@ def _motion_plan_prompt(canonical: str, verses: list[dict[str, str]], visual_sty
         "props, and screen direction consistent unless the scripture requires a visible transformation. "
         "Composition policy for the entire plan: "
         f"{_god_portrayal_instruction(canonical, ' '.join(verse['text'] for verse in verses))} "
+        f"{_theme_prompt(theme_interpretation)} "
         "When time or place changes, describe an on-camera transition that carries the viewer into the new state. "
         "Do not alter, summarize, or add to the scripture. Avoid text, lettering, modern objects, scene cuts inside a shot, "
         "and abstract theological imagery. Make each action achievable in about five seconds.\n\n"
@@ -343,6 +375,7 @@ def plan_motion_sequence(
     canonical: str,
     verses: list[dict[str, str]],
     visual_style: str,
+    theme_interpretation: str = "",
     *,
     session=requests,
 ) -> list[dict[str, str]]:
@@ -350,7 +383,7 @@ def plan_motion_sequence(
         f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
         json={
             "model": OLLAMA_MODEL,
-            "prompt": _motion_plan_prompt(canonical, verses, visual_style),
+            "prompt": _motion_plan_prompt(canonical, verses, visual_style, theme_interpretation),
             "stream": False,
             "format": "json",
             "options": {"temperature": 0.25},
@@ -365,13 +398,14 @@ def plan_motion_sequence(
     return _parse_motion_plan(raw, len(verses))
 
 
-def _motion_prompt(scene: dict[str, Any], visual_style: str) -> str:
+def _motion_prompt(scene: dict[str, Any], visual_style: str, theme_interpretation: str = "") -> str:
     style = resolve_art_style(visual_style)
     return (
         f"One continuous cinematic shot in {style['name']} style. Begin exactly with: {scene['startState']}. "
         f"The visible action is: {scene['action']}. End exactly with: {scene['endState']}. "
         f"Camera movement: {scene['camera']}. Preserve throughout: {scene['continuity']}. "
         f"Connection to the next shot: {scene['transition']}. {style['prompt']}. "
+        f"{_theme_prompt(theme_interpretation)} "
         "Natural body mechanics, purposeful movement throughout the shot, coherent lighting, no cuts."
     )
 
@@ -440,6 +474,7 @@ def _scene_animation_writer_prompt(
     scene: dict[str, Any],
     scene_index: int,
     visual_style: str,
+    theme_interpretation: str = "",
 ) -> str:
     scenes = document.get("scenes") or []
     previous_scene = scenes[scene_index - 2] if scene_index > 1 else {}
@@ -480,7 +515,8 @@ def _scene_animation_writer_prompt(
         f"Planned transition: {value(scene, 'transition') or 'end in visual continuity with the next scene'}\n"
         f"Previous scene ending: {value(previous_scene, 'endState') or value(previous_scene, 'VO') or 'opening scene'}\n"
         f"Next scene event: {value(next_scene, 'VO') or value(next_scene, 'description') or 'final scene'}\n"
-        f"Visual style: {resolve_art_style(visual_style)['name']}"
+        f"Visual style: {resolve_art_style(visual_style)['name']}\n"
+        f"{_theme_prompt(theme_interpretation)}"
     )
 
 
@@ -488,11 +524,16 @@ def generate_scene_animation_prompt(project_id: str, scene_index: int, *, sessio
     document, scene, _, _ = scene_animation_context(project_id, scene_index)
     state = read_project_state(project_id) or {}
     visual_style = str(state.get("visualStyle") or (document.get("info") or {}).get("visualStyle") or "cinematic natural light")
+    theme_interpretation = str(
+        state.get("themeInterpretation") or (document.get("info") or {}).get("themeInterpretation") or ""
+    )
     response = session.post(
         f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
         json={
             "model": OLLAMA_PROMPT_MODEL,
-            "prompt": _scene_animation_writer_prompt(document, scene, scene_index, visual_style),
+            "prompt": _scene_animation_writer_prompt(
+                document, scene, scene_index, visual_style, theme_interpretation
+            ),
             "stream": False,
             "options": {"temperature": 0.35, "num_predict": 160},
         },
@@ -634,7 +675,12 @@ def build_storyboard(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]
         text = re.sub(r"\s+", " ", str(verse.get("text") or "")).strip()
         verses.append({"reference": _verse_reference(verse, canonical), "text": text})
     motion_plan = (
-        plan_motion_sequence(canonical, verses, payload["visualStyle"])
+        plan_motion_sequence(
+            canonical,
+            verses,
+            payload["visualStyle"],
+            str(payload.get("themeInterpretation") or ""),
+        )
         if payload.get("mode") == "motion"
         else []
     )
@@ -653,13 +699,21 @@ def build_storyboard(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]
                 {
                     "image": f"scene_{index:03d}.png",
                     "header": reference,
-                    "prompt": _scene_prompt(reference, text, payload["visualStyle"], plan.get("startState", "")),
+                    "prompt": _scene_prompt(
+                        reference,
+                        text,
+                        payload["visualStyle"],
+                        plan.get("startState", ""),
+                        str(payload.get("themeInterpretation") or ""),
+                    ),
                 }
             ],
         }
         if plan:
             scene.update(plan)
-            scene["motionPrompt"] = _motion_prompt(scene, payload["visualStyle"])
+            scene["motionPrompt"] = _motion_prompt(
+                scene, payload["visualStyle"], str(payload.get("themeInterpretation") or "")
+            )
         scenes.append(scene)
     return canonical, scenes
 
@@ -707,7 +761,12 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
     }
 
 
-def _title_card_prompt(canonical: str, scenes: list[dict[str, Any]], visual_style: str) -> str:
+def _title_card_prompt(
+    canonical: str,
+    scenes: list[dict[str, Any]],
+    visual_style: str,
+    theme_interpretation: str = "",
+) -> str:
     style = resolve_art_style(visual_style)
     subject = " ".join(str(scene.get("VO") or scene.get("description") or "") for scene in scenes[:6])
     subject = re.sub(r"\s+", " ", subject).strip()[:1200]
@@ -727,6 +786,7 @@ def _title_card_prompt(canonical: str, scenes: list[dict[str, Any]], visual_styl
         )
     return (
         f"Create a dedicated 16:9 Bible video title-card background for {canonical}. "
+        f"{_theme_prompt(theme_interpretation)} "
         f"Primary visual subject: {visual_subject} Art direction: {style['name']}. {style['prompt']}. "
         f"{style_requirement}"
         f"Composition policy: {_god_portrayal_instruction(canonical, subject)} "
@@ -765,11 +825,12 @@ def generate_bible_title_card(
     state = read_project_state(project_id) or {}
     canonical = str(state.get("passage") or (document.get("info") or {}).get("passage") or state.get("title") or project_id)
     visual_style = str(visual_style or state.get("visualStyle") or "cinematic-natural-light")
+    theme_interpretation = str(state.get("themeInterpretation") or "")
     destination = p_input(project_id) / "leader" / "bible-title-card.png"
     progress("TITLE_CARD_GENERATION", 0.2)
     log(f"Generating passage-specific {visual_style} title card for {canonical}")
     _generate_still(
-        _title_card_prompt(canonical, scenes, visual_style),
+        _title_card_prompt(canonical, scenes, visual_style, theme_interpretation),
         destination,
         negative_extra=_title_card_negative_prompt(canonical, visual_style),
     )
@@ -817,6 +878,9 @@ def regenerate_bible_scene_stills(
 
     state = read_project_state(project_id) or {}
     visual_style = str(state.get("visualStyle") or (document.get("info") or {}).get("visualStyle") or "cinematic-natural-light")
+    theme_interpretation = str(
+        state.get("themeInterpretation") or (document.get("info") or {}).get("themeInterpretation") or ""
+    )
     last_path: Path | None = None
     for position, scene_index in enumerate(indexes, start=1):
         scene = scenes[scene_index - 1]
@@ -825,7 +889,13 @@ def regenerate_bible_scene_stills(
         timeline = scene.setdefault("timeline", [{}])
         if not timeline:
             timeline.append({})
-        prompt = _scene_prompt(reference, verse, visual_style, str(scene.get("startState") or ""))
+        prompt = _scene_prompt(
+            reference,
+            verse,
+            visual_style,
+            str(scene.get("startState") or ""),
+            theme_interpretation,
+        )
         image_name = str((scene.get("images") or [f"scene_{scene_index:03d}.png"])[0])
         destination = p_input(project_id) / "images" / Path(image_name).name
         if destination.exists():
@@ -878,7 +948,12 @@ def prepare_bible_project(
     title_card_path = leader_dir / title_card_name
     log(f"Generating passage-specific title card for {canonical}")
     _generate_still(
-        _title_card_prompt(canonical, scenes, str(payload.get("visualStyle") or "cinematic-natural-light")),
+        _title_card_prompt(
+            canonical,
+            scenes,
+            str(payload.get("visualStyle") or "cinematic-natural-light"),
+            str(payload.get("themeInterpretation") or ""),
+        ),
         title_card_path,
         negative_extra=_title_card_negative_prompt(canonical, str(payload.get("visualStyle") or "cinematic-natural-light")),
     )
@@ -937,6 +1012,8 @@ def prepare_bible_project(
             "passage": canonical,
             "mode": payload.get("mode", "still"),
             "characterDesignVersion": GOD_CHARACTER_DESIGN["version"],
+            "themeInterpretation": str(payload.get("themeInterpretation") or ""),
+            "resolvedThemeInterpretation": _theme_instruction(str(payload.get("themeInterpretation") or "")),
         },
         "vid": {
             "voice": payload.get("voice"),
@@ -957,6 +1034,8 @@ def prepare_bible_project(
             "translation": payload.get("translation", "kjv"),
             "mode": payload.get("mode", "still"),
             "visualStyle": payload.get("visualStyle"),
+            "themeInterpretation": str(payload.get("themeInterpretation") or ""),
+            "resolvedThemeInterpretation": _theme_instruction(str(payload.get("themeInterpretation") or "")),
             "voice": payload.get("voice"),
             "language": payload.get("language", "en-US"),
             "ttsApi": payload.get("ttsApi", "voice-gateway"),

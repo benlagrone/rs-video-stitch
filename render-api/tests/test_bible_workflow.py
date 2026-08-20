@@ -125,6 +125,30 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("unmistakably masculine, mature-to-elderly", prompt)
         self.assertIn("never a pair or duplicate", prompt)
 
+    def test_theme_interpretation_is_mixed_with_style_without_overriding_locked_portrayal(self):
+        theme = "A winter pilgrimage about patient hope, with indigo cloth and a recurring lantern motif."
+        prompt = bible_workflow._scene_prompt(
+            "Genesis 18:1",
+            "And the LORD appeared unto him in the plains of Mamre.",
+            "baroque",
+            theme_interpretation=theme,
+        )
+
+        self.assertIn(theme, prompt)
+        self.assertIn("Mix this direction with the selected art style and scripture", prompt)
+        self.assertIn("must not contradict the supplied scripture or override locked portrayal constraints", prompt)
+        self.assertIn("unmistakably masculine, mature-to-elderly", prompt)
+        self.assertIn("never a pair or duplicate", prompt)
+
+    def test_blank_theme_defaults_to_following_scripture_text(self):
+        prompt = bible_workflow._scene_prompt(
+            "John 2:1",
+            "And the third day there was a marriage in Cana of Galilee.",
+            "baroque",
+        )
+
+        self.assertIn(bible_workflow.DEFAULT_THEME_INTERPRETATION, prompt)
+
     def test_motion_storyboard_has_visible_actions_and_locked_scene_handoffs(self):
         session = mock.Mock()
         session.get.return_value = _Response(
@@ -184,6 +208,38 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("Genesis 1 scenery-first composition", call.kwargs["json"]["prompt"])
         self.assertNotIn("full silver-white beard", call.kwargs["json"]["prompt"])
         self.assertEqual(call.kwargs["json"]["format"], "json")
+
+    def test_motion_planner_receives_theme_interpretation(self):
+        session = mock.Mock()
+        session.post.return_value = _Response(
+            {
+                "response": json.dumps(
+                    {
+                        "scenes": [
+                            {
+                                "startState": "A dark sea",
+                                "action": "Light crosses the water",
+                                "endState": "A glowing sea",
+                                "camera": "Push forward",
+                                "continuity": "Same horizon",
+                                "transition": "Follow the glow",
+                            }
+                        ]
+                    }
+                )
+            }
+        )
+        theme = "Treat creation as an emergence from silence, using a recurring warm-gold horizon."
+
+        bible_workflow.plan_motion_sequence(
+            "Genesis 1:1",
+            [{"reference": "Genesis 1:1", "text": "In the beginning."}],
+            "baroque",
+            theme,
+            session=session,
+        )
+
+        self.assertIn(theme, session.post.call_args.kwargs["json"]["prompt"])
 
     def test_generate_still_writes_first_image(self):
         session = mock.Mock()
@@ -259,6 +315,46 @@ class BibleWorkflowTest(TestCase):
         extract.assert_called_once_with(first_clip, second_image)
         self.assertEqual(generate_motion.call_count, 2)
         self.assertEqual(generate_motion.call_args_list[1].args[0], second_image)
+
+    def test_prepare_project_persists_raw_and_resolved_theme(self):
+        scenes = [
+            {
+                "title": "Genesis 1:1",
+                "VO": "In the beginning.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png", "prompt": "First frame"}],
+            }
+        ]
+        theme = "Emphasize awe through immense scale and a warm-gold horizon."
+        payload = {
+            "mode": "still",
+            "translation": "kjv",
+            "visualStyle": "baroque",
+            "themeInterpretation": theme,
+            "renderOptions": {},
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "build_storyboard", return_value=("Genesis 1:1", scenes)
+        ), mock.patch.object(bible_workflow, "ensure_dirs"), mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(bible_workflow, "save_scenes") as save_scenes, mock.patch.object(
+            bible_workflow, "save_project_state"
+        ) as save_project_state, mock.patch.object(bible_workflow, "_generate_still") as generate_still:
+            generate_still.return_value = {
+                "prompt": "generated scene",
+                "negativePrompt": "bad scene",
+                "seed": 101,
+                "model": bible_workflow.STABLE_DIFFUSION_CHECKPOINT,
+            }
+            bible_workflow.prepare_bible_project("bible-theme-test", payload, progress=mock.Mock(), log=mock.Mock())
+
+        saved_document = json.loads(save_scenes.call_args.args[1])
+        saved_state = save_project_state.call_args.args[1]
+        self.assertEqual(saved_document["info"]["themeInterpretation"], theme)
+        self.assertEqual(saved_document["info"]["resolvedThemeInterpretation"], theme)
+        self.assertEqual(saved_state["themeInterpretation"], theme)
+        self.assertEqual(saved_state["resolvedThemeInterpretation"], theme)
+        self.assertIn(theme, generate_still.call_args_list[0].args[0])
 
     def test_regenerated_title_card_uses_saved_passage_and_selected_style(self):
         document = {
@@ -402,6 +498,38 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("Previous scene ending: Light reaches the water.", writer_input)
         self.assertIn("Next scene event: Let there be light.", writer_input)
         self.assertIn("Existing prompt to replace, not copy: Generic old prompt.", writer_input)
+
+    def test_scene_animation_writer_receives_saved_theme(self):
+        theme = "Use a recurring warm-gold horizon to express hope emerging from silence."
+        document = {
+            "info": {"name": "Genesis 1 (KJV)", "passage": "Genesis 1"},
+            "scenes": [
+                {
+                    "title": "Genesis 1:1",
+                    "VO": "In the beginning.",
+                    "images": ["scene_001.png"],
+                    "timeline": [{"image": "scene_001.png", "prompt": "A dark primordial horizon"}],
+                }
+            ],
+        }
+        session = mock.Mock()
+        session.post.return_value = _Response(
+            {"response": "The warm-gold horizon expands while the camera advances through the surrounding darkness."}
+        )
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(
+            bible_workflow,
+            "read_project_state",
+            return_value={"visualStyle": "baroque", "themeInterpretation": theme},
+        ):
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            (input_dir / "images" / "scene_001.png").write_bytes(b"png")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+            bible_workflow.generate_scene_animation_prompt("bible-test", 1, session=session)
+
+        self.assertIn(theme, session.post.call_args.kwargs["json"]["prompt"])
 
     def test_animate_scene_preserves_still_and_attaches_motion_clip(self):
         document = {

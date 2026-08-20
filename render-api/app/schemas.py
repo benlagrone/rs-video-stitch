@@ -163,6 +163,7 @@ class RenderRequest(BaseModel):
 
 class BibleVideoRequest(BaseModel):
     passage: str = Field(min_length=3, max_length=120)
+    themeInterpretation: str = Field(default="", max_length=2000)
     translation: str = Field(default="kjv", min_length=2, max_length=20)
     mode: str = Field(default="still", pattern="^(still|motion)$")
     visualStyle: str = Field(default="cinematic natural light", min_length=3, max_length=160)
