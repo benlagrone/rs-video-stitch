@@ -54,6 +54,8 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("Genesis 1 scenery-first composition", prompt)
         self.assertIn("Do not depict God as a human figure", prompt)
         self.assertIn("no pair of men", prompt)
+        self.assertIn("show no person, face, humanoid, angel, robed figure", prompt)
+        self.assertIn("ignore any style defaults that call for human or symbolic figures", prompt)
         self.assertNotIn("full silver-white beard", prompt)
 
     def test_fetch_and_build_storyboard_preserves_each_verse(self):
@@ -433,6 +435,8 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("Genesis 1 scenery-first composition", generated_prompt)
         self.assertIn("Do not depict God as a human figure", generated_prompt)
         self.assertIn("two elderly men", generate_still.call_args.kwargs["negative_extra"])
+        self.assertIn("female figure", generate_still.call_args.kwargs["negative_extra"])
+        self.assertIn("robed figure", generate_still.call_args.kwargs["negative_extra"])
         saved_document = json.loads(save_scenes.call_args.args[1])
         self.assertNotIn("video", saved_document["scenes"][0]["timeline"][0])
         self.assertTrue(saved_document["scenes"][0]["imageHistory"][0].startswith("history/scene_001-"))

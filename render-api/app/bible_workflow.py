@@ -163,20 +163,36 @@ def _god_portrayal_instruction(reference: str, verse: str) -> str:
 
 def _scene_negative_prompt(reference: str) -> str:
     negative = "duplicate deity, two Gods, twin divine figures, multiple old bearded men, repeated character portrait"
-    if re.match(r"^genesis\s+1(?::|\b)", reference.strip(), flags=re.IGNORECASE):
+    genesis_one = re.match(r"^genesis\s+1(?::(\d+))?\b", reference.strip(), flags=re.IGNORECASE)
+    if genesis_one:
         negative += ", anthropomorphic God, human deity, portrait of God, elderly deity, two elderly men"
+        verse_number = int(genesis_one.group(1) or 0)
+        if not verse_number or verse_number <= 25 or verse_number == 30:
+            negative += (
+                ", person, people, man, woman, male figure, female figure, human, humanoid, face, portrait, "
+                "robed figure, angel, goddess, deity, crowd, pair of figures, architecture, columns, arches, temple, church"
+            )
     return negative
 
 
 def _scene_prompt(reference: str, verse: str, visual_style: str, opening_state: str = "") -> str:
     style = resolve_art_style(visual_style)
     opening = f" Opening frame: {opening_state}." if opening_state else ""
+    is_genesis_one = bool(re.match(r"^genesis\s+1(?::|\b)", reference.strip(), flags=re.IGNORECASE))
+    setting_policy = (
+        "Pure creation-era cosmic or natural scenery with no civilization. For verses before humanity is created, "
+        "show no person, face, humanoid, angel, robed figure, deity portrait, architecture, columns, arches, or buildings. "
+        "Use the selected art style only for palette, gold accents, geometry, texture, and brushwork; ignore any style "
+        "defaults that call for human or symbolic figures."
+        if is_genesis_one
+        else "Ancient Near Eastern setting appropriate to the passage, natural human anatomy."
+    )
     return (
         f"Biblically and historically grounded visual interpretation of {reference}: {verse}. "
         f"{opening} "
         f"Art direction: {style['name']}. {style['prompt']}. "
         f"Composition policy: {_god_portrayal_instruction(reference, verse)} "
-        "Ancient Near Eastern setting appropriate to the passage, natural human anatomy, "
+        f"{setting_policy} "
         "modest composition, expressive but restrained emotion, cinematic 16:9 framing, coherent lighting, "
         "no text, no lettering, no watermark, no modern objects."
     )
