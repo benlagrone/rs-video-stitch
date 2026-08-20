@@ -844,6 +844,32 @@ class BibleWorkflowTest(TestCase):
 
         self.assertEqual(preserved_video, b"raw-motion")
 
+    def test_locked_camera_stabilization_preserves_original_edges_without_mirroring(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "scene.mp4"
+            video.write_bytes(b"raw-motion")
+
+            def create_stabilized(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"stabilized-motion")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_stabilized) as run, mock.patch.object(
+                motion_provider,
+                "_parse_deshake_log",
+                return_value={
+                    "sampleCount": 81,
+                    "p95TranslationPixels": 2.0,
+                    "maxTranslationPixels": 4.0,
+                    "largeCorrectionRatio": 0.0,
+                    "medianTranslationPixels": 0.0,
+                },
+            ):
+                motion_provider._stabilize_locked_camera(video)
+
+        filter_graph = run.call_args.args[0][run.call_args.args[0].index("-vf") + 1]
+        self.assertIn("edge=original", filter_graph)
+        self.assertNotIn("edge=mirror", filter_graph)
+
     def test_sequence_gate_rejects_sudden_color_block_corruption(self):
         log = "\n".join(
             [

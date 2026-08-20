@@ -224,7 +224,7 @@ def _stabilize_locked_camera(video_path: Path) -> dict[str, float | int]:
         f"scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
         "force_original_aspect_ratio=decrease:force_divisible_by=2,"
         f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,"
-        f"deshake=rx=16:ry=16:edge=mirror:filename={transform_log}"
+        f"deshake=rx=16:ry=16:edge=original:filename={transform_log}"
     )
     command = [
         "ffmpeg", "-y", "-i", str(video_path), "-vf", filter_graph, "-map", "0:v:0", "-map", "0:a?",
