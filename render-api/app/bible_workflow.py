@@ -529,6 +529,13 @@ def _motion_provenance(scene: dict[str, Any], still_path: Path, scene_index: int
     fingerprint = hashlib.sha256(fingerprint_source).hexdigest()
     seed_material = f"{image_seed or fingerprint}|{scene_index}|{motion_prompt}".encode("utf-8")
     motion_seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big") % (2**63 - 1) or 1
+    protect_style_frame = bool(
+        re.search(
+            r"\b(border|frame|framed|marginalia|illuminated|iconography|gold-leaf|ornamental|decorative)\b",
+            image_prompt,
+            flags=re.IGNORECASE,
+        )
+    )
     return {
         "sourceImagePrompt": image_prompt,
         "sourceImageNegativePrompt": image_negative,
@@ -536,6 +543,12 @@ def _motion_provenance(scene: dict[str, Any], still_path: Path, scene_index: int
         "sourceImageModel": image_generation.get("model") or STABLE_DIFFUSION_CHECKPOINT,
         "sourceImageFingerprint": fingerprint,
         "motionSeed": motion_seed,
+        "decorativeFrameProtection": {
+            "enabled": protect_style_frame,
+            "outerWidthPercent": 8,
+            "outerHeightPercent": 10,
+            "featherPixels": 8,
+        },
     }
 
 
@@ -593,6 +606,7 @@ def animate_bible_scene(
         prompt=provider_prompt,
         negative_prompt=_motion_negative_prompt(scene, provenance),
         seed=int(provenance["motionSeed"]),
+        protect_style_frame=bool((provenance.get("decorativeFrameProtection") or {}).get("enabled")),
     )
     timeline = scene.setdefault("timeline", [{"image": still_path.name}])
     if not timeline:
@@ -909,6 +923,7 @@ def prepare_bible_project(
                 prompt=_motion_provider_prompt(scene["motionPrompt"], scene, provenance),
                 negative_prompt=_motion_negative_prompt(scene, provenance),
                 seed=int(provenance["motionSeed"]),
+                protect_style_frame=bool((provenance.get("decorativeFrameProtection") or {}).get("enabled")),
             )
             timeline["video"] = clip_name
             timeline["motionGeneration"] = provenance

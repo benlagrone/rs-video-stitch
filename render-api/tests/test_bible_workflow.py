@@ -461,6 +461,8 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(generate_motion.call_args.kwargs["seed"], saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["motionSeed"])
         self.assertEqual(saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["sourceImageSeed"], 4242)
         self.assertEqual(saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["sourceImageModel"], "test-checkpoint")
+        self.assertTrue(saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["decorativeFrameProtection"]["enabled"])
+        self.assertTrue(generate_motion.call_args.kwargs["protect_style_frame"])
 
     def test_regenerate_scene_still_rewrites_prompt_and_detaches_stale_motion(self):
         document = {
@@ -537,17 +539,21 @@ class BibleWorkflowTest(TestCase):
             still = Path(tmp) / "scene.png"
             still.write_bytes(b"png-data")
             destination = Path(tmp) / "scene.mp4"
-            with mock.patch.object(motion_provider, "_verify_video") as verify:
+            with mock.patch.object(motion_provider, "_verify_video") as verify, mock.patch.object(
+                motion_provider, "_protect_decorative_frame"
+            ) as protect_frame:
                 motion_provider.generate_motion_clip(
                     still,
                     destination,
                     prompt="a scene",
                     negative_prompt="scene cut",
                     seed=8675309,
+                    protect_style_frame=True,
                     session=session,
                 )
             self.assertEqual(destination.read_bytes(), b"mp4-data")
             verify.assert_called_once_with(destination)
+            protect_frame.assert_called_once_with(still, destination)
 
         upload_call, prompt_call = session.post.call_args_list
         self.assertTrue(upload_call.args[0].endswith("/upload/image"))
@@ -571,6 +577,25 @@ class BibleWorkflowTest(TestCase):
         ):
             with self.assertRaisesRegex(motion_provider.MotionProviderError, "failed hard gates"):
                 motion_provider._verify_video(Path(tmp) / "short.mp4")
+
+    def test_decorative_frame_protection_restores_source_border(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.png"
+            video = Path(tmp) / "scene.mp4"
+            source.write_bytes(b"source-frame")
+            video.write_bytes(b"raw-motion")
+
+            def create_protected(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"protected-motion")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_protected) as run:
+                motion_provider._protect_decorative_frame(source, video)
+
+            self.assertEqual(video.read_bytes(), b"protected-motion")
+            command = run.call_args.args[0]
+            self.assertIn("alphamerge", command[command.index("-filter_complex") + 1])
+            self.assertIn("boxblur=8", command[command.index("-filter_complex") + 1])
 
     def test_extract_last_frame_creates_next_scene_start(self):
         with tempfile.TemporaryDirectory() as tmp:

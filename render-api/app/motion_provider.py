@@ -16,6 +16,11 @@ COMFYUI_MODEL_API_URL = os.getenv("COMFYUI_MODEL_API_URL", "http://100.100.97.30
 COMFYUI_TIMEOUT_SECONDS = float(os.getenv("COMFYUI_TIMEOUT_SECONDS", "7200"))
 COMFYUI_POLL_SECONDS = float(os.getenv("COMFYUI_POLL_SECONDS", "5"))
 WORKFLOW_PATH = Path(__file__).resolve().parent / "workflows" / "wan2_2_ti2v_5b_api.json"
+FRAME_PROTECTION_WIDTH = 576
+FRAME_PROTECTION_HEIGHT = 320
+FRAME_PROTECTION_X = 46
+FRAME_PROTECTION_Y = 32
+FRAME_PROTECTION_FEATHER = 8
 
 
 class MotionProviderError(RuntimeError):
@@ -158,6 +163,32 @@ def _verify_video(path: Path) -> None:
         raise MotionProviderError("Motion artifact failed hard gates: " + ", ".join(failures))
 
 
+def _protect_decorative_frame(image_path: Path, video_path: Path) -> None:
+    protected_path = video_path.with_name(f"{video_path.stem}.frame-protected{video_path.suffix}")
+    inner_width = FRAME_PROTECTION_WIDTH - (FRAME_PROTECTION_X * 2)
+    inner_height = FRAME_PROTECTION_HEIGHT - (FRAME_PROTECTION_Y * 2)
+    filter_graph = (
+        f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=rgba[still];"
+        f"color=c=white:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:d=7200,format=gray,"
+        f"drawbox=x={FRAME_PROTECTION_X}:y={FRAME_PROTECTION_Y}:w={inner_width}:h={inner_height}:"
+        f"color=black:t=fill,boxblur={FRAME_PROTECTION_FEATHER}[mask];"
+        "[still][mask]alphamerge[border];[0:v][border]overlay=shortest=1:format=auto[v]"
+    )
+    command = [
+        "ffmpeg", "-y", "-i", str(video_path), "-loop", "1", "-i", str(image_path),
+        "-filter_complex", filter_graph, "-map", "[v]", "-map", "0:a?", "-c:v", "libx264",
+        "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy", str(protected_path),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        if not protected_path.exists() or protected_path.stat().st_size == 0:
+            raise MotionProviderError("Decorative-frame protection produced no video")
+        protected_path.replace(video_path)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        protected_path.unlink(missing_ok=True)
+        raise MotionProviderError(f"Unable to protect the source image's decorative frame: {exc}") from exc
+
+
 def generate_motion_clip(
     image_path: Path,
     destination: Path,
@@ -165,6 +196,7 @@ def generate_motion_clip(
     prompt: str,
     negative_prompt: str,
     seed: int | None = None,
+    protect_style_frame: bool = False,
     session=requests,
 ) -> None:
     model_health = session.get(f"{COMFYUI_MODEL_API_URL.rstrip('/')}/system_stats", timeout=10)
@@ -194,4 +226,6 @@ def generate_motion_clip(
     artifact.raise_for_status()
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(artifact.content)
+    if protect_style_frame:
+        _protect_decorative_frame(image_path, destination)
     _verify_video(destination)
