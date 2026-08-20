@@ -175,23 +175,73 @@ def _scene_negative_prompt(reference: str) -> str:
     return negative
 
 
+def _genesis_one_visual_subject(reference: str) -> str:
+    """Describe only what should be visible, without deity words that provoke portraits."""
+    match = re.match(r"^genesis\s+1(?::(\d+))?\b", reference.strip(), flags=re.IGNORECASE)
+    verse_number = int(match.group(1) or 0) if match else 0
+    subjects = {
+        1: "A vast primordial cosmos and newly forming earth beneath immense heavens",
+        2: "A formless dark ocean under a deep empty sky, with wind tracing broad ripples across the water",
+        3: "The first radiant light breaking across primordial darkness and illuminating the ocean",
+        4: "A sharp boundary forming between luminous day and deep darkness across the same horizon",
+        5: "The first complete transition from glowing evening into bright morning over the young earth",
+        6: "A broad vault of sky opening between lower seas and immense waters suspended above",
+        7: "The waters separating into a calm ocean below and luminous cloud-borne waters above",
+        8: "The newly ordered sky stretching from horizon to horizon above the primordial sea",
+        9: "Ocean waters drawing together while the first dry ridges rise visibly from beneath them",
+        10: "Newly exposed earth and gathered seas settling into distinct coastlines",
+        11: "Fresh grass, seed-bearing herbs, and fruit trees rapidly spreading across bare land",
+        12: "A flourishing landscape of mature grasses, herbs, and fruit trees heavy with seed and fruit",
+        13: "The planted earth resting through evening and awakening into a green third morning",
+        14: "Sun, moon, and stars taking ordered positions in the vast sky above the earth",
+        15: "Celestial lights casting their first organized illumination across land and sea",
+        16: "The brilliant sun ruling the day while the moon and stars govern the night sky",
+        17: "Sun, moon, and constellations fixed in a harmonious celestial expanse above the world",
+        18: "Daylight and night dividing cleanly as celestial lights follow their appointed courses",
+        19: "A richly colored evening yielding to the clear dawn of the fourth morning",
+        20: "Schools of fish filling clear seas while great flocks of birds sweep across the open sky",
+        21: "Great sea creatures moving through deep water among abundant fish, with birds above",
+        22: "Sea life multiplying through the waters and bird flocks expanding across the sky",
+        23: "Birds settling at evening above teeming seas before the fifth morning",
+        24: "Wild animals, livestock, and small ground creatures emerging across varied habitats",
+        25: "A balanced living landscape populated by distinct wild animals, livestock, and ground creatures",
+        26: "A mature adult man and woman standing together within the abundant living world they will steward",
+        27: "One mature adult man and one mature adult woman, equal in dignity, newly present in the garden landscape",
+        28: "The adult man and woman beginning their stewardship amid fertile land, birds, fish, and animals",
+        29: "The adult man and woman receiving the abundance of seed-bearing plants and fruit trees around them",
+        30: "Land animals, birds, and small creatures feeding peacefully among abundant green plants",
+        31: "A panoramic view of the complete created world, with the adult man and woman small within the vast landscape",
+    }
+    return subjects.get(verse_number, "The physical creation of the cosmos unfolding through distinct natural forms")
+
+
 def _scene_prompt(reference: str, verse: str, visual_style: str, opening_state: str = "") -> str:
     style = resolve_art_style(visual_style)
     opening = f" Opening frame: {opening_state}." if opening_state else ""
     is_genesis_one = bool(re.match(r"^genesis\s+1(?::|\b)", reference.strip(), flags=re.IGNORECASE))
+    style_name = str(style["name"])
+    if is_genesis_one and re.search(r"\b(iconography|portraiture|character)\b", style_name, flags=re.IGNORECASE):
+        style_name = re.sub(r"\bIconography\b", "inspired visual treatment", style_name, flags=re.IGNORECASE)
+        style_name = re.sub(r"\bPortraiture\b", "inspired visual treatment", style_name, flags=re.IGNORECASE)
+        style_name = re.sub(r"\bCharacter\b", "visual", style_name, flags=re.IGNORECASE)
     style_direction = str(style["prompt"])
     if is_genesis_one and re.search(r"\b(figures?|portraits?|characters?|saints?|icons?)\b", style_direction, flags=re.IGNORECASE):
         style_direction = (
-            f"Use the {style['name']} palette, flat spatial design, gold-leaf surface treatment, linework, and "
+            f"Use the {style_name} palette, flat spatial design, gold-leaf surface treatment, linework, and "
             "intricate geometric patterning on cosmic and natural forms only"
         )
+    if is_genesis_one:
+        return (
+            f"Environment-led visual interpretation of {reference}. "
+            f"Primary visible subject and action: {_genesis_one_visual_subject(reference)}."
+            f"{opening} "
+            f"Art treatment: {style_name}. {style_direction}. "
+            "Creation-era cosmic and natural setting with no civilization; make the physical transformation, scale, "
+            "atmosphere, and living world fill the frame. Modest composition, cinematic 16:9 framing, coherent "
+            "lighting, no text, no lettering, no watermark, no modern objects."
+        )
     setting_policy = (
-        "Pure creation-era cosmic or natural scenery with no civilization. For verses before humanity is created, "
-        "show no person, face, humanoid, angel, robed figure, deity portrait, architecture, columns, arches, or buildings. "
-        "Use the selected art style only for palette, gold accents, geometry, texture, and brushwork; ignore any style "
-        "defaults that call for human or symbolic figures."
-        if is_genesis_one
-        else "Ancient Near Eastern setting appropriate to the passage, natural human anatomy."
+        "Ancient Near Eastern setting appropriate to the passage, natural human anatomy."
     )
     return (
         f"Biblically and historically grounded visual interpretation of {reference}: {verse}. "

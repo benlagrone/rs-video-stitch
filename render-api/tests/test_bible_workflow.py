@@ -49,19 +49,42 @@ class BibleWorkflowTest(TestCase):
             )
 
         prompt = scenes[0]["timeline"][0]["prompt"]
-        self.assertIn("Art direction: Baroque", prompt)
+        self.assertIn("Art treatment: Baroque", prompt)
         self.assertIn("chiaroscuro", prompt)
-        self.assertIn("Genesis 1 scenery-first composition", prompt)
-        self.assertIn("Do not depict God as a human figure", prompt)
-        self.assertIn("no pair of men", prompt)
-        self.assertIn("show no person, face, humanoid, angel, robed figure", prompt)
-        self.assertIn("ignore any style defaults that call for human or symbolic figures", prompt)
+        self.assertIn("vast primordial cosmos", prompt)
+        self.assertNotIn("God", prompt)
+        self.assertNotIn("human figure", prompt)
+        self.assertNotIn("pair of men", prompt)
         self.assertNotIn("Flat symbolic figures", prompt)
         self.assertNotIn("full silver-white beard", prompt)
 
         byzantine_prompt = bible_workflow._scene_prompt("Genesis 1:2", "Darkness was upon the deep.", "byzantine-iconography")
         self.assertNotIn("Flat symbolic figures", byzantine_prompt)
+        self.assertNotIn("Iconography", byzantine_prompt)
+        self.assertNotIn("God", byzantine_prompt)
+        self.assertIn("formless dark ocean", byzantine_prompt)
+        self.assertIn("wind tracing broad ripples", byzantine_prompt)
         self.assertIn("gold-leaf surface treatment", byzantine_prompt)
+
+    def test_genesis_one_visual_subjects_introduce_people_only_with_humanity(self):
+        early_prompt = bible_workflow._scene_prompt(
+            "Genesis 1:25",
+            "And God made the beast of the earth after his kind.",
+            "byzantine-iconography",
+        )
+        humanity_prompt = bible_workflow._scene_prompt(
+            "Genesis 1:27",
+            "So God created man in his own image, male and female created he them.",
+            "byzantine-iconography",
+        )
+
+        self.assertNotIn("God", early_prompt)
+        self.assertNotIn("man", early_prompt.lower())
+        self.assertNotIn("woman", early_prompt.lower())
+        self.assertIn("wild animals", early_prompt)
+        self.assertNotIn("God", humanity_prompt)
+        self.assertIn("One mature adult man and one mature adult woman", humanity_prompt)
+        self.assertIn("small within the vast landscape", bible_workflow._genesis_one_visual_subject("Genesis 1:31"))
 
     def test_fetch_and_build_storyboard_preserves_each_verse(self):
         session = mock.Mock()
@@ -437,8 +460,8 @@ class BibleWorkflowTest(TestCase):
 
         self.assertEqual(result.name, "scene_001.png")
         generated_prompt = generate_still.call_args.args[0]
-        self.assertIn("Genesis 1 scenery-first composition", generated_prompt)
-        self.assertIn("Do not depict God as a human figure", generated_prompt)
+        self.assertIn("first radiant light", generated_prompt)
+        self.assertNotIn("God", generated_prompt)
         self.assertIn("two elderly men", generate_still.call_args.kwargs["negative_extra"])
         self.assertIn("female figure", generate_still.call_args.kwargs["negative_extra"])
         self.assertIn("robed figure", generate_still.call_args.kwargs["negative_extra"])
