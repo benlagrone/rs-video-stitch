@@ -700,6 +700,21 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(rejected["status"], "rejected")
         self.assertIn("uncontrolled camera shake", rejected["reason"])
 
+    def test_generic_fill_the_frame_language_does_not_trigger_decorative_border_overlay(self):
+        scene = {
+            "title": "Genesis 1:1",
+            "timeline": [{
+                "prompt": "Let the physical creation fill the frame with cinematic light and a fixed horizon.",
+                "imageGeneration": {"seed": 42},
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"still")
+            provenance = bible_workflow._motion_provenance(scene, still, 1, "Light advances.")
+
+        self.assertFalse(provenance["decorativeFrameProtection"]["enabled"])
+
     def test_generate_motion_submits_comfyui_workflow_and_downloads_artifact(self):
         session = mock.Mock()
         session.post.side_effect = [
@@ -769,6 +784,8 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["55"]["inputs"]["length"], 81)
         self.assertEqual(workflow["57"]["inputs"]["fps"], 16)
         self.assertEqual(workflow["3"]["inputs"]["seed"], 8675309)
+        self.assertEqual(workflow["3"]["inputs"]["denoise"], 0.65)
+        self.assertEqual(quality["modelDenoise"], 0.65)
 
     def test_motion_quality_gate_rejects_short_artifact(self):
         probe = {

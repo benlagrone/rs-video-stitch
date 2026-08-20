@@ -80,6 +80,7 @@ def _patched_workflow(
     negative_prompt: str,
     filename_prefix: str,
     seed: int | None = None,
+    denoise: float = 1.0,
 ) -> dict:
     workflow = json.loads(WORKFLOW_PATH.read_text(encoding="utf-8"))
     values = {
@@ -95,7 +96,7 @@ def _patched_workflow(
         "cfg": 3.5,
         "sampler_name": "uni_pc",
         "scheduler": "simple",
-        "denoise": 1,
+        "denoise": denoise,
         "model_shift": 8,
         "filename_prefix": filename_prefix,
     }
@@ -380,7 +381,15 @@ def generate_motion_clip(
         _prepare_source_image(image_path, prepared_source)
         uploaded_name = _upload_image(session, prepared_source)
         prefix = f"mediastudio/{uuid.uuid4().hex}"
-        workflow = _patched_workflow(uploaded_name, prompt, negative_prompt, prefix, seed=seed)
+        model_denoise = 0.65 if camera_behavior == "locked" else 0.80
+        workflow = _patched_workflow(
+            uploaded_name,
+            prompt,
+            negative_prompt,
+            prefix,
+            seed=seed,
+            denoise=model_denoise,
+        )
         queued = session.post(
             f"{COMFYUI_MODEL_API_URL.rstrip('/')}/prompt",
             json={"client_id": f"mediastudio-sextant-{uuid.uuid4().hex}", "prompt": workflow},
@@ -407,6 +416,7 @@ def generate_motion_clip(
             "status": "accepted",
             "cameraBehavior": camera_behavior,
             "sourceSizing": "fit-and-pad-no-crop",
+            "modelDenoise": model_denoise,
         }
         if camera_behavior == "locked":
             quality["stabilization"] = _stabilize_locked_camera(destination)

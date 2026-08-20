@@ -574,7 +574,7 @@ def _motion_provenance(scene: dict[str, Any], still_path: Path, scene_index: int
     motion_seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big") % (2**63 - 1) or 1
     protect_style_frame = bool(
         re.search(
-            r"\b(border|frame|framed|marginalia|illuminated|iconography|gold-leaf|ornamental|decorative)\b",
+            r"\b(border|marginalia|illuminated manuscript|iconography|gold-leaf|ornamental frame|decorative frame)\b",
             image_prompt,
             flags=re.IGNORECASE,
         )
