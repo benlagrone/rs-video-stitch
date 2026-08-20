@@ -418,7 +418,8 @@ class BibleWorkflowTest(TestCase):
             bible_workflow, "save_scenes"
         ) as save_scenes, mock.patch.object(bible_workflow, "save_project_state") as save_state:
             input_dir = Path(tmp) / "input"
-            input_dir.mkdir(parents=True)
+            (input_dir / "images").mkdir(parents=True)
+            (input_dir / "images" / "scene_001.png").write_bytes(b"old-men-image")
             (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
             result = bible_workflow.regenerate_bible_scene_stills(
                 "bible-test",
@@ -434,6 +435,7 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("two elderly men", generate_still.call_args.kwargs["negative_extra"])
         saved_document = json.loads(save_scenes.call_args.args[1])
         self.assertNotIn("video", saved_document["scenes"][0]["timeline"][0])
+        self.assertTrue(saved_document["scenes"][0]["imageHistory"][0].startswith("history/scene_001-"))
         self.assertEqual(save_state.call_args.args[1]["characterDesign"]["god"]["version"], 2)
 
     def test_generate_motion_submits_comfyui_workflow_and_downloads_artifact(self):

@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -650,6 +651,12 @@ def regenerate_bible_scene_stills(
         prompt = _scene_prompt(reference, verse, visual_style, str(scene.get("startState") or ""))
         image_name = str((scene.get("images") or [f"scene_{scene_index:03d}.png"])[0])
         destination = p_input(project_id) / "images" / Path(image_name).name
+        if destination.exists():
+            backup_dir = destination.parent / "history"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            backup_name = f"{destination.stem}-{int(time.time())}{destination.suffix}"
+            shutil.copy2(destination, backup_dir / backup_name)
+            scene.setdefault("imageHistory", []).append(f"history/{backup_name}")
         log(f"Regenerating scenery-first still {position}/{len(indexes)} for {reference}")
         _generate_still(prompt, destination, negative_extra=_scene_negative_prompt(reference))
         timeline[0]["image"] = destination.name
