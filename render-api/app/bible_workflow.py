@@ -545,9 +545,9 @@ def _motion_provenance(scene: dict[str, Any], still_path: Path, scene_index: int
         "motionSeed": motion_seed,
         "decorativeFrameProtection": {
             "enabled": protect_style_frame,
-            "outerWidthPercent": 8,
-            "outerHeightPercent": 10,
-            "featherPixels": 8,
+            "outerWidthPercent": 12,
+            "outerHeightPercent": 14,
+            "featherPixels": 4,
         },
     }
 

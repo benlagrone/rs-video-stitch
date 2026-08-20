@@ -595,7 +595,7 @@ class BibleWorkflowTest(TestCase):
             self.assertEqual(video.read_bytes(), b"protected-motion")
             command = run.call_args.args[0]
             self.assertIn("alphamerge", command[command.index("-filter_complex") + 1])
-            self.assertIn("boxblur=8", command[command.index("-filter_complex") + 1])
+            self.assertIn("boxblur=4", command[command.index("-filter_complex") + 1])
 
     def test_extract_last_frame_creates_next_scene_start(self):
         with tempfile.TemporaryDirectory() as tmp:
