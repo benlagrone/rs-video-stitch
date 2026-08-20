@@ -925,6 +925,62 @@ class BibleWorkflowTest(TestCase):
                 with self.assertRaisesRegex(motion_provider.MotionProviderError, "visual jump"):
                     motion_provider._measure_sequence_integrity(video)
 
+    def test_edge_tile_gate_rejects_localized_color_block_corruption(self):
+        log = "\n".join(
+            [
+                "frame:0 pts:0 pts_time:0",
+                "lavfi.signalstats.SATAVG=10.0",
+                "lavfi.signalstats.YDIF=0.0",
+                "frame:1 pts:1 pts_time:0.0625",
+                "lavfi.signalstats.SATAVG=10.4",
+                "lavfi.signalstats.YDIF=3.0",
+                "frame:2 pts:2 pts_time:0.125",
+                "lavfi.signalstats.SATAVG=12.7",
+                "lavfi.signalstats.YDIF=17.3",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "scene.mp4"
+            video.write_bytes(b"motion")
+
+            def create_stats(command, **_kwargs):
+                filter_value = command[command.index("-vf") + 1]
+                Path(filter_value.split("file=", 1)[1]).write_text(log, encoding="utf-8")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_stats):
+                with self.assertRaisesRegex(motion_provider.MotionProviderError, "localized edge"):
+                    motion_provider._measure_edge_tile_integrity(video)
+
+    def test_edge_tile_gate_accepts_gradual_edge_motion(self):
+        log = "\n".join(
+            [
+                "frame:0 pts:0 pts_time:0",
+                "lavfi.signalstats.SATAVG=10.0",
+                "lavfi.signalstats.YDIF=0.0",
+                "frame:1 pts:1 pts_time:0.0625",
+                "lavfi.signalstats.SATAVG=10.6",
+                "lavfi.signalstats.YDIF=5.0",
+                "frame:2 pts:2 pts_time:0.125",
+                "lavfi.signalstats.SATAVG=11.1",
+                "lavfi.signalstats.YDIF=8.0",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "scene.mp4"
+            video.write_bytes(b"motion")
+
+            def create_stats(command, **_kwargs):
+                filter_value = command[command.index("-vf") + 1]
+                Path(filter_value.split("file=", 1)[1]).write_text(log, encoding="utf-8")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_stats):
+                metrics = motion_provider._measure_edge_tile_integrity(video)
+
+            self.assertEqual(metrics["edgeTileSampleCount"], 7)
+            self.assertEqual(metrics["maxEdgeTileSaturationJump"], 0.0)
+
     def test_decorative_frame_protection_restores_source_border(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "source.png"

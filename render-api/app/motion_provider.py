@@ -30,6 +30,12 @@ SOURCE_FRAME_MIN_SSIM = float(os.getenv("SOURCE_FRAME_MIN_SSIM", "0.28"))
 SEQUENCE_SATURATION_JUMP_LIMIT = float(os.getenv("SEQUENCE_SATURATION_JUMP_LIMIT", "4.0"))
 SEQUENCE_LUMA_JUMP_LIMIT = float(os.getenv("SEQUENCE_LUMA_JUMP_LIMIT", "8.0"))
 SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE = float(os.getenv("SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE", "15.0"))
+SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT = float(
+    os.getenv("SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT", "2.0")
+)
+SEQUENCE_EDGE_TILE_LUMA_DIFFERENCE_LIMIT = float(
+    os.getenv("SEQUENCE_EDGE_TILE_LUMA_DIFFERENCE_LIMIT", "12.0")
+)
 
 
 class MotionProviderError(RuntimeError):
@@ -337,11 +343,70 @@ def _measure_sequence_integrity(video_path: Path) -> dict[str, float | int]:
                 f"maximum luma-frame difference {metrics['maxLumaFrameDifference']:.2f} exceeds "
                 f"{SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE:.2f}"
             )
+        metrics.update(_measure_edge_tile_integrity(video_path))
         return metrics
     except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
         raise MotionProviderError(f"Unable to validate animation sequence integrity: {exc}") from exc
     finally:
         stats_path.unlink(missing_ok=True)
+
+
+def _measure_edge_tile_integrity(video_path: Path) -> dict[str, float | int]:
+    # Localized model corruption can hide inside healthy whole-frame averages. Sample the
+    # outer 4x4 tiles where generation/stabilization artifacts most often enter the image.
+    tiles = [(3, column) for column in range(4)] + [(row, 3) for row in range(3)]
+    worst_saturation_jump = 0.0
+    worst_luma_difference = 0.0
+    worst_tile = ""
+    for row, column in tiles:
+        stats_path = video_path.with_name(f"{video_path.stem}.edge-{row}-{column}.signalstats.log")
+        crop = f"crop=iw/4:ih/4:{column}*iw/4:{row}*ih/4"
+        command = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(video_path),
+            "-vf", f"{crop},signalstats,metadata=print:file={stats_path}", "-f", "null", "-",
+        ]
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            saturation_values: list[float] = []
+            luma_differences: list[float] = []
+            for line in stats_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("lavfi.signalstats.SATAVG="):
+                    saturation_values.append(float(line.split("=", 1)[1]))
+                elif line.startswith("lavfi.signalstats.YDIF="):
+                    luma_differences.append(float(line.split("=", 1)[1]))
+            if len(saturation_values) < 2 or not luma_differences:
+                raise MotionProviderError("Unable to measure animation edge-tile integrity")
+            tile_saturation_jump = max(
+                abs(current - previous)
+                for previous, current in zip(saturation_values, saturation_values[1:])
+            )
+            tile_luma_difference = max(luma_differences)
+            if (
+                tile_saturation_jump > worst_saturation_jump
+                and tile_luma_difference > SEQUENCE_EDGE_TILE_LUMA_DIFFERENCE_LIMIT
+            ):
+                worst_saturation_jump = tile_saturation_jump
+                worst_luma_difference = tile_luma_difference
+                worst_tile = f"{row},{column}"
+        except (FileNotFoundError, subprocess.CalledProcessError, OSError, ValueError) as exc:
+            raise MotionProviderError(f"Unable to validate animation edge-tile integrity: {exc}") from exc
+        finally:
+            stats_path.unlink(missing_ok=True)
+    metrics: dict[str, float | int] = {
+        "edgeTileSampleCount": len(tiles),
+        "maxEdgeTileSaturationJump": round(worst_saturation_jump, 4),
+        "maxEdgeTileLumaDifference": round(worst_luma_difference, 4),
+    }
+    if (
+        worst_saturation_jump > SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT
+        and worst_luma_difference > SEQUENCE_EDGE_TILE_LUMA_DIFFERENCE_LIMIT
+    ):
+        raise MotionProviderError(
+            "Animation rejected for localized edge color-block corruption: "
+            f"tile {worst_tile}, saturation jump {worst_saturation_jump:.2f}, "
+            f"luma difference {worst_luma_difference:.2f}"
+        )
+    return metrics
 
 
 def _protect_decorative_frame(image_path: Path, video_path: Path) -> None:
