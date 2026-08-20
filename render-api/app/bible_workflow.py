@@ -9,6 +9,7 @@ import random
 import re
 import shutil
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
@@ -461,7 +462,7 @@ def _safe_fallback_animation_prompt(scene: dict[str, Any]) -> str:
     return (
         f"{title}: animate the specific scripture beat, {verse} {actions[0]}. "
         "Use the remaining visible environmental motion only where it already exists in the still. "
-        "The camera makes a slow, steady forward move with gentle parallax, keeping every "
+        "Keep the camera locked to the original composition while subject and environmental motion develop, keeping every "
         "visible subject, garment, face, structure, decorative element, palette, and light direction consistent. Motion "
         "continues throughout the five-second shot and settles into a clear final composition that can flow directly into "
         "the following scene without introducing anything new. "
@@ -495,7 +496,8 @@ def _scene_animation_writer_prompt(
         "Make this scene unmistakably different from adjacent scenes. Ground the action in this verse and in objects or "
         "people already visible in the still; do not reuse generic water, breeze, lighting, or camera language unless the "
         "current verse and still specifically support it. Describe a concrete opening state, one continuous visible action "
-        "with purposeful subject movement, a specific camera move, and an ending state that can flow into the next scene. "
+        "with purposeful subject movement, and an ending state that can flow into the next scene. Keep the camera locked "
+        "unless an explicit camera behavior is supplied separately; never invent handheld shake, zoom, crop, or reframing. "
         "Preserve faces, bodies, garments, architecture, palette, composition, and light direction. Do not add new people "
         "or objects, cut to another shot, morph anatomy, or render text. Use 60 to 90 words in one paragraph. Return only "
         "the animation prompt, without a heading, quotation marks, analysis, the scripture text verbatim, or the locked "
@@ -584,6 +586,7 @@ def _motion_provenance(scene: dict[str, Any], still_path: Path, scene_index: int
         "sourceImageModel": image_generation.get("model") or STABLE_DIFFUSION_CHECKPOINT,
         "sourceImageFingerprint": fingerprint,
         "motionSeed": motion_seed,
+        "cameraBehavior": "locked",
         "decorativeFrameProtection": {
             "enabled": protect_style_frame,
             "outerWidthPercent": 12,
@@ -604,8 +607,19 @@ def _motion_provider_prompt(resolved_prompt: str, scene: dict[str, Any], provena
     )
     if source_prompt:
         visual_anchor += f" Locked source-image description: {source_prompt}"
+    camera_behavior = str(provenance.get("cameraBehavior") or "locked")
+    camera_direction = {
+        "locked": (
+            "Camera behavior is LOCKED: keep the source frame edges, horizon, scale, crop, and composition fixed. "
+            "No handheld movement, shake, pan, tilt, dolly, zoom, crop, or reframing. Motion must come from subjects "
+            "and environmental elements already visible in the image."
+        ),
+        "slow-push": "Camera behavior is a single smooth, subtle slow push with no shake, crop jump, or direction change.",
+        "pan-left": "Camera behavior is one smooth restrained pan left with no shake, zoom, crop jump, or direction change.",
+        "pan-right": "Camera behavior is one smooth restrained pan right with no shake, zoom, crop jump, or direction change.",
+    }.get(camera_behavior, "Camera behavior is LOCKED with no camera movement or reframing.")
     return (
-        f"{visual_anchor} Motion direction: {resolved_prompt} Composition policy: "
+        f"{visual_anchor} {camera_direction} Motion direction: {resolved_prompt} Composition policy: "
         f"{_god_portrayal_instruction(reference, verse)}"
     )
 
@@ -613,7 +627,8 @@ def _motion_provider_prompt(resolved_prompt: str, scene: dict[str, Any], provena
 def _motion_negative_prompt(scene: dict[str, Any], provenance: dict[str, Any]) -> str:
     source_negative = str(provenance.get("sourceImageNegativePrompt") or "").strip()
     parts = [
-        "static tableau, frozen pose, slideshow, no movement, scene cut, jump cut, jitter, flicker",
+        "static tableau, frozen pose, slideshow, no movement, scene cut, jump cut, jitter, flicker, camera shake, "
+        "handheld wobble, sudden zoom, accidental crop, framing drift, uncontrolled pan, reframing",
         "face morph, anatomy distortion, identity change, clothing change, text, watermark",
         source_negative,
         _scene_negative_prompt(str(scene.get("title") or "")),
@@ -626,6 +641,7 @@ def animate_bible_scene(
     project_id: str,
     scene_index: int,
     prompt: str = "",
+    camera_behavior: str = "locked",
     *,
     progress: Progress,
     log: Log,
@@ -637,24 +653,47 @@ def animate_bible_scene(
         log(f"Generating a continuity-safe animation prompt for scene {scene_index}")
         resolved_prompt = generate_scene_animation_prompt(project_id, scene_index)
     provenance = _motion_provenance(scene, still_path, scene_index, resolved_prompt)
+    provenance["cameraBehavior"] = camera_behavior
     provider_prompt = _motion_provider_prompt(resolved_prompt, scene, provenance)
 
     progress("MOTION_GENERATION", 0.25)
     log(f"Animating scene {scene_index} from {still_path.name}")
-    generate_motion_clip(
-        still_path,
-        clip_path,
-        prompt=provider_prompt,
-        negative_prompt=_motion_negative_prompt(scene, provenance),
-        seed=int(provenance["motionSeed"]),
-        protect_style_frame=bool((provenance.get("decorativeFrameProtection") or {}).get("enabled")),
-    )
+    candidate_path = clip_path.with_name(f"{clip_path.stem}.candidate-{uuid.uuid4().hex[:8]}{clip_path.suffix}")
+    try:
+        quality = generate_motion_clip(
+            still_path,
+            candidate_path,
+            prompt=provider_prompt,
+            negative_prompt=_motion_negative_prompt(scene, provenance),
+            seed=int(provenance["motionSeed"]),
+            protect_style_frame=bool((provenance.get("decorativeFrameProtection") or {}).get("enabled")),
+            camera_behavior=camera_behavior,
+        )
+        candidate_path.replace(clip_path)
+    except Exception as exc:
+        candidate_path.unlink(missing_ok=True)
+        scene["animationQuality"] = {
+            "status": "rejected",
+            "cameraBehavior": camera_behavior,
+            "reason": str(exc)[:1000],
+            "updatedAt": time.time(),
+        }
+        project_name = str((document.get("info") or {}).get("name") or project_id)
+        save_scenes(project_id, json.dumps(document, indent=2), project_name=project_name)
+        raise
+    provenance["quality"] = quality
     timeline = scene.setdefault("timeline", [{"image": still_path.name}])
     if not timeline:
         timeline.append({"image": still_path.name})
     timeline[0]["video"] = clip_path.name
     timeline[0]["motionGeneration"] = provenance
     scene["motionPrompt"] = resolved_prompt
+    scene["animationQuality"] = {
+        "status": "accepted",
+        "cameraBehavior": camera_behavior,
+        **quality,
+        "updatedAt": time.time(),
+    }
     scene["animationUpdatedAt"] = time.time()
     project_name = str((document.get("info") or {}).get("name") or project_id)
     save_scenes(project_id, json.dumps(document, indent=2), project_name=project_name)
@@ -992,16 +1031,19 @@ def prepare_bible_project(
             clip_path = motion_dir / clip_name
             log(f"Generating motion clip {index}/{len(scenes)} for {scene['title']}")
             provenance = _motion_provenance(scene, still_path, index, scene["motionPrompt"])
-            generate_motion_clip(
+            quality = generate_motion_clip(
                 still_path,
                 clip_path,
                 prompt=_motion_provider_prompt(scene["motionPrompt"], scene, provenance),
                 negative_prompt=_motion_negative_prompt(scene, provenance),
                 seed=int(provenance["motionSeed"]),
                 protect_style_frame=bool((provenance.get("decorativeFrameProtection") or {}).get("enabled")),
+                camera_behavior="locked",
             )
+            provenance["quality"] = quality
             timeline["video"] = clip_name
             timeline["motionGeneration"] = provenance
+            scene["animationQuality"] = {"status": "accepted", **quality, "updatedAt": time.time()}
             previous_motion_path = clip_path
         progress("MOTION_GENERATION" if payload.get("mode") == "motion" else "IMAGE_GENERATION", 0.05 + (index / len(scenes)) * 0.45)
 

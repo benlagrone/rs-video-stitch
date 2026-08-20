@@ -39,7 +39,7 @@ class SceneAnimationApiTests(unittest.IsolatedAsyncioTestCase):
             result = await api.animate_scene(
                 "bible-genesis-1",
                 2,
-                SceneAnimationRequest(prompt="Water ripples outward."),
+                SceneAnimationRequest(prompt="Water ripples outward.", cameraBehavior="locked"),
                 db=database,
             )
 
@@ -48,6 +48,7 @@ class SceneAnimationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queued_job.payload["workflow"], "scene-animation")
         self.assertEqual(queued_job.payload["sceneIndex"], 2)
         self.assertEqual(queued_job.payload["prompt"], "Water ripples outward.")
+        self.assertEqual(queued_job.payload["cameraBehavior"], "locked")
         self.assertTrue(database.committed)
 
     async def test_animate_all_scenes_queues_each_still_in_storyboard_order(self):
@@ -66,7 +67,10 @@ class SceneAnimationApiTests(unittest.IsolatedAsyncioTestCase):
             project_input.return_value.__truediv__.return_value = scenes_path
             result = await api.animate_all_scenes(
                 "bible-genesis-1",
-                SceneAnimationBatchRequest(prompts={1: "Light moves.", 3: "Water moves."}),
+                SceneAnimationBatchRequest(
+                    prompts={1: "Light moves.", 3: "Water moves."},
+                    cameraBehaviors={1: "locked", 3: "pan-right"},
+                ),
                 db=database,
             )
 
@@ -75,6 +79,7 @@ class SceneAnimationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["skippedSceneIndexes"], [2])
         self.assertEqual([job.payload["sceneIndex"] for job in queued_jobs], [1, 3])
         self.assertEqual([job.payload["prompt"] for job in queued_jobs], ["Light moves.", "Water moves."])
+        self.assertEqual([job.payload["cameraBehavior"] for job in queued_jobs], ["locked", "pan-right"])
         self.assertTrue(database.committed)
 
     async def test_animate_all_scenes_can_reanimate_existing_motion(self):

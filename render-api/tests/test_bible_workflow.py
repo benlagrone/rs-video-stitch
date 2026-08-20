@@ -295,6 +295,12 @@ class BibleWorkflowTest(TestCase):
                 "seed": 101,
                 "model": bible_workflow.STABLE_DIFFUSION_CHECKPOINT,
             }
+            generate_motion.return_value = {
+                "status": "accepted",
+                "cameraBehavior": "locked",
+                "sourceSizing": "fit-and-pad-no-crop",
+                "sourceFrameSsim": 0.91,
+            }
             bible_workflow.prepare_bible_project("bible-test", payload, progress=mock.Mock(), log=mock.Mock())
 
         first_clip = Path(tmp) / "input" / "motion" / "scene_001.mp4"
@@ -563,6 +569,18 @@ class BibleWorkflowTest(TestCase):
             still.write_bytes(b"original-still")
             (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
 
+            def create_candidate(_still, destination, **_kwargs):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"accepted-motion")
+                return {
+                    "status": "accepted",
+                    "cameraBehavior": "locked",
+                    "sourceSizing": "fit-and-pad-no-crop",
+                    "sourceFrameSsim": 0.92,
+                }
+
+            generate_motion.side_effect = create_candidate
+
             clip = bible_workflow.animate_bible_scene(
                 "bible-test",
                 1,
@@ -591,6 +609,9 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["sourceImageModel"], "test-checkpoint")
         self.assertTrue(saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["decorativeFrameProtection"]["enabled"])
         self.assertTrue(generate_motion.call_args.kwargs["protect_style_frame"])
+        self.assertEqual(generate_motion.call_args.kwargs["camera_behavior"], "locked")
+        self.assertEqual(saved_document["scenes"][0]["animationQuality"]["status"], "accepted")
+        self.assertEqual(saved_document["scenes"][0]["animationQuality"]["sourceSizing"], "fit-and-pad-no-crop")
 
     def test_regenerate_scene_still_rewrites_prompt_and_detaches_stale_motion(self):
         document = {
@@ -640,6 +661,45 @@ class BibleWorkflowTest(TestCase):
         self.assertTrue(saved_document["scenes"][0]["imageHistory"][0].startswith("history/scene_001-"))
         self.assertEqual(save_state.call_args.args[1]["characterDesign"]["god"]["version"], 2)
 
+    def test_rejected_reanimation_preserves_existing_clip_and_records_failure(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)"},
+            "scenes": [{
+                "title": "Genesis 1:1",
+                "VO": "In the beginning.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png", "video": "scene_001.mp4", "prompt": "A still cosmos"}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(bible_workflow, "save_scenes") as save_scenes, mock.patch.object(
+            bible_workflow, "generate_motion_clip", side_effect=RuntimeError("Animation rejected for uncontrolled camera shake")
+        ):
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            (input_dir / "motion").mkdir(parents=True)
+            (input_dir / "images" / "scene_001.png").write_bytes(b"still")
+            existing_clip = input_dir / "motion" / "scene_001.mp4"
+            existing_clip.write_bytes(b"previous-accepted-clip")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "uncontrolled camera shake"):
+                bible_workflow.animate_bible_scene(
+                    "bible-test",
+                    1,
+                    "Light expands.",
+                    progress=mock.Mock(),
+                    log=mock.Mock(),
+                )
+
+            preserved_clip = existing_clip.read_bytes()
+            rejected = json.loads(save_scenes.call_args.args[1])["scenes"][0]["animationQuality"]
+
+        self.assertEqual(preserved_clip, b"previous-accepted-clip")
+        self.assertEqual(rejected["status"], "rejected")
+        self.assertIn("uncontrolled camera shake", rejected["reason"])
+
     def test_generate_motion_submits_comfyui_workflow_and_downloads_artifact(self):
         session = mock.Mock()
         session.post.side_effect = [
@@ -667,10 +727,17 @@ class BibleWorkflowTest(TestCase):
             still = Path(tmp) / "scene.png"
             still.write_bytes(b"png-data")
             destination = Path(tmp) / "scene.mp4"
-            with mock.patch.object(motion_provider, "_verify_video") as verify, mock.patch.object(
+            def prepare_source(_source, prepared):
+                prepared.write_bytes(b"prepared-png")
+
+            with mock.patch.object(motion_provider, "_prepare_source_image", side_effect=prepare_source), mock.patch.object(
+                motion_provider, "_stabilize_locked_camera", return_value={"p95TranslationPixels": 2.0}
+            ) as stabilize, mock.patch.object(
+                motion_provider, "_measure_source_frame_fidelity", return_value=0.88
+            ) as fidelity, mock.patch.object(motion_provider, "_verify_video") as verify, mock.patch.object(
                 motion_provider, "_protect_decorative_frame"
             ) as protect_frame:
-                motion_provider.generate_motion_clip(
+                quality = motion_provider.generate_motion_clip(
                     still,
                     destination,
                     prompt="a scene",
@@ -681,13 +748,17 @@ class BibleWorkflowTest(TestCase):
                 )
             self.assertEqual(destination.read_bytes(), b"mp4-data")
             verify.assert_called_once_with(destination)
-            protect_frame.assert_called_once_with(still, destination)
+            protect_frame.assert_called_once()
+            stabilize.assert_called_once_with(destination)
+            fidelity.assert_called_once()
+            self.assertEqual(quality["sourceSizing"], "fit-and-pad-no-crop")
+            self.assertEqual(quality["sourceFrameSsim"], 0.88)
 
         upload_call, prompt_call = session.post.call_args_list
         self.assertTrue(upload_call.args[0].endswith("/upload/image"))
         self.assertTrue(prompt_call.args[0].endswith("/prompt"))
         workflow = prompt_call.kwargs["json"]["prompt"]
-        self.assertEqual(workflow["56"]["inputs"]["image"], "scene.png")
+        self.assertEqual(workflow["56"]["inputs"]["image"], "prepared-scene.png")
         self.assertEqual(workflow["6"]["inputs"]["text"], "a scene")
         self.assertEqual(workflow["7"]["inputs"]["text"], "scene cut")
         self.assertEqual(workflow["55"]["inputs"]["length"], 81)
@@ -705,6 +776,51 @@ class BibleWorkflowTest(TestCase):
         ):
             with self.assertRaisesRegex(motion_provider.MotionProviderError, "failed hard gates"):
                 motion_provider._verify_video(Path(tmp) / "short.mp4")
+
+    def test_crop_safe_source_preparation_fits_and_pads_without_crop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.png"
+            destination = Path(tmp) / "prepared.png"
+            source.write_bytes(b"source")
+
+            def create_prepared(command, **_kwargs):
+                destination.write_bytes(b"prepared")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_prepared) as run:
+                motion_provider._prepare_source_image(source, destination)
+
+        filter_graph = run.call_args.args[0][run.call_args.args[0].index("-vf") + 1]
+        self.assertIn("force_original_aspect_ratio=decrease", filter_graph)
+        self.assertIn("pad=576:320", filter_graph)
+        self.assertNotIn("crop=", filter_graph)
+
+    def test_locked_camera_gate_rejects_large_repeated_corrections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "scene.mp4"
+            video.write_bytes(b"raw-motion")
+
+            def create_stabilized(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"stabilized-motion")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_stabilized), mock.patch.object(
+                motion_provider,
+                "_parse_deshake_log",
+                return_value={
+                    "sampleCount": 81,
+                    "p95TranslationPixels": 15.0,
+                    "maxTranslationPixels": 20.0,
+                    "largeCorrectionRatio": 0.35,
+                    "medianTranslationPixels": 8.0,
+                },
+            ):
+                with self.assertRaisesRegex(motion_provider.MotionProviderError, "uncontrolled camera shake"):
+                    motion_provider._stabilize_locked_camera(video)
+
+            preserved_video = video.read_bytes()
+
+        self.assertEqual(preserved_video, b"raw-motion")
 
     def test_decorative_frame_protection_restores_source_border(self):
         with tempfile.TemporaryDirectory() as tmp:

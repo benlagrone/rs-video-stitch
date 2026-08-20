@@ -56,6 +56,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
   const [youtubeProfile, setYoutubeProfile] = useState('animals');
   const [isConnectingYoutube, setIsConnectingYoutube] = useState(false);
   const [animationPrompts, setAnimationPrompts] = useState({});
+  const [cameraBehaviors, setCameraBehaviors] = useState({});
   const [animationJobs, setAnimationJobs] = useState({});
   const [writingPromptFor, setWritingPromptFor] = useState(0);
   const [isQueuingAllAnimations, setIsQueuingAllAnimations] = useState(false);
@@ -94,6 +95,10 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     const savedYoutubeProfile = state.youtubeProfile || state.youtubeUpload?.profile || 'animals';
     setYoutubeProfile(savedYoutubeProfile === 'bible' ? 'animals' : savedYoutubeProfile);
     setAnimationPrompts(Object.fromEntries(loadedScenes.map((scene, index) => [index + 1, scene.motionPrompt || ''])));
+    setCameraBehaviors(Object.fromEntries(loadedScenes.map((scene, index) => [
+      index + 1,
+      scene.animationQuality?.cameraBehavior || scene.timeline?.[0]?.motionGeneration?.cameraBehavior || 'locked',
+    ])));
     return loaded;
   }
 
@@ -282,7 +287,10 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
       const created = await request(`/v1/projects/${encodeURIComponent(project.projectId)}/scenes/${sceneIndex}/animate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: animationPrompts[sceneIndex] || '' }),
+        body: JSON.stringify({
+          prompt: animationPrompts[sceneIndex] || '',
+          cameraBehavior: cameraBehaviors[sceneIndex] || 'locked',
+        }),
       });
       setAnimationJobs((previous) => ({
         ...previous,
@@ -301,7 +309,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
       const created = await request(`/v1/projects/${encodeURIComponent(project.projectId)}/scenes/animate-all`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompts: animationPrompts, includeAnimated: false }),
+        body: JSON.stringify({ prompts: animationPrompts, cameraBehaviors, includeAnimated: false }),
       });
       setAnimationJobs((previous) => ({
         ...previous,
@@ -472,7 +480,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
             const animationJob = animationJobs[sceneIndex];
             const animationBusy = animationJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(animationJob.status);
             const stillBusy = stillRegenerationJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(stillRegenerationJob.status) && (stillRegenerationJob.sceneIndexes || []).includes(sceneIndex);
-            return <article className="bible-scene" key={`${scene.title}-${index}`}><span className="scene-number">{sceneIndex}</span><div className="scene-media">{motionUrl ? <video controls preload="metadata" poster={imageUrl} src={motionUrl} /> : <img src={imageUrl} alt="" />}<span>{motionUrl ? 'Motion clip' : 'Still image'}</span></div><div><h3>{scene.title}</h3><p>{scene.VO}</p>{scene.action && <dl className="motion-beat"><div><dt>Action</dt><dd>{scene.action}</dd></div><div><dt>Camera</dt><dd>{scene.camera}</dd></div><div><dt>Continuity</dt><dd>{scene.continuity}</dd></div><div><dt>Ends with</dt><dd>{scene.endState}</dd></div></dl>}<div className="scene-animation-tools"><label>Animation prompt<textarea value={animationPrompts[sceneIndex] || ''} onChange={(event) => setAnimationPrompts((previous) => ({ ...previous, [sceneIndex]: event.target.value }))} placeholder="Optional — leave blank and Fortress will write a continuity-safe prompt" /></label><div><button type="button" className="secondary-action" onClick={() => regenerateStills(sceneIndex)} disabled={stillBusy || animationBusy}>{stillBusy ? 'Regenerating still…' : 'Regenerate still'}</button><button type="button" className="secondary-action" onClick={() => autoWriteAnimationPrompt(sceneIndex)} disabled={writingPromptFor === sceneIndex || animationBusy || stillBusy}>{writingPromptFor === sceneIndex ? 'Writing prompt…' : 'Auto-write prompt'}</button><button type="button" className="primary-action" onClick={() => animateScene(sceneIndex)} disabled={animationBusy || stillBusy}>{animationBusy ? `${stageLabel(animationJob.stage)} · ${Math.round((animationJob.progress || 0) * 100)}%` : (clip ? 'Re-animate image' : 'Animate image')}</button></div>{animationJob?.status === 'FAILED' && <small className="scene-animation-error">Animation failed: {animationJob.error || animationJob.stage}</small>}</div><small>{Math.round(scene.duration || 0)} sec · {clip ? 'Motion clip attached; regenerating the still will detach it' : 'Still image ready to animate'}</small></div></article>;
+            return <article className="bible-scene" key={`${scene.title}-${index}`}><span className="scene-number">{sceneIndex}</span><div className="scene-media">{motionUrl ? <video controls preload="metadata" poster={imageUrl} src={motionUrl} /> : <img src={imageUrl} alt="" />}<span>{motionUrl ? 'Motion clip' : 'Still image'}</span></div><div><h3>{scene.title}</h3><p>{scene.VO}</p>{scene.action && <dl className="motion-beat"><div><dt>Action</dt><dd>{scene.action}</dd></div><div><dt>Camera</dt><dd>{scene.camera}</dd></div><div><dt>Continuity</dt><dd>{scene.continuity}</dd></div><div><dt>Ends with</dt><dd>{scene.endState}</dd></div></dl>}<div className="scene-animation-tools"><label>Animation prompt<textarea value={animationPrompts[sceneIndex] || ''} onChange={(event) => setAnimationPrompts((previous) => ({ ...previous, [sceneIndex]: event.target.value }))} placeholder="Optional — leave blank and Fortress will write a continuity-safe prompt" /></label><label>Camera behavior<select value={cameraBehaviors[sceneIndex] || 'locked'} onChange={(event) => setCameraBehaviors((previous) => ({ ...previous, [sceneIndex]: event.target.value }))}><option value="locked">Locked composition (recommended)</option><option value="slow-push">Smooth slow push</option><option value="pan-left">Smooth pan left</option><option value="pan-right">Smooth pan right</option></select></label><small>Locked composition keeps the original frame edges, crop, scale, and horizon fixed. Motion comes from the scene rather than camera shake.</small><div><button type="button" className="secondary-action" onClick={() => regenerateStills(sceneIndex)} disabled={stillBusy || animationBusy}>{stillBusy ? 'Regenerating still…' : 'Regenerate still'}</button><button type="button" className="secondary-action" onClick={() => autoWriteAnimationPrompt(sceneIndex)} disabled={writingPromptFor === sceneIndex || animationBusy || stillBusy}>{writingPromptFor === sceneIndex ? 'Writing prompt…' : 'Auto-write prompt'}</button><button type="button" className="primary-action" onClick={() => animateScene(sceneIndex)} disabled={animationBusy || stillBusy}>{animationBusy ? `${stageLabel(animationJob.stage)} · ${Math.round((animationJob.progress || 0) * 100)}%` : (clip ? 'Re-animate image' : 'Animate image')}</button></div>{animationJob?.status === 'FAILED' && <small className="scene-animation-error">Animation rejected: {animationJob.error || animationJob.stage}. The original still and any previously accepted clip were preserved.</small>}{scene.animationQuality?.status === 'accepted' && <small className="scene-animation-quality">Quality accepted · {scene.animationQuality.cameraBehavior === 'locked' ? 'locked framing stabilized' : 'deliberate camera move'} · source fit without cropping</small>}</div><small>{Math.round(scene.duration || 0)} sec · {clip ? 'Motion clip attached; regenerating the still will detach it' : 'Still image ready to animate'}</small></div></article>;
           })}</div> : <div className="storyboard-empty"><div className="empty-frame">16:9</div><h3>Name a passage. Sextant handles the rest.</h3><p>Motion mode plans the whole passage as one continuous sequence, gives every scene a visible action, and carries each scene's final frame into the next shot.</p></div>}
         </section>
 

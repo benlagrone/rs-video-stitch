@@ -4,7 +4,10 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
+import statistics
 import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -21,6 +24,9 @@ FRAME_PROTECTION_HEIGHT = 320
 FRAME_PROTECTION_X = 69
 FRAME_PROTECTION_Y = 45
 FRAME_PROTECTION_FEATHER = 4
+LOCKED_CAMERA_P95_TRANSLATION_LIMIT = float(os.getenv("LOCKED_CAMERA_P95_TRANSLATION_LIMIT", "12"))
+LOCKED_CAMERA_LARGE_CORRECTION_RATIO = float(os.getenv("LOCKED_CAMERA_LARGE_CORRECTION_RATIO", "0.20"))
+SOURCE_FRAME_MIN_SSIM = float(os.getenv("SOURCE_FRAME_MIN_SSIM", "0.28"))
 
 
 class MotionProviderError(RuntimeError):
@@ -163,6 +169,118 @@ def _verify_video(path: Path) -> None:
         raise MotionProviderError("Motion artifact failed hard gates: " + ", ".join(failures))
 
 
+def _prepare_source_image(image_path: Path, destination: Path) -> None:
+    command = [
+        "ffmpeg", "-y", "-i", str(image_path), "-frames:v", "1", "-sws_flags", "lanczos",
+        "-vf", (
+            f"scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
+            "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+            f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black"
+        ),
+        str(destination),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise MotionProviderError(f"Unable to prepare a crop-safe source frame: {exc}") from exc
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise MotionProviderError("Crop-safe source preparation produced no image")
+
+
+def _parse_deshake_log(path: Path) -> dict[str, float | int]:
+    translations: list[float] = []
+    large_corrections = 0
+    if path.exists():
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[1:]:
+            try:
+                values = [float(value.strip()) for value in line.split(",")]
+                magnitude = (values[0] ** 2 + values[3] ** 2) ** 0.5
+            except (ValueError, IndexError):
+                continue
+            translations.append(magnitude)
+            if magnitude >= LOCKED_CAMERA_P95_TRANSLATION_LIMIT:
+                large_corrections += 1
+    if not translations:
+        return {"sampleCount": 0, "p95TranslationPixels": 0.0, "maxTranslationPixels": 0.0, "largeCorrectionRatio": 0.0}
+    ordered = sorted(translations)
+    p95_index = min(len(ordered) - 1, max(0, int(len(ordered) * 0.95) - 1))
+    return {
+        "sampleCount": len(translations),
+        "p95TranslationPixels": round(ordered[p95_index], 3),
+        "maxTranslationPixels": round(max(translations), 3),
+        "largeCorrectionRatio": round(large_corrections / len(translations), 4),
+        "medianTranslationPixels": round(statistics.median(translations), 3),
+    }
+
+
+def _stabilize_locked_camera(video_path: Path) -> dict[str, float | int]:
+    stabilized_path = video_path.with_name(f"{video_path.stem}.stabilized{video_path.suffix}")
+    transform_log = video_path.with_name(f"{video_path.stem}.deshake.csv")
+    filter_graph = (
+        f"scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        f"deshake=rx=16:ry=16:edge=mirror:filename={transform_log}"
+    )
+    command = [
+        "ffmpeg", "-y", "-i", str(video_path), "-vf", filter_graph, "-map", "0:v:0", "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy",
+        str(stabilized_path),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        if not stabilized_path.exists() or stabilized_path.stat().st_size == 0:
+            raise MotionProviderError("Locked-camera stabilization produced no video")
+        metrics = _parse_deshake_log(transform_log)
+        if (
+            float(metrics["p95TranslationPixels"]) > LOCKED_CAMERA_P95_TRANSLATION_LIMIT
+            and float(metrics["largeCorrectionRatio"]) > LOCKED_CAMERA_LARGE_CORRECTION_RATIO
+        ):
+            raise MotionProviderError(
+                "Animation rejected for uncontrolled camera shake: "
+                f"p95 correction {metrics['p95TranslationPixels']}px, "
+                f"large-correction ratio {metrics['largeCorrectionRatio']}"
+            )
+        stabilized_path.replace(video_path)
+        return metrics
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise MotionProviderError(f"Unable to stabilize the locked-camera animation: {exc}") from exc
+    finally:
+        stabilized_path.unlink(missing_ok=True)
+        transform_log.unlink(missing_ok=True)
+
+
+def _measure_source_frame_fidelity(image_path: Path, video_path: Path) -> float:
+    stats_path = video_path.with_name(f"{video_path.stem}.source-ssim.log")
+    filter_graph = (
+        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black[s];"
+        f"[1:v]select='eq(n,0)',setpts=N/FRAME_RATE/TB[v];[s][v]ssim=stats_file={stats_path}"
+    )
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-loop", "1", "-i", str(image_path),
+        "-i", str(video_path), "-filter_complex", filter_graph, "-frames:v", "1", "-f", "null", "-",
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        content = stats_path.read_text(encoding="utf-8", errors="replace")
+        match = re.search(r"All:([0-9.]+)", content)
+        if not match:
+            raise MotionProviderError("Unable to measure first-frame source fidelity")
+        score = float(match.group(1))
+        if score < SOURCE_FRAME_MIN_SSIM:
+            raise MotionProviderError(
+                f"Animation rejected for source framing drift or crop: first-frame SSIM {score:.3f} "
+                f"is below {SOURCE_FRAME_MIN_SSIM:.3f}"
+            )
+        return round(score, 4)
+    except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
+        raise MotionProviderError(f"Unable to validate source framing fidelity: {exc}") from exc
+    finally:
+        stats_path.unlink(missing_ok=True)
+
+
 def _protect_decorative_frame(image_path: Path, video_path: Path) -> None:
     protected_path = video_path.with_name(f"{video_path.stem}.frame-protected{video_path.suffix}")
     inner_width = FRAME_PROTECTION_WIDTH - (FRAME_PROTECTION_X * 2)
@@ -197,35 +315,49 @@ def generate_motion_clip(
     negative_prompt: str,
     seed: int | None = None,
     protect_style_frame: bool = False,
+    camera_behavior: str = "locked",
     session=requests,
-) -> None:
+) -> dict[str, Any]:
     model_health = session.get(f"{COMFYUI_MODEL_API_URL.rstrip('/')}/system_stats", timeout=10)
     model_health.raise_for_status()
-    uploaded_name = _upload_image(session, image_path)
-    prefix = f"mediastudio/{uuid.uuid4().hex}"
-    workflow = _patched_workflow(uploaded_name, prompt, negative_prompt, prefix, seed=seed)
-    queued = session.post(
-        f"{COMFYUI_MODEL_API_URL.rstrip('/')}/prompt",
-        json={"client_id": f"mediastudio-sextant-{uuid.uuid4().hex}", "prompt": workflow},
-        timeout=60,
-    )
-    queued.raise_for_status()
-    prompt_id = str(queued.json().get("prompt_id") or "")
-    if not prompt_id:
-        raise MotionProviderError("ComfyUI did not return a prompt id")
-    item = _output_record(_wait_for_output(session, prompt_id))
-    artifact = session.get(
-        f"{COMFYUI_MODEL_API_URL.rstrip('/')}/view",
-        params={
-            "filename": item["filename"],
-            "subfolder": item.get("subfolder", ""),
-            "type": item.get("type", "output"),
-        },
-        timeout=300,
-    )
-    artifact.raise_for_status()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(artifact.content)
-    if protect_style_frame:
-        _protect_decorative_frame(image_path, destination)
-    _verify_video(destination)
+    with tempfile.TemporaryDirectory(prefix="mediastudio-motion-") as temp_dir:
+        prepared_source = Path(temp_dir) / f"prepared-{image_path.stem}.png"
+        _prepare_source_image(image_path, prepared_source)
+        uploaded_name = _upload_image(session, prepared_source)
+        prefix = f"mediastudio/{uuid.uuid4().hex}"
+        workflow = _patched_workflow(uploaded_name, prompt, negative_prompt, prefix, seed=seed)
+        queued = session.post(
+            f"{COMFYUI_MODEL_API_URL.rstrip('/')}/prompt",
+            json={"client_id": f"mediastudio-sextant-{uuid.uuid4().hex}", "prompt": workflow},
+            timeout=60,
+        )
+        queued.raise_for_status()
+        prompt_id = str(queued.json().get("prompt_id") or "")
+        if not prompt_id:
+            raise MotionProviderError("ComfyUI did not return a prompt id")
+        item = _output_record(_wait_for_output(session, prompt_id))
+        artifact = session.get(
+            f"{COMFYUI_MODEL_API_URL.rstrip('/')}/view",
+            params={
+                "filename": item["filename"],
+                "subfolder": item.get("subfolder", ""),
+                "type": item.get("type", "output"),
+            },
+            timeout=300,
+        )
+        artifact.raise_for_status()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(artifact.content)
+        quality: dict[str, Any] = {
+            "status": "accepted",
+            "cameraBehavior": camera_behavior,
+            "sourceSizing": "fit-and-pad-no-crop",
+        }
+        if camera_behavior == "locked":
+            quality["stabilization"] = _stabilize_locked_camera(destination)
+        quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
+        if protect_style_frame:
+            _protect_decorative_frame(prepared_source, destination)
+            quality["decorativeFrameProtected"] = True
+        _verify_video(destination)
+        return quality

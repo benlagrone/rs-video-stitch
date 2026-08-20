@@ -89,6 +89,7 @@ def loop(stop_event: Event | None = None) -> None:
                         job.project_id,
                         int(payload.get("sceneIndex") or 0),
                         str(payload.get("prompt") or ""),
+                        str(payload.get("cameraBehavior") or "locked"),
                         progress=progress,
                         log=log,
                     )

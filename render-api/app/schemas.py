@@ -176,10 +176,12 @@ class BibleVideoRequest(BaseModel):
 
 class SceneAnimationRequest(BaseModel):
     prompt: str = Field(default="", max_length=2000)
+    cameraBehavior: Literal["locked", "slow-push", "pan-left", "pan-right"] = "locked"
 
 
 class SceneAnimationBatchRequest(BaseModel):
     prompts: Dict[int, str] = Field(default_factory=dict)
+    cameraBehaviors: Dict[int, Literal["locked", "slow-push", "pan-left", "pan-right"]] = Field(default_factory=dict)
     includeAnimated: bool = False
 
 
