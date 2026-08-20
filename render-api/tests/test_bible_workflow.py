@@ -256,6 +256,8 @@ class BibleWorkflowTest(TestCase):
                 "timeline": [{"image": "scene_001.png", "prompt": "A dark sea beneath the heavens"}],
             }],
         }
+        session = mock.Mock()
+        session.post.return_value = _Response({"response": "Light travels across the same dark water as the camera pushes toward the glowing horizon."})
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
             bible_workflow, "p_input", return_value=Path(tmp) / "input"
         ), mock.patch.object(
@@ -265,13 +267,16 @@ class BibleWorkflowTest(TestCase):
             (input_dir / "images").mkdir(parents=True)
             (input_dir / "images" / "scene_001.png").write_bytes(b"png")
             (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
-            prompt = bible_workflow.generate_scene_animation_prompt("bible-test", 1)
+            prompt = bible_workflow.generate_scene_animation_prompt("bible-test", 1, session=session)
 
-        self.assertIn("Light travels across the water", prompt)
-        self.assertIn("Slow forward push", prompt)
-        self.assertIn("The horizon glows", prompt)
+        self.assertIn("Scene 1 — Genesis 1:1", prompt)
+        self.assertIn("Light travels across the same dark water", prompt)
+        writer_input = session.post.call_args.kwargs["json"]["prompt"]
+        self.assertIn("Light travels across the water", writer_input)
+        self.assertIn("Slow forward push", writer_input)
+        self.assertIn("The horizon glows", writer_input)
 
-    def test_scene_animation_prompt_falls_back_without_inventing_new_content(self):
+    def test_scene_animation_writer_grounds_unplanned_scene_in_verse_and_still(self):
         document = {
             "info": {"name": "Genesis 1 (KJV)"},
             "scenes": [{
@@ -281,6 +286,8 @@ class BibleWorkflowTest(TestCase):
                 "timeline": [{"image": "scene_001.png", "prompt": "An existing landscape beneath the heavens"}],
             }],
         }
+        session = mock.Mock()
+        session.post.return_value = _Response({"response": "The existing darkness recedes across the landscape while the camera advances toward the newly ordered light."})
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
             bible_workflow, "p_input", return_value=Path(tmp) / "input"
         ), mock.patch.object(bible_workflow, "read_project_state", return_value={}):
@@ -288,10 +295,46 @@ class BibleWorkflowTest(TestCase):
             (input_dir / "images").mkdir(parents=True)
             (input_dir / "images" / "scene_001.png").write_bytes(b"png")
             (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
-            prompt = bible_workflow.generate_scene_animation_prompt("bible-test", 1)
+            prompt = bible_workflow.generate_scene_animation_prompt("bible-test", 1, session=session)
 
-        self.assertIn("available light advances", prompt)
-        self.assertIn("without introducing anything new", prompt)
+        self.assertIn("Scene 1 — Genesis 1:1", prompt)
+        self.assertIn("existing darkness recedes", prompt)
+        writer_input = session.post.call_args.kwargs["json"]["prompt"]
+        self.assertIn("In the beginning God created", writer_input)
+        self.assertIn("An existing landscape beneath the heavens", writer_input)
+
+    def test_scene_animation_writer_uses_neighbors_and_never_reuses_stored_prompt(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)", "passage": "Genesis 1"},
+            "scenes": [
+                {"title": "Genesis 1:1", "VO": "In the beginning.", "endState": "Light reaches the water."},
+                {
+                    "title": "Genesis 1:2",
+                    "VO": "Darkness was upon the face of the deep.",
+                    "images": ["scene_002.png"],
+                    "motionPrompt": "Generic old prompt.",
+                    "timeline": [{"image": "scene_002.png", "prompt": "Dark water beneath a wind-swept sky"}],
+                },
+                {"title": "Genesis 1:3", "VO": "Let there be light."},
+            ],
+        }
+        session = mock.Mock()
+        session.post.return_value = _Response({"response": "Wind crosses only the dark deep while the camera follows the moving surface toward the first light."})
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(bible_workflow, "read_project_state", return_value={"visualStyle": "baroque"}):
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            (input_dir / "images" / "scene_002.png").write_bytes(b"png")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+            prompt = bible_workflow.generate_scene_animation_prompt("bible-test", 2, session=session)
+
+        self.assertNotEqual(prompt, "Generic old prompt.")
+        self.assertTrue(prompt.startswith("Scene 2 — Genesis 1:2."))
+        writer_input = session.post.call_args.kwargs["json"]["prompt"]
+        self.assertIn("Previous scene ending: Light reaches the water.", writer_input)
+        self.assertIn("Next scene event: Let there be light.", writer_input)
+        self.assertIn("Existing prompt to replace, not copy: Generic old prompt.", writer_input)
 
     def test_animate_scene_preserves_still_and_attaches_motion_clip(self):
         document = {

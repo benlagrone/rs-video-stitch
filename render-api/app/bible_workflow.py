@@ -283,8 +283,12 @@ def _safe_fallback_animation_prompt(scene: dict[str, Any]) -> str:
         actions.append("the existing people breathe, shift their weight, and direct their gaze toward the visible action")
     if not actions:
         actions.append("the existing subjects and environmental light develop through one restrained natural action")
+    title = re.sub(r"\s+", " ", str(scene.get("title") or "This scene")).strip()
+    verse = re.sub(r"\s+", " ", str(scene.get("VO") or scene.get("description") or "")).strip()
     return (
-        f"{'; '.join(actions[:3])}. The camera makes a slow, steady forward move with gentle parallax, keeping every "
+        f"{title}: animate the specific scripture beat, {verse} {actions[0]}. "
+        "Use the remaining visible environmental motion only where it already exists in the still. "
+        "The camera makes a slow, steady forward move with gentle parallax, keeping every "
         "visible subject, garment, face, structure, decorative element, palette, and light direction consistent. Motion "
         "continues throughout the five-second shot and settles into a clear final composition that can flow directly into "
         "the following scene without introducing anything new. "
@@ -292,21 +296,79 @@ def _safe_fallback_animation_prompt(scene: dict[str, Any]) -> str:
     )
 
 
-def generate_scene_animation_prompt(project_id: str, scene_index: int) -> str:
+def _scene_animation_writer_prompt(
+    document: dict[str, Any],
+    scene: dict[str, Any],
+    scene_index: int,
+    visual_style: str,
+) -> str:
+    scenes = document.get("scenes") or []
+    previous_scene = scenes[scene_index - 2] if scene_index > 1 else {}
+    next_scene = scenes[scene_index] if scene_index < len(scenes) else {}
+
+    def value(item: dict[str, Any], key: str) -> str:
+        return re.sub(r"\s+", " ", str(item.get(key) or "")).strip()
+
+    timeline = scene.get("timeline") or [{}]
+    still_description = re.sub(r"\s+", " ", str(timeline[0].get("prompt") or "")).strip()
+    return (
+        "Write one production-ready image-to-video animation prompt for exactly the current Bible scene below. "
+        "Make this scene unmistakably different from adjacent scenes. Ground the action in this verse and in objects or "
+        "people already visible in the still; do not reuse generic water, breeze, lighting, or camera language unless the "
+        "current verse and still specifically support it. Describe a concrete opening state, one continuous visible action "
+        "with purposeful subject movement, a specific camera move, and an ending state that can flow into the next scene. "
+        "Preserve faces, bodies, garments, architecture, palette, composition, and light direction. Do not add new people "
+        "or objects, cut to another shot, morph anatomy, or render text. Use 70 to 120 words in one paragraph. Return only "
+        "the animation prompt, without a heading, quotation marks, analysis, or the scripture text verbatim.\n\n"
+        f"Passage: {value(document.get('info') or {}, 'passage') or value(document.get('info') or {}, 'name')}\n"
+        f"Current scene: {scene_index} of {len(scenes)}\n"
+        f"Reference: {value(scene, 'title')}\n"
+        f"Verse meaning and event: {value(scene, 'VO') or value(scene, 'description')}\n"
+        f"Still-image description: {still_description}\n"
+        f"Existing prompt to replace, not copy: {value(scene, 'motionPrompt') or 'none'}\n"
+        f"Planned start: {value(scene, 'startState') or 'infer only from the existing still'}\n"
+        f"Planned action: {value(scene, 'action') or 'derive one verse-specific visible action'}\n"
+        f"Planned ending: {value(scene, 'endState') or 'settle into a state compatible with the next scene'}\n"
+        f"Planned camera: {value(scene, 'camera') or 'choose a scene-specific camera move'}\n"
+        f"Continuity requirements: {value(scene, 'continuity') or 'preserve everything visible in the still'}\n"
+        f"Planned transition: {value(scene, 'transition') or 'end in visual continuity with the next scene'}\n"
+        f"Previous scene ending: {value(previous_scene, 'endState') or value(previous_scene, 'VO') or 'opening scene'}\n"
+        f"Next scene event: {value(next_scene, 'VO') or value(next_scene, 'description') or 'final scene'}\n"
+        f"Visual style: {resolve_art_style(visual_style)['name']}\n"
+        f"Locked God character design: {GOD_CHARACTER_ANCHOR}"
+    )
+
+
+def generate_scene_animation_prompt(project_id: str, scene_index: int, *, session=requests) -> str:
     document, scene, _, _ = scene_animation_context(project_id, scene_index)
     state = read_project_state(project_id) or {}
     visual_style = str(state.get("visualStyle") or (document.get("info") or {}).get("visualStyle") or "cinematic natural light")
-    existing_prompt = re.sub(r"\s+", " ", str(scene.get("motionPrompt") or "")).strip()
-    if existing_prompt:
-        return (
-            existing_prompt
-            if GOD_CHARACTER_ANCHOR in existing_prompt
-            else f"{existing_prompt} Locked God character design: {GOD_CHARACTER_ANCHOR}"
-        )
-    plan_fields = ("startState", "action", "endState", "camera", "continuity", "transition")
-    if all(str(scene.get(field) or "").strip() for field in plan_fields):
-        return _motion_prompt(scene, visual_style)
-    return _safe_fallback_animation_prompt(scene)
+    response = session.post(
+        f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+        json={
+            "model": OLLAMA_MODEL,
+            "prompt": _scene_animation_writer_prompt(document, scene, scene_index, visual_style),
+            "stream": False,
+            "options": {"temperature": 0.55, "num_predict": 220},
+        },
+        timeout=OLLAMA_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    generated = str(
+        payload.get("response")
+        or ((payload.get("message") or {}).get("content") if isinstance(payload.get("message"), dict) else "")
+    ).strip()
+    generated = re.sub(r"^```(?:text)?\s*|\s*```$", "", generated, flags=re.IGNORECASE).strip().strip('"')
+    generated = re.sub(r"^(?:animation prompt|prompt)\s*:\s*", "", generated, flags=re.IGNORECASE)
+    generated = re.sub(r"\s+", " ", generated).strip()
+    if not generated:
+        raise RuntimeError("Fortress animation prompt writer returned an empty response")
+    title = re.sub(r"\s+", " ", str(scene.get("title") or f"Scene {scene_index}")).strip()
+    result = f"Scene {scene_index} — {title}. {generated}"
+    if GOD_CHARACTER_ANCHOR not in result:
+        result = f"{result} Locked God character design: {GOD_CHARACTER_ANCHOR}"
+    return result
 
 
 def animate_bible_scene(
