@@ -56,7 +56,12 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("no pair of men", prompt)
         self.assertIn("show no person, face, humanoid, angel, robed figure", prompt)
         self.assertIn("ignore any style defaults that call for human or symbolic figures", prompt)
+        self.assertNotIn("Flat symbolic figures", prompt)
         self.assertNotIn("full silver-white beard", prompt)
+
+        byzantine_prompt = bible_workflow._scene_prompt("Genesis 1:2", "Darkness was upon the deep.", "byzantine-iconography")
+        self.assertNotIn("Flat symbolic figures", byzantine_prompt)
+        self.assertIn("gold-leaf surface treatment", byzantine_prompt)
 
     def test_fetch_and_build_storyboard_preserves_each_verse(self):
         session = mock.Mock()

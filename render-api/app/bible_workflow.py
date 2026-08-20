@@ -179,6 +179,12 @@ def _scene_prompt(reference: str, verse: str, visual_style: str, opening_state: 
     style = resolve_art_style(visual_style)
     opening = f" Opening frame: {opening_state}." if opening_state else ""
     is_genesis_one = bool(re.match(r"^genesis\s+1(?::|\b)", reference.strip(), flags=re.IGNORECASE))
+    style_direction = str(style["prompt"])
+    if is_genesis_one and re.search(r"\b(figures?|portraits?|characters?|saints?|icons?)\b", style_direction, flags=re.IGNORECASE):
+        style_direction = (
+            f"Use the {style['name']} palette, flat spatial design, gold-leaf surface treatment, linework, and "
+            "intricate geometric patterning on cosmic and natural forms only"
+        )
     setting_policy = (
         "Pure creation-era cosmic or natural scenery with no civilization. For verses before humanity is created, "
         "show no person, face, humanoid, angel, robed figure, deity portrait, architecture, columns, arches, or buildings. "
@@ -190,7 +196,7 @@ def _scene_prompt(reference: str, verse: str, visual_style: str, opening_state: 
     return (
         f"Biblically and historically grounded visual interpretation of {reference}: {verse}. "
         f"{opening} "
-        f"Art direction: {style['name']}. {style['prompt']}. "
+        f"Art direction: {style['name']}. {style_direction}. "
         f"Composition policy: {_god_portrayal_instruction(reference, verse)} "
         f"{setting_policy} "
         "modest composition, expressive but restrained emotion, cinematic 16:9 framing, coherent lighting, "
