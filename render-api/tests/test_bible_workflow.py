@@ -83,8 +83,15 @@ class BibleWorkflowTest(TestCase):
         self.assertNotIn("woman", early_prompt.lower())
         self.assertIn("wild animals", early_prompt)
         self.assertNotIn("God", humanity_prompt)
-        self.assertIn("One mature adult man and one mature adult woman", humanity_prompt)
-        self.assertIn("small within the vast landscape", bible_workflow._genesis_one_visual_subject("Genesis 1:31"))
+        self.assertIn("Exactly two full-body ancient Near Eastern adults", humanity_prompt)
+        self.assertIn("one visibly masculine adult man", humanity_prompt)
+        self.assertIn("one visibly feminine adult woman", humanity_prompt)
+        self.assertIn("exactly one adult man and one adult woman", bible_workflow._genesis_one_visual_subject("Genesis 1:31"))
+        humanity_negative = bible_workflow._scene_negative_prompt("Genesis 1:27")
+        self.assertIn("building", humanity_negative)
+        self.assertIn("third person", humanity_negative)
+        self.assertIn("two men", humanity_negative)
+        self.assertNotIn(", person, people", humanity_negative)
 
     def test_fetch_and_build_storyboard_preserves_each_verse(self):
         session = mock.Mock()

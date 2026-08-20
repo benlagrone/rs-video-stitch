@@ -165,12 +165,20 @@ def _scene_negative_prompt(reference: str) -> str:
     negative = "duplicate deity, two Gods, twin divine figures, multiple old bearded men, repeated character portrait"
     genesis_one = re.match(r"^genesis\s+1(?::(\d+))?\b", reference.strip(), flags=re.IGNORECASE)
     if genesis_one:
-        negative += ", anthropomorphic God, human deity, portrait of God, elderly deity, two elderly men"
+        negative += (
+            ", anthropomorphic God, human deity, portrait of God, elderly deity, two elderly men, architecture, "
+            "building, house, palace, church, temple, arches, columns, city, village, road, paved path"
+        )
         verse_number = int(genesis_one.group(1) or 0)
         if not verse_number or verse_number <= 25 or verse_number == 30:
             negative += (
                 ", person, people, man, woman, male figure, female figure, human, humanoid, face, portrait, "
-                "robed figure, angel, goddess, deity, crowd, pair of figures, architecture, columns, arches, temple, church"
+                "robed figure, angel, goddess, deity, crowd, pair of figures"
+            )
+        elif verse_number in {26, 27, 28, 29, 31}:
+            negative += (
+                ", third person, extra person, three people, crowd, group, two men, two women, same-sex pair, "
+                "duplicate person, elderly man, old man, bearded elder, wedding, bride, groom, formal gown, modern dress"
             )
     return negative
 
@@ -205,12 +213,28 @@ def _genesis_one_visual_subject(reference: str) -> str:
         23: "Birds settling at evening above teeming seas before the fifth morning",
         24: "Wild animals, livestock, and small ground creatures emerging across varied habitats",
         25: "A balanced living landscape populated by distinct wild animals, livestock, and ground creatures",
-        26: "A mature adult man and woman standing together within the abundant living world they will steward",
-        27: "One mature adult man and one mature adult woman, equal in dignity, newly present in the garden landscape",
-        28: "The adult man and woman beginning their stewardship amid fertile land, birds, fish, and animals",
-        29: "The adult man and woman receiving the abundance of seed-bearing plants and fruit trees around them",
+        26: (
+            "Exactly two full-body ancient Near Eastern adults outdoors: one visibly masculine adult man with short "
+            "dark hair and one visibly feminine adult woman with long dark hair, both in simple undyed linen garments, "
+            "standing separately amid plants and animals"
+        ),
+        27: (
+            "Exactly two full-body ancient Near Eastern adults: one visibly masculine adult man and one visibly "
+            "feminine adult woman, equal in dignity, standing separately in a wild garden landscape"
+        ),
+        28: (
+            "Exactly one adult man and one adult woman beginning their stewardship together outdoors amid fertile "
+            "land, birds, fish, and animals"
+        ),
+        29: (
+            "Exactly one adult man and one adult woman receiving abundant seed-bearing plants and fruit trees in a "
+            "wild outdoor landscape"
+        ),
         30: "Land animals, birds, and small creatures feeding peacefully among abundant green plants",
-        31: "A panoramic view of the complete created world, with the adult man and woman small within the vast landscape",
+        31: (
+            "A panoramic view of the complete living world with exactly one adult man and one adult woman visible "
+            "together as small figures within the vast wild landscape"
+        ),
     }
     return subjects.get(verse_number, "The physical creation of the cosmos unfolding through distinct natural forms")
 
