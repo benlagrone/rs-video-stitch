@@ -1041,7 +1041,7 @@ class BibleWorkflowTest(TestCase):
             with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_stats):
                 metrics = motion_provider._measure_edge_tile_integrity(video)
 
-            self.assertEqual(metrics["edgeTileSampleCount"], 7)
+            self.assertEqual(metrics["edgeTileSampleCount"], 16)
             self.assertEqual(metrics["maxEdgeTileSaturationJump"], 0.0)
 
     def test_decorative_frame_protection_restores_source_border(self):

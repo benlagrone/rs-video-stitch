@@ -353,9 +353,9 @@ def _measure_sequence_integrity(video_path: Path) -> dict[str, float | int]:
 
 
 def _measure_edge_tile_integrity(video_path: Path) -> dict[str, float | int]:
-    # Localized model corruption can hide inside healthy whole-frame averages. Sample the
-    # outer 4x4 tiles where generation/stabilization artifacts most often enter the image.
-    tiles = [(3, column) for column in range(4)] + [(row, 3) for row in range(3)]
+    # Localized model corruption can hide inside healthy whole-frame averages. Sample every
+    # 4x4 tile so central generation failures are caught as well as edge artifacts.
+    tiles = [(row, column) for row in range(4) for column in range(4)]
     worst_saturation_jump = 0.0
     worst_luma_difference = 0.0
     worst_tile = ""
