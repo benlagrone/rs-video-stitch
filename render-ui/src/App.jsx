@@ -1244,6 +1244,14 @@ export function App() {
       setIsRendering(true);
       await saveProject();
 
+      if (hasSavedProject && outputs.includes(outputName)) {
+        setStatus(`Deleting previous ${outputName}`);
+        await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/outputs/video?filename=${encodeURIComponent(outputName)}`, {
+          method: 'DELETE',
+        });
+        setOutputs((current) => current.filter((filename) => filename !== outputName));
+      }
+
       setStatus('Queueing render');
       const renderResponse = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/render`, {
         method: 'POST',
@@ -1794,10 +1802,10 @@ export function App() {
           </div>
 
           <button className="primary-action" type="button" onClick={submitRender} disabled={!canRender || isRendering}>
-            {isRendering ? 'Rendering…' : hasSavedProject ? 'Re-render Video' : 'Start Render'}
+            {isRendering ? 'Rendering…' : hasSavedProject ? 'Delete & Re-render Video' : 'Start Render'}
           </button>
           {hasSavedProject && (
-            <p className="hint">Re-renders from the saved scenes and current settings. Change the output filename first if you want to keep the previous MP4.</p>
+            <p className="hint">Deletes the selected local MP4, then renders it again from the saved scenes and current settings. YouTube uploads, thumbnails, source images, and project history are not deleted. Change the output filename first to keep the previous MP4.</p>
           )}
           {error && <div className="error-box">{error}</div>}
           {(previewVideoHref || outputs.length > 0) && (

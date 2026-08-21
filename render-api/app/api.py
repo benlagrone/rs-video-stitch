@@ -1599,6 +1599,27 @@ async def outputs(pid: str) -> dict:
     return {"projectId": pid, "files": list_outputs(pid)}
 
 
+@app.delete("/v1/projects/{pid}/outputs/video")
+async def delete_output_video(pid: str, filename: str) -> dict:
+    safe_filename = Path(filename).name
+    if safe_filename != filename or Path(safe_filename).suffix.lower() not in {
+        ".mkv",
+        ".mov",
+        ".mp4",
+        ".mpeg",
+        ".mpg",
+        ".webm",
+    }:
+        raise HTTPException(status_code=400, detail="valid video filename is required")
+
+    target = p_output(pid) / safe_filename
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="video not found")
+
+    target.unlink()
+    return {"projectId": pid, "deleted": safe_filename}
+
+
 def _parse_byte_range(range_header: str, file_size: int) -> Optional[tuple[int, int]]:
     match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
     if not match or file_size <= 0:
