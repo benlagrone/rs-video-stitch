@@ -847,8 +847,8 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["55"]["inputs"]["length"], 81)
         self.assertEqual(workflow["57"]["inputs"]["fps"], 16)
         self.assertEqual(workflow["3"]["inputs"]["seed"], 8675309)
-        self.assertEqual(workflow["3"]["inputs"]["denoise"], 1.0)
-        self.assertEqual(quality["modelDenoise"], 1.0)
+        self.assertEqual(workflow["3"]["inputs"]["denoise"], motion_provider.LOCKED_CAMERA_DENOISE)
+        self.assertEqual(quality["modelDenoise"], motion_provider.LOCKED_CAMERA_DENOISE)
 
     def test_motion_quality_gate_rejects_short_artifact(self):
         probe = {

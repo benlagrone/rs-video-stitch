@@ -27,6 +27,7 @@ FRAME_PROTECTION_FEATHER = 4
 LOCKED_CAMERA_P95_TRANSLATION_LIMIT = float(os.getenv("LOCKED_CAMERA_P95_TRANSLATION_LIMIT", "12"))
 LOCKED_CAMERA_LARGE_CORRECTION_RATIO = float(os.getenv("LOCKED_CAMERA_LARGE_CORRECTION_RATIO", "0.20"))
 SOURCE_FRAME_MIN_SSIM = float(os.getenv("SOURCE_FRAME_MIN_SSIM", "0.28"))
+LOCKED_CAMERA_DENOISE = float(os.getenv("LOCKED_CAMERA_DENOISE", "0.65"))
 SEQUENCE_SATURATION_JUMP_LIMIT = float(os.getenv("SEQUENCE_SATURATION_JUMP_LIMIT", "4.0"))
 SEQUENCE_LUMA_JUMP_LIMIT = float(os.getenv("SEQUENCE_LUMA_JUMP_LIMIT", "8.0"))
 SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE = float(os.getenv("SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE", "15.0"))
@@ -453,7 +454,7 @@ def generate_motion_clip(
         _prepare_source_image(image_path, prepared_source)
         uploaded_name = _upload_image(session, prepared_source)
         prefix = f"mediastudio/{uuid.uuid4().hex}"
-        model_denoise = 1.0
+        model_denoise = LOCKED_CAMERA_DENOISE if camera_behavior == "locked" else 1.0
         workflow = _patched_workflow(
             uploaded_name,
             prompt,
