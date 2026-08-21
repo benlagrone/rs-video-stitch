@@ -493,10 +493,14 @@ def generate_motion_clip(
         }
         if camera_behavior == "locked":
             quality["stabilization"] = _stabilize_locked_camera(destination)
+            _protect_decorative_frame(prepared_source, destination)
+            quality["lockedFrameEdgesProtected"] = True
         quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
         quality["sequenceIntegrity"] = _measure_sequence_integrity(destination)
-        if protect_style_frame:
+        if protect_style_frame and camera_behavior != "locked":
             _protect_decorative_frame(prepared_source, destination)
+            quality["decorativeFrameProtected"] = True
+        elif protect_style_frame:
             quality["decorativeFrameProtected"] = True
         _verify_video(destination)
         return quality
