@@ -500,7 +500,8 @@ class BibleWorkflowTest(TestCase):
 
         self.assertNotEqual(prompt, "Generic old prompt.")
         self.assertTrue(prompt.startswith("Scene 2 — Genesis 1:2."))
-        self.assertTrue(prompt.endswith("first light."))
+        self.assertIn("first light.", prompt)
+        self.assertTrue(prompt.endswith("do not move the camera."))
         writer_input = session.post.call_args.kwargs["json"]["prompt"]
         self.assertIn("Previous scene ending: Light reaches the water.", writer_input)
         self.assertIn("Next scene event: Let there be light.", writer_input)
@@ -565,6 +566,36 @@ class BibleWorkflowTest(TestCase):
 
         self.assertNotRegex(prompt.lower(), r"camera\s+(pans|glides|moves|pushes|advances)")
         self.assertIn("Keep the camera locked", prompt)
+
+    def test_locked_camera_writer_replaces_global_scene_transformation(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)"},
+            "scenes": [{
+                "title": "Genesis 1:1",
+                "VO": "In the beginning God created the heaven and the earth.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png", "prompt": "A forming earth beneath the heavens"}],
+            }],
+        }
+        session = mock.Mock()
+        session.post.return_value = _Response({
+            "response": "A celestial body breaks apart and reforms while golden light fills the void."
+        })
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(bible_workflow, "read_project_state", return_value={}):
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            (input_dir / "images" / "scene_001.png").write_bytes(b"png")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+            prompt = bible_workflow.generate_scene_animation_prompt(
+                "bible-test", 1, camera_behavior="locked", session=session
+            )
+
+        self.assertNotIn("breaks apart", prompt)
+        self.assertNotIn("fills the void", prompt)
+        self.assertIn("without changing the scene's overall exposure", prompt)
+        self.assertIn("do not change the overall lighting or color", prompt.lower())
 
     def test_animate_scene_preserves_still_and_attaches_motion_clip(self):
         document = {

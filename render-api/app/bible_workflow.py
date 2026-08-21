@@ -448,7 +448,9 @@ def _safe_fallback_animation_prompt(scene: dict[str, Any]) -> str:
     if any(term in context for term in ("water", "sea", "river", "ocean")):
         actions.append("Existing water ripples outward and its reflections travel continuously across the surface")
     if any(term in context for term in ("light", "sun", "day", "heaven", "created", "beginning")):
-        actions.append("available light advances gradually across the existing landscape")
+        actions.append(
+            "existing dust and small localized highlights drift and shimmer gently without changing the scene's overall exposure"
+        )
     if any(term in context for term in ("plant", "tree", "grass", "herb", "flower", "vine")):
         actions.append("existing leaves and stems respond naturally to a steady breeze")
     if any(term in context for term in ("animal", "bird", "fish", "creature", "cattle")):
@@ -476,11 +478,27 @@ LOCKED_CAMERA_CONFLICT = re.compile(
     flags=re.IGNORECASE,
 )
 
+LOCKED_SCENE_TRANSFORMATION_CONFLICT = re.compile(
+    r"\b(?:break(?:s|ing)?\s+apart|reform(?:s|ing|ed)?|newly\s+form(?:s|ing|ed)?|"
+    r"transform(?:s|ing|ed|ation)?|fill(?:s|ing|ed)?\s+the\s+(?:entire\s+)?(?:frame|void|scene)|"
+    r"ignit(?:e|es|ing|ed)|explod(?:e|es|ing|ed)|global\s+(?:light|color|exposure)\s+(?:change|shift))\b",
+    flags=re.IGNORECASE,
+)
+
+LOCKED_COMPOSITION_POLICY = (
+    " Keep frame edges, crop, scale, horizon, object positions, palette, and global exposure unchanged. "
+    "Animate only small localized details already visible in the still. Do not add, remove, split, reform, or transform "
+    "objects; do not change the overall lighting or color; do not move the camera."
+)
+
 
 def _enforce_camera_behavior_prompt(prompt: str, scene: dict[str, Any], camera_behavior: str) -> str:
     normalized = re.sub(r"\s+", " ", str(prompt or "")).strip()
-    if camera_behavior == "locked" and LOCKED_CAMERA_CONFLICT.search(normalized):
-        return _safe_fallback_animation_prompt(scene)
+    if camera_behavior == "locked":
+        if LOCKED_CAMERA_CONFLICT.search(normalized) or LOCKED_SCENE_TRANSFORMATION_CONFLICT.search(normalized):
+            normalized = _safe_fallback_animation_prompt(scene)
+        if LOCKED_COMPOSITION_POLICY.strip() not in normalized:
+            normalized = f"{normalized.rstrip()} {LOCKED_COMPOSITION_POLICY.strip()}"
     return normalized
 
 
