@@ -943,8 +943,8 @@ class BibleWorkflowTest(TestCase):
                 "lavfi.signalstats.SATAVG=11.4",
                 "lavfi.signalstats.YDIF=2.0",
                 "frame:2 pts:2 pts_time:0.125",
-                "lavfi.signalstats.SATAVG=17.0",
-                "lavfi.signalstats.YDIF=10.7",
+                "lavfi.signalstats.SATAVG=19.0",
+                "lavfi.signalstats.YDIF=28.7",
             ]
         )
         with tempfile.TemporaryDirectory() as tmp:
