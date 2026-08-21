@@ -422,7 +422,7 @@ class BibleWorkflowTest(TestCase):
             }],
         }
         session = mock.Mock()
-        session.post.return_value = _Response({"response": "Light travels across the same dark water as the camera pushes toward the glowing horizon."})
+        session.post.return_value = _Response({"response": "Light travels across the same dark water toward the glowing horizon."})
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
             bible_workflow, "p_input", return_value=Path(tmp) / "input"
         ), mock.patch.object(
@@ -440,7 +440,8 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(session.post.call_args.kwargs["json"]["model"], bible_workflow.OLLAMA_PROMPT_MODEL)
         writer_input = session.post.call_args.kwargs["json"]["prompt"]
         self.assertIn("Light travels across the water", writer_input)
-        self.assertIn("Slow forward push", writer_input)
+        self.assertIn("Selected camera behavior: LOCKED composition", writer_input)
+        self.assertNotIn("Slow forward push", writer_input)
         self.assertIn("The horizon glows", writer_input)
         self.assertNotIn("long silver-white hair", writer_input)
 
@@ -455,7 +456,7 @@ class BibleWorkflowTest(TestCase):
             }],
         }
         session = mock.Mock()
-        session.post.return_value = _Response({"response": "The existing darkness recedes across the landscape while the camera advances toward the newly ordered light."})
+        session.post.return_value = _Response({"response": "The existing darkness recedes across the landscape toward the newly ordered light."})
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
             bible_workflow, "p_input", return_value=Path(tmp) / "input"
         ), mock.patch.object(bible_workflow, "read_project_state", return_value={}):
@@ -487,7 +488,7 @@ class BibleWorkflowTest(TestCase):
             ],
         }
         session = mock.Mock()
-        session.post.return_value = _Response({"response": "Wind crosses only the dark deep while the camera follows the moving surface toward the first light. An unfinished sentence that should be removed"})
+        session.post.return_value = _Response({"response": "Wind crosses only the dark deep while the moving surface carries reflections toward the first light. An unfinished sentence that should be removed"})
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
             bible_workflow, "p_input", return_value=Path(tmp) / "input"
         ), mock.patch.object(bible_workflow, "read_project_state", return_value={"visualStyle": "baroque"}):
@@ -536,6 +537,34 @@ class BibleWorkflowTest(TestCase):
             bible_workflow.generate_scene_animation_prompt("bible-test", 1, session=session)
 
         self.assertIn(theme, session.post.call_args.kwargs["json"]["prompt"])
+
+    def test_locked_camera_writer_replaces_conflicting_model_camera_move(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)"},
+            "scenes": [{
+                "title": "Genesis 1:1",
+                "VO": "In the beginning God created the heaven and the earth.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png", "prompt": "A landscape beneath the heavens"}],
+            }],
+        }
+        session = mock.Mock()
+        session.post.return_value = _Response(
+            {"response": "The camera pans out and then glides toward the forming earth."}
+        )
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(bible_workflow, "read_project_state", return_value={}):
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            (input_dir / "images" / "scene_001.png").write_bytes(b"png")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+            prompt = bible_workflow.generate_scene_animation_prompt(
+                "bible-test", 1, camera_behavior="locked", session=session
+            )
+
+        self.assertNotRegex(prompt.lower(), r"camera\s+(pans|glides|moves|pushes|advances)")
+        self.assertIn("Keep the camera locked", prompt)
 
     def test_animate_scene_preserves_still_and_attaches_motion_clip(self):
         document = {
@@ -688,17 +717,20 @@ class BibleWorkflowTest(TestCase):
                 bible_workflow.animate_bible_scene(
                     "bible-test",
                     1,
-                    "Light expands.",
+                    "The camera pans out while light expands.",
                     progress=mock.Mock(),
                     log=mock.Mock(),
                 )
 
             preserved_clip = existing_clip.read_bytes()
-            rejected = json.loads(save_scenes.call_args.args[1])["scenes"][0]["animationQuality"]
+            rejected_scene = json.loads(save_scenes.call_args.args[1])["scenes"][0]
+            rejected = rejected_scene["animationQuality"]
 
         self.assertEqual(preserved_clip, b"previous-accepted-clip")
         self.assertEqual(rejected["status"], "rejected")
         self.assertIn("uncontrolled camera shake", rejected["reason"])
+        self.assertNotIn("camera pans", rejected_scene["motionPrompt"].lower())
+        self.assertIn("Keep the camera locked", rejected_scene["motionPrompt"])
 
     def test_generic_fill_the_frame_language_does_not_trigger_decorative_border_overlay(self):
         scene = {

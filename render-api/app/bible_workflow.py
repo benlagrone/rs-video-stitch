@@ -470,12 +470,27 @@ def _safe_fallback_animation_prompt(scene: dict[str, Any]) -> str:
     )
 
 
+LOCKED_CAMERA_CONFLICT = re.compile(
+    r"\bcamera\s+(?:then\s+)?(?:slowly\s+|smoothly\s+|gracefully\s+|subtly\s+)*"
+    r"(?:pans?|glides?|moves?|pushes?|pulls?|advances?|tracks?|dollies?|zooms?|tilts?|orbits?)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _enforce_camera_behavior_prompt(prompt: str, scene: dict[str, Any], camera_behavior: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(prompt or "")).strip()
+    if camera_behavior == "locked" and LOCKED_CAMERA_CONFLICT.search(normalized):
+        return _safe_fallback_animation_prompt(scene)
+    return normalized
+
+
 def _scene_animation_writer_prompt(
     document: dict[str, Any],
     scene: dict[str, Any],
     scene_index: int,
     visual_style: str,
     theme_interpretation: str = "",
+    camera_behavior: str = "locked",
 ) -> str:
     scenes = document.get("scenes") or []
     previous_scene = scenes[scene_index - 2] if scene_index > 1 else {}
@@ -491,13 +506,22 @@ def _scene_animation_writer_prompt(
     ).strip()
     still_description = still_description.split("Locked God character design:", 1)[0].strip()
     existing_prompt = value(scene, "motionPrompt").split("Locked God character design:", 1)[0].strip()
+    camera_instruction = {
+        "locked": (
+            "LOCKED composition. Do not describe any camera movement. Keep frame edges, crop, scale, horizon, and "
+            "composition fixed; all motion must occur within the existing scene. Ignore any stored planned camera move."
+        ),
+        "slow-push": "One smooth subtle slow push only, without shake, direction change, or crop jump.",
+        "pan-left": "One smooth restrained pan left only, without shake, zoom, or direction change.",
+        "pan-right": "One smooth restrained pan right only, without shake, zoom, or direction change.",
+    }.get(camera_behavior, "LOCKED composition with no camera movement.")
     return (
         "Write one production-ready image-to-video animation prompt for exactly the current Bible scene below. "
         "Make this scene unmistakably different from adjacent scenes. Ground the action in this verse and in objects or "
         "people already visible in the still; do not reuse generic water, breeze, lighting, or camera language unless the "
         "current verse and still specifically support it. Describe a concrete opening state, one continuous visible action "
-        "with purposeful subject movement, and an ending state that can flow into the next scene. Keep the camera locked "
-        "unless an explicit camera behavior is supplied separately; never invent handheld shake, zoom, crop, or reframing. "
+        "with purposeful subject movement, and an ending state that can flow into the next scene. Obey the selected camera "
+        "behavior exactly; never invent handheld shake, zoom, crop, reframing, or a second camera move. "
         "Preserve faces, bodies, garments, architecture, palette, composition, and light direction. Do not add new people "
         "or objects, cut to another shot, morph anatomy, or render text. Use 60 to 90 words in one paragraph. Return only "
         "the animation prompt, without a heading, quotation marks, analysis, the scripture text verbatim, or the locked "
@@ -512,7 +536,7 @@ def _scene_animation_writer_prompt(
         f"Planned start: {value(scene, 'startState') or 'infer only from the existing still'}\n"
         f"Planned action: {value(scene, 'action') or 'derive one verse-specific visible action'}\n"
         f"Planned ending: {value(scene, 'endState') or 'settle into a state compatible with the next scene'}\n"
-        f"Planned camera: {value(scene, 'camera') or 'choose a scene-specific camera move'}\n"
+        f"Selected camera behavior: {camera_instruction}\n"
         f"Continuity requirements: {value(scene, 'continuity') or 'preserve everything visible in the still'}\n"
         f"Planned transition: {value(scene, 'transition') or 'end in visual continuity with the next scene'}\n"
         f"Previous scene ending: {value(previous_scene, 'endState') or value(previous_scene, 'VO') or 'opening scene'}\n"
@@ -522,7 +546,13 @@ def _scene_animation_writer_prompt(
     )
 
 
-def generate_scene_animation_prompt(project_id: str, scene_index: int, *, session=requests) -> str:
+def generate_scene_animation_prompt(
+    project_id: str,
+    scene_index: int,
+    *,
+    camera_behavior: str = "locked",
+    session=requests,
+) -> str:
     document, scene, _, _ = scene_animation_context(project_id, scene_index)
     state = read_project_state(project_id) or {}
     visual_style = str(state.get("visualStyle") or (document.get("info") or {}).get("visualStyle") or "cinematic natural light")
@@ -534,7 +564,7 @@ def generate_scene_animation_prompt(project_id: str, scene_index: int, *, sessio
         json={
             "model": OLLAMA_PROMPT_MODEL,
             "prompt": _scene_animation_writer_prompt(
-                document, scene, scene_index, visual_style, theme_interpretation
+                document, scene, scene_index, visual_style, theme_interpretation, camera_behavior
             ),
             "stream": False,
             "options": {"temperature": 0.35, "num_predict": 160},
@@ -556,6 +586,7 @@ def generate_scene_animation_prompt(project_id: str, scene_index: int, *, sessio
         complete_sentences = re.match(r"^(.+[.!?])(?:\s+[^.!?]*)?$", generated)
         if complete_sentences:
             generated = complete_sentences.group(1).strip()
+    generated = _enforce_camera_behavior_prompt(generated, scene, camera_behavior)
     title = re.sub(r"\s+", " ", str(scene.get("title") or f"Scene {scene_index}")).strip()
     return f"Scene {scene_index} — {title}. {generated}"
 
@@ -651,7 +682,13 @@ def animate_bible_scene(
     if not resolved_prompt:
         progress("WRITING_MOTION_PROMPT", 0.12)
         log(f"Generating a continuity-safe animation prompt for scene {scene_index}")
-        resolved_prompt = generate_scene_animation_prompt(project_id, scene_index)
+        resolved_prompt = generate_scene_animation_prompt(
+            project_id,
+            scene_index,
+            camera_behavior=camera_behavior,
+        )
+    resolved_prompt = _enforce_camera_behavior_prompt(resolved_prompt, scene, camera_behavior)
+    scene["motionPrompt"] = resolved_prompt
     provenance = _motion_provenance(scene, still_path, scene_index, resolved_prompt)
     provenance["cameraBehavior"] = camera_behavior
     provider_prompt = _motion_provider_prompt(resolved_prompt, scene, provenance)
@@ -1030,6 +1067,7 @@ def prepare_bible_project(
             clip_name = f"scene_{index:03d}.mp4"
             clip_path = motion_dir / clip_name
             log(f"Generating motion clip {index}/{len(scenes)} for {scene['title']}")
+            scene["motionPrompt"] = _enforce_camera_behavior_prompt(scene["motionPrompt"], scene, "locked")
             provenance = _motion_provenance(scene, still_path, index, scene["motionPrompt"])
             quality = generate_motion_clip(
                 still_path,

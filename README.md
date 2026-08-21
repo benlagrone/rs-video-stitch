@@ -25,6 +25,8 @@ Bible scenes burn the verse reference and full scripture text into a wrapped low
 
 Per-scene image animation defaults to a locked-composition camera profile. Sextant fits and pads the approved still into the Wan input without cropping, stabilizes locked-camera output, compares the generated first frame with the source, and rejects clips with excessive shake, framing drift, sequence discontinuities, or localized color-block corruption along the frame edges. Rejected attempts never overwrite the approved still or a previously accepted motion clip. Deliberate slow-push and pan profiles remain selectable per scene.
 
+Animation-prompt writing is camera-aware. Locked composition rejects or rewrites older prompts that request pans, glides, zooms, or other camera movement before they reach Wan. A rejected scene exposes a one-click corrected retry that rewrites the prompt for the selected camera behavior before queuing a new candidate.
+
 ## Architecture
 
 - **render-api service** – FastAPI app handling project + asset management, render job creation, job status, and artifact streaming.

@@ -29,6 +29,7 @@ from app.schemas import (
     ProjectStateRequest,
     BibleVideoRequest,
     SceneAnimationRequest,
+    SceneAnimationPromptRequest,
     SceneAnimationBatchRequest,
     SceneAnimationPromptResponse,
     BibleTitleCardRequest,
@@ -328,9 +329,18 @@ async def create_bible_video(req: BibleVideoRequest, db: Session = Depends(get_d
     "/v1/projects/{pid}/scenes/{scene_index}/animation-prompt",
     response_model=SceneAnimationPromptResponse,
 )
-async def scene_animation_prompt(pid: str, scene_index: int) -> SceneAnimationPromptResponse:
+async def scene_animation_prompt(
+    pid: str,
+    scene_index: int,
+    req: SceneAnimationPromptRequest = SceneAnimationPromptRequest(),
+) -> SceneAnimationPromptResponse:
     try:
-        prompt = await run_in_threadpool(generate_scene_animation_prompt, pid, scene_index)
+        prompt = await run_in_threadpool(
+            generate_scene_animation_prompt,
+            pid,
+            scene_index,
+            camera_behavior=req.cameraBehavior,
+        )
     except (FileNotFoundError, IndexError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

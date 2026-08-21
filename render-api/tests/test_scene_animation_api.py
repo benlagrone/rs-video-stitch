@@ -2,7 +2,7 @@ import unittest
 from unittest import mock
 
 from app import api
-from app.schemas import SceneAnimationBatchRequest, SceneAnimationRequest
+from app.schemas import SceneAnimationBatchRequest, SceneAnimationPromptRequest, SceneAnimationRequest
 
 
 class _Database:
@@ -26,12 +26,19 @@ class SceneAnimationApiTests(unittest.IsolatedAsyncioTestCase):
             api,
             "generate_scene_animation_prompt",
             return_value="Clouds sweep apart while the camera advances toward the light.",
-        ):
-            result = await api.scene_animation_prompt("bible-genesis-1", 3)
+        ) as generate_prompt:
+            result = await api.scene_animation_prompt(
+                "bible-genesis-1",
+                3,
+                SceneAnimationPromptRequest(cameraBehavior="pan-right"),
+            )
 
         self.assertEqual(result.projectId, "bible-genesis-1")
         self.assertEqual(result.sceneIndex, 3)
         self.assertIn("camera advances", result.prompt)
+        generate_prompt.assert_called_once_with(
+            "bible-genesis-1", 3, camera_behavior="pan-right"
+        )
 
     async def test_animate_scene_queues_one_scene_without_removing_still(self):
         database = _Database()
