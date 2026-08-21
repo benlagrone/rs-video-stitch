@@ -1,5 +1,14 @@
 const MAX_INTRO_LINES = 5;
 
+export function sanitizeSceneImageAssignments(assignments, availableNames) {
+  const available = new Set(availableNames);
+  return (Array.isArray(assignments) ? assignments : []).map((sceneImages) => (
+    (Array.isArray(sceneImages) ? sceneImages : [])
+      .filter((name) => available.has(name))
+      .slice(0, 3)
+  ));
+}
+
 export function leadLinesFromState(state, fallbackTitle = '') {
   const savedLines = Array.isArray(state.introLines) ? state.introLines : [];
   const sourceLines = savedLines.length
@@ -23,4 +32,3 @@ export function sceneImageAssignmentsFromProject(state, persistedScenes) {
   return (Array.isArray(persistedScenes) ? persistedScenes : [])
     .map((scene) => (Array.isArray(scene?.images) ? scene.images : []));
 }
-

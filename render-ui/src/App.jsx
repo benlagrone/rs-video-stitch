@@ -1,6 +1,10 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { BibleStudio } from './BibleStudio.jsx';
-import { leadLinesFromState, sceneImageAssignmentsFromProject } from './projectState.js';
+import {
+  leadLinesFromState,
+  sanitizeSceneImageAssignments,
+  sceneImageAssignmentsFromProject,
+} from './projectState.js';
 import { YouTubeChannelSelector } from './YouTubeChannelSelector.jsx';
 
 const DEFAULT_RENDER_OPTIONS = {
@@ -94,20 +98,6 @@ function splitScriptIntoSections(script, sectionCount) {
   }
 
   return sections.filter(Boolean).join('\n\n');
-}
-
-function sanitizeSceneImageAssignments(assignments, availableNames) {
-  const available = new Set(availableNames);
-  const used = new Set();
-  return (Array.isArray(assignments) ? assignments : []).map((sceneImages) => (
-    (Array.isArray(sceneImages) ? sceneImages : [])
-      .filter((name) => available.has(name) && !used.has(name))
-      .slice(0, 3)
-      .map((name) => {
-        used.add(name);
-        return name;
-      })
-  ));
 }
 
 function buildScenes({ title, script, images, imageHeaders, imageRoomInfo, sceneDurations = [], sceneImageAssignments = [], voice, language, ttsApi }) {

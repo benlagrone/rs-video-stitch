@@ -1,7 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { leadLinesFromState, sceneImageAssignmentsFromProject } from './projectState.js';
+import {
+  leadLinesFromState,
+  sanitizeSceneImageAssignments,
+  sceneImageAssignmentsFromProject,
+} from './projectState.js';
+
+test('preserves a saved image reused by a later scene', () => {
+  const assignments = sanitizeSceneImageAssignments(
+    [['front.jpg'], ['kitchen.jpg'], ['front.jpg']],
+    ['front.jpg', 'kitchen.jpg'],
+  );
+
+  assert.deepEqual(assignments, [['front.jpg'], ['kitchen.jpg'], ['front.jpg']]);
+});
 
 test('falls back to persisted scene images when saved assignments are empty', () => {
   const assignments = sceneImageAssignmentsFromProject(
@@ -28,4 +41,3 @@ test('preserves up to five saved intro lines', () => {
 
   assert.deepEqual(lines, ['7131 Harmony Cove', 'LeCrown Properties', 'Jie Huang', '经纪人', '']);
 });
-
