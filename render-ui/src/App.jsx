@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { BibleStudio } from './BibleStudio.jsx';
+import { leadLinesFromState, sceneImageAssignmentsFromProject } from './projectState.js';
 import { YouTubeChannelSelector } from './YouTubeChannelSelector.jsx';
 
 const DEFAULT_RENDER_OPTIONS = {
@@ -210,14 +211,6 @@ function versionLabel(label) {
   return labels[label] || label || 'Version';
 }
 
-function leadLinesFromState(state, fallbackTitle = '') {
-  const savedLines = Array.isArray(state.introLines) ? state.introLines : [];
-  const sourceLines = savedLines.length
-    ? savedLines
-    : String(state.introTitle || fallbackTitle || '').split(/\r?\n/);
-  return [0, 1, 2].map((index) => String(sourceLines[index] || ''));
-}
-
 function joinLeadLines(lines) {
   return lines.map((line) => line.trim()).filter(Boolean).join('\n');
 }
@@ -304,7 +297,7 @@ export function App() {
   const [selectedImageName, setSelectedImageName] = useState('');
   const [isClassifyingRooms, setIsClassifyingRooms] = useState(false);
   const [useIntro, setUseIntro] = useState(true);
-  const [introLines, setIntroLines] = useState(['', '', '']);
+  const [introLines, setIntroLines] = useState(['', '', '', '', '']);
   const [isGeneratingIntro, setIsGeneratingIntro] = useState(false);
   const [leaderImage, setLeaderImage] = useState(null);
   const [brandAssets, setBrandAssets] = useState([]);
@@ -355,6 +348,7 @@ export function App() {
   const [savedProjectId, setSavedProjectId] = useState('');
   const [versions, setVersions] = useState([]);
   const [isRestoringVersion, setIsRestoringVersion] = useState(false);
+  const [isRendering, setIsRendering] = useState(false);
 
   const resolvedProjectId = useMemo(() => {
     if (projectId.trim()) return slugify(projectId.trim());
@@ -587,7 +581,7 @@ export function App() {
     setDraggedImageName('');
     setSelectedImageName('');
     setUseIntro(true);
-    setIntroLines(['', '', '']);
+    setIntroLines(['', '', '', '', '']);
     setLeaderImage(null);
     setUseLogo(true);
     setLogoImage(null);
@@ -646,9 +640,7 @@ export function App() {
       const savedSceneDurations = Array.isArray(state.sceneDurations)
         ? state.sceneDurations
         : persistedScenes.map((scene) => scene.duration || '');
-      const savedSceneImageAssignments = Array.isArray(state.sceneImageAssignments)
-        ? state.sceneImageAssignments
-        : persistedScenes.map((scene) => scene.images || []);
+      const savedSceneImageAssignments = sceneImageAssignmentsFromProject(state, persistedScenes);
       const removedProjectImages = (state.removedImages || [])
         .map((image) => stateImageItem(image, result.assets, 'images', apiBase))
         .filter(Boolean)
@@ -1202,8 +1194,8 @@ export function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, script, currentLines: introLines }),
       });
-      const lines = Array.isArray(result.lines) ? result.lines.slice(0, 3) : [];
-      setIntroLines([lines[0] || '', lines[1] || '', lines[2] || '']);
+      const lines = Array.isArray(result.lines) ? result.lines.slice(0, 5) : [];
+      setIntroLines(Array.from({ length: 5 }, (_, index) => lines[index] || ''));
       setUseIntro(true);
       setStatus(`Lead card generated with ${result.model || 'Fortress Ollama'}`);
     } catch (err) {
@@ -1249,6 +1241,7 @@ export function App() {
   }
 
   async function submitRender() {
+    if (isRendering) return;
     setError('');
     setLogs('');
     setVideoHref('');
@@ -1258,6 +1251,7 @@ export function App() {
     }
 
     try {
+      setIsRendering(true);
       await saveProject();
 
       setStatus('Queueing render');
@@ -1291,6 +1285,8 @@ export function App() {
     } catch (err) {
       setStatus('Failed');
       setError(err.message || String(err));
+    } finally {
+      setIsRendering(false);
     }
   }
 
@@ -1499,6 +1495,8 @@ export function App() {
           <label>Lead card line 1<input value={introLines[0] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 0, event.target.value))} placeholder="Primary title line" /></label>
           <label>Lead card line 2<input value={introLines[1] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 1, event.target.value))} placeholder="Subtitle or property detail" /></label>
           <label>Lead card line 3<input value={introLines[2] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 2, event.target.value))} placeholder="Location, offer, or callout" /></label>
+          <label>Lead card line 4<input value={introLines[3] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 3, event.target.value))} placeholder="Optional additional line" /></label>
+          <label>Lead card line 5<input value={introLines[4] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 4, event.target.value))} placeholder="Optional additional line" /></label>
           <div className="compact-upload">
             <input id="leader-upload" type="file" accept="image/*" onChange={(event) => handleLeaderSelection(event.target.files)} />
             <label htmlFor="leader-upload">Leader Image</label>
@@ -1805,7 +1803,12 @@ export function App() {
             )}
           </div>
 
-          <button className="primary-action" type="button" onClick={submitRender} disabled={!canRender}>Start Render</button>
+          <button className="primary-action" type="button" onClick={submitRender} disabled={!canRender || isRendering}>
+            {isRendering ? 'Rendering…' : hasSavedProject ? 'Re-render Video' : 'Start Render'}
+          </button>
+          {hasSavedProject && (
+            <p className="hint">Re-renders from the saved scenes and current settings. Change the output filename first if you want to keep the previous MP4.</p>
+          )}
           {error && <div className="error-box">{error}</div>}
           {(previewVideoHref || outputs.length > 0) && (
             <div className="output-panel">
