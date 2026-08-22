@@ -991,6 +991,33 @@ class BibleWorkflowTest(TestCase):
                 with self.assertRaisesRegex(motion_provider.MotionProviderError, "visual jump"):
                     motion_provider._measure_sequence_integrity(video)
 
+    def test_sequence_gate_rejects_animation_without_visible_motion(self):
+        log = "\n".join(
+            [
+                "frame:0 pts:0 pts_time:0",
+                "lavfi.signalstats.SATAVG=11.0",
+                "lavfi.signalstats.YDIF=0.0",
+                "frame:1 pts:1 pts_time:0.0625",
+                "lavfi.signalstats.SATAVG=11.01",
+                "lavfi.signalstats.YDIF=0.08",
+                "frame:2 pts:2 pts_time:0.125",
+                "lavfi.signalstats.SATAVG=11.02",
+                "lavfi.signalstats.YDIF=0.12",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "scene.mp4"
+            video.write_bytes(b"motion")
+
+            def create_stats(command, **_kwargs):
+                filter_value = command[command.index("-vf") + 1]
+                Path(filter_value.split("file=", 1)[1]).write_text(log, encoding="utf-8")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_stats):
+                with self.assertRaisesRegex(motion_provider.MotionProviderError, "too little visible motion"):
+                    motion_provider._measure_sequence_integrity(video)
+
     def test_edge_tile_gate_rejects_localized_color_block_corruption(self):
         log = "\n".join(
             [
@@ -1063,8 +1090,12 @@ class BibleWorkflowTest(TestCase):
 
             self.assertEqual(video.read_bytes(), b"protected-motion")
             command = run.call_args.args[0]
-            self.assertIn("alphamerge", command[command.index("-filter_complex") + 1])
-            self.assertIn("boxblur=4", command[command.index("-filter_complex") + 1])
+            filter_graph = command[command.index("-filter_complex") + 1]
+            self.assertIn("maskedmerge", filter_graph)
+            self.assertNotIn("alphamerge", filter_graph)
+            self.assertNotIn("overlay", filter_graph)
+            self.assertIn("lutrgb=r=255:g=255:b=255", filter_graph)
+            self.assertIn("boxblur=4", filter_graph)
 
     def test_extract_last_frame_creates_next_scene_start(self):
         with tempfile.TemporaryDirectory() as tmp:
