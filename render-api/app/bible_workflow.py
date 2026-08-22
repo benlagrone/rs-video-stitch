@@ -609,6 +609,130 @@ def generate_scene_animation_prompt(
     return f"Scene {scene_index} — {title}. {generated}"
 
 
+MOTION_REGION_EFFECTS = {"drift", "rise", "surge", "roll", "fracture", "radiate", "pulse"}
+MOTION_REGION_DIRECTIONS = {"left", "right", "up", "down", "outward", "clockwise", "counterclockwise", "pulse"}
+
+
+def _sanitize_motion_plan(plan: dict[str, Any], *, source: str = "edited") -> dict[str, Any]:
+    regions = []
+    for position, item in enumerate(plan.get("regions") or []):
+        if not isinstance(item, dict) or len(regions) >= 5:
+            continue
+        raw_box = item.get("box") if isinstance(item.get("box"), dict) else {}
+        try:
+            x = min(0.95, max(0.0, float(raw_box.get("x", 0.1))))
+            y = min(0.95, max(0.0, float(raw_box.get("y", 0.1))))
+            width = min(1.0 - x, max(0.08, float(raw_box.get("width", 0.35))))
+            height = min(1.0 - y, max(0.08, float(raw_box.get("height", 0.35))))
+            strength = min(1.0, max(0.1, float(item.get("strength", 0.55))))
+        except (TypeError, ValueError):
+            continue
+        effect = str(item.get("effect") or "drift").lower()
+        direction = str(item.get("direction") or "right").lower()
+        regions.append({
+            "id": re.sub(r"[^a-z0-9-]+", "-", str(item.get("id") or f"region-{position + 1}").lower()).strip("-")[:40],
+            "label": re.sub(r"\s+", " ", str(item.get("label") or f"Region {position + 1}")).strip()[:80],
+            "action": re.sub(r"\s+", " ", str(item.get("action") or "moves continuously within the existing scene")).strip()[:240],
+            "effect": effect if effect in MOTION_REGION_EFFECTS else "drift",
+            "direction": direction if direction in MOTION_REGION_DIRECTIONS else "right",
+            "strength": round(strength, 2),
+            "box": {"x": round(x, 3), "y": round(y, 3), "width": round(width, 3), "height": round(height, 3)},
+            "enabled": item.get("enabled") is not False,
+        })
+    if not regions:
+        raise ValueError("A motion plan must contain at least one usable region")
+    return {
+        "version": 1,
+        "source": source,
+        "summary": re.sub(r"\s+", " ", str(plan.get("summary") or "Animate selected scene elements while holding the composition fixed.")).strip()[:320],
+        "lockedBackground": plan.get("lockedBackground") is not False,
+        "regions": regions,
+        "updatedAt": time.time(),
+    }
+
+
+def _fallback_motion_plan(scene: dict[str, Any], scene_index: int) -> dict[str, Any]:
+    timeline = (scene.get("timeline") or [{}])[0]
+    image_generation = timeline.get("imageGeneration") or {}
+    context = " ".join([
+        str(scene.get("title") or ""), str(scene.get("VO") or ""), str(scene.get("action") or ""),
+        str(image_generation.get("prompt") or timeline.get("prompt") or ""),
+    ]).lower()
+    if any(word in context for word in ("cataclysm", "planet", "cosmos", "collision", "fractur", "fire", "molten")):
+        raw = {
+            "summary": "Continue the existing cosmic cataclysm through distinct environmental actions while the planet and frame remain stable.",
+            "lockedBackground": True,
+            "regions": [
+                {"id": "fire-arc", "label": "Existing fire arc", "action": "The existing fiery arc races forward and sheds sparks along its current path.", "effect": "surge", "direction": "clockwise", "strength": 0.82, "box": {"x": 0.64, "y": 0.04, "width": 0.34, "height": 0.92}},
+                {"id": "forming-terrain", "label": "Forming terrain", "action": "Existing ridges lift and fracture as glowing seams spread through the ground.", "effect": "fracture", "direction": "up", "strength": 0.55, "box": {"x": 0.18, "y": 0.56, "width": 0.58, "height": 0.36}},
+                {"id": "dust-front", "label": "Dust and debris", "action": "Dust and small debris roll outward across the foreground without obscuring the scene.", "effect": "roll", "direction": "left", "strength": 0.46, "box": {"x": 0.04, "y": 0.66, "width": 0.78, "height": 0.28}},
+            ],
+        }
+    elif any(word in context for word in ("water", "sea", "ocean", "river", "wave")):
+        raw = {
+            "summary": "Move the existing water and atmosphere in separate continuous layers while preserving the horizon.",
+            "lockedBackground": True,
+            "regions": [
+                {"id": "water", "label": "Existing water", "action": "Broad ripples travel across the existing water surface.", "effect": "roll", "direction": "outward", "strength": 0.58, "box": {"x": 0.0, "y": 0.5, "width": 1.0, "height": 0.5}},
+                {"id": "atmosphere", "label": "Clouds and mist", "action": "Existing clouds and mist drift steadily across the sky.", "effect": "drift", "direction": "right", "strength": 0.34, "box": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 0.5}},
+            ],
+        }
+    else:
+        raw = {
+            "summary": "Animate distinct existing environmental layers with restrained continuous motion and a fixed composition.",
+            "lockedBackground": True,
+            "regions": [
+                {"id": "primary-action", "label": "Primary visible action", "action": str(scene.get("action") or scene.get("VO") or "The primary visible element moves continuously.")[:240], "effect": "surge", "direction": "right", "strength": 0.55, "box": {"x": 0.18, "y": 0.2, "width": 0.64, "height": 0.56}},
+                {"id": "atmosphere", "label": "Atmosphere", "action": "Existing atmospheric details drift subtly behind the main action.", "effect": "drift", "direction": "left", "strength": 0.28, "box": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 0.42}},
+            ],
+        }
+    return _sanitize_motion_plan(raw, source="source-prompt+scripture-fallback")
+
+
+def generate_scene_motion_plan(project_id: str, scene_index: int, *, session=requests) -> dict[str, Any]:
+    document, scene, _, _ = scene_animation_context(project_id, scene_index)
+    state = read_project_state(project_id) or {}
+    timeline = (scene.get("timeline") or [{}])[0]
+    source_prompt = str((timeline.get("imageGeneration") or {}).get("prompt") or timeline.get("prompt") or "")
+    instruction = (
+        "Return only valid JSON for an image-to-video motion plan. Use the scripture event and the exact source-image "
+        "prompt to identify 2 to 5 DISTINCT EXISTING visual regions that should move. This is motion art direction, not "
+        "pixel segmentation: give normalized 0..1 bounding boxes. Prefer scenery and physical events over faces or whole "
+        "people. Never invent an object absent from the source prompt. Keep the background, horizon, frame edges, scale, "
+        "and camera locked. Each region needs id, label, action, effect (drift|rise|surge|roll|fracture|radiate|pulse), "
+        "direction (left|right|up|down|outward|clockwise|counterclockwise|pulse), strength 0.1..1, enabled true, and "
+        "box {x,y,width,height}. Add a concise summary and lockedBackground true. For a cataclysm, separate fire, terrain, "
+        "dust/debris, and atmosphere rather than moving the whole image. JSON shape: "
+        "{\"summary\":\"...\",\"lockedBackground\":true,\"regions\":[{...}]}.\n\n"
+        f"Reference: {scene.get('title')}\nScripture event: {scene.get('VO') or scene.get('description')}\n"
+        f"Source-image prompt: {source_prompt}\nTheme: {_theme_instruction(state.get('themeInterpretation'))}\n"
+        f"Existing scene action: {scene.get('action') or ''}"
+    )
+    try:
+        response = session.post(
+            f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+            json={"model": OLLAMA_PROMPT_MODEL, "prompt": instruction, "stream": False, "format": "json", "options": {"temperature": 0.2, "num_predict": 850}},
+            timeout=OLLAMA_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        content = str(payload.get("response") or ((payload.get("message") or {}).get("content") if isinstance(payload.get("message"), dict) else "")).strip()
+        plan = _sanitize_motion_plan(json.loads(content), source="source-image-prompt+scripture")
+    except (requests.RequestException, json.JSONDecodeError, TypeError, ValueError):
+        plan = _fallback_motion_plan(scene, scene_index)
+    scene["motionPlan"] = plan
+    save_scenes(project_id, json.dumps(document, indent=2), project_name=str((document.get("info") or {}).get("name") or project_id))
+    return plan
+
+
+def save_scene_motion_plan(project_id: str, scene_index: int, plan: dict[str, Any]) -> dict[str, Any]:
+    document, scene, _, _ = scene_animation_context(project_id, scene_index)
+    sanitized = _sanitize_motion_plan(plan, source="edited")
+    scene["motionPlan"] = sanitized
+    save_scenes(project_id, json.dumps(document, indent=2), project_name=str((document.get("info") or {}).get("name") or project_id))
+    return sanitized
+
+
 def _motion_provenance(scene: dict[str, Any], still_path: Path, scene_index: int, motion_prompt: str) -> dict[str, Any]:
     timeline = (scene.get("timeline") or [{}])[0]
     image_generation = timeline.get("imageGeneration") or {}
@@ -691,11 +815,19 @@ def animate_bible_scene(
     scene_index: int,
     prompt: str = "",
     camera_behavior: str = "locked",
+    motion_plan: dict[str, Any] | None = None,
     *,
     progress: Progress,
     log: Log,
 ) -> Path:
     document, scene, still_path, clip_path = scene_animation_context(project_id, scene_index)
+    if motion_plan:
+        scene["motionPlan"] = _sanitize_motion_plan(motion_plan, source="edited")
+    elif not scene.get("motionPlan"):
+        progress("PLANNING_MOTION_REGIONS", 0.08)
+        log(f"Planning controlled motion regions for scene {scene_index}")
+        scene["motionPlan"] = generate_scene_motion_plan(project_id, scene_index)
+        document, scene, still_path, clip_path = scene_animation_context(project_id, scene_index)
     resolved_prompt = re.sub(r"\s+", " ", prompt).strip()
     if not resolved_prompt:
         progress("WRITING_MOTION_PROMPT", 0.12)
@@ -730,6 +862,7 @@ def animate_bible_scene(
             seed=int(provenance["motionSeed"]),
             protect_style_frame=bool((provenance.get("decorativeFrameProtection") or {}).get("enabled")),
             camera_behavior=camera_behavior,
+            motion_plan=scene.get("motionPlan") or {},
         )
         candidate_path.replace(clip_path)
     except Exception as exc:
