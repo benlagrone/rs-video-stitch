@@ -27,11 +27,11 @@ FRAME_PROTECTION_FEATHER = 4
 LOCKED_CAMERA_P95_TRANSLATION_LIMIT = float(os.getenv("LOCKED_CAMERA_P95_TRANSLATION_LIMIT", "12"))
 LOCKED_CAMERA_LARGE_CORRECTION_RATIO = float(os.getenv("LOCKED_CAMERA_LARGE_CORRECTION_RATIO", "0.20"))
 SOURCE_FRAME_MIN_SSIM = float(os.getenv("SOURCE_FRAME_MIN_SSIM", "0.28"))
-LOCKED_CAMERA_DENOISE = float(os.getenv("LOCKED_CAMERA_DENOISE", "0.20"))
-LOCKED_CAMERA_SOURCE_BLEND = float(os.getenv("LOCKED_CAMERA_SOURCE_BLEND", "0.75"))
+LOCKED_CAMERA_DENOISE = float(os.getenv("LOCKED_CAMERA_DENOISE", "0.35"))
 SEQUENCE_SATURATION_JUMP_LIMIT = float(os.getenv("SEQUENCE_SATURATION_JUMP_LIMIT", "6.0"))
 SEQUENCE_LUMA_JUMP_LIMIT = float(os.getenv("SEQUENCE_LUMA_JUMP_LIMIT", "20.0"))
 SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE = float(os.getenv("SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE", "20.0"))
+SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE = float(os.getenv("SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE", "0.35"))
 SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT = float(
     os.getenv("SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT", "2.0")
 )
@@ -325,11 +325,13 @@ def _measure_sequence_integrity(video_path: Path) -> dict[str, float | int]:
         jump_index = max(range(len(saturation_jumps)), key=saturation_jumps.__getitem__) + 1
         max_saturation_jump = saturation_jumps[jump_index - 1]
         luma_at_saturation_jump = rows[jump_index].get("YDIF", 0.0)
+        luma_differences = [row.get("YDIF", 0.0) for row in rows[1:]]
         metrics = {
             "sampleCount": len(rows),
             "maxSaturationJump": round(max_saturation_jump, 4),
             "lumaDifferenceAtSaturationJump": round(luma_at_saturation_jump, 4),
             "maxLumaFrameDifference": round(max(row.get("YDIF", 0.0) for row in rows), 4),
+            "meanLumaFrameDifference": round(statistics.fmean(luma_differences), 4),
         }
         if (
             max_saturation_jump > SEQUENCE_SATURATION_JUMP_LIMIT
@@ -344,6 +346,12 @@ def _measure_sequence_integrity(video_path: Path) -> dict[str, float | int]:
                 "Animation rejected for discontinuous scene corruption or an uncontrolled visual jump: "
                 f"maximum luma-frame difference {metrics['maxLumaFrameDifference']:.2f} exceeds "
                 f"{SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE:.2f}"
+            )
+        if metrics["meanLumaFrameDifference"] < SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE:
+            raise MotionProviderError(
+                "Animation rejected because it contains too little visible motion: "
+                f"mean luma-frame difference {metrics['meanLumaFrameDifference']:.2f} is below "
+                f"{SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE:.2f}"
             )
         metrics.update(_measure_edge_tile_integrity(video_path))
         return metrics
@@ -416,14 +424,16 @@ def _protect_decorative_frame(image_path: Path, video_path: Path) -> None:
     inner_width = FRAME_PROTECTION_WIDTH - (FRAME_PROTECTION_X * 2)
     inner_height = FRAME_PROTECTION_HEIGHT - (FRAME_PROTECTION_Y * 2)
     filter_graph = (
-        f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=rgba[still];"
-        f"color=c=white:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:d=7200,format=gray,"
+        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},"
+        "format=gbrp,split=2[motion][masksource];"
+        f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[still];"
+        "[masksource]lutrgb=r=255:g=255:b=255,"
         f"drawbox=x={FRAME_PROTECTION_X}:y={FRAME_PROTECTION_Y}:w={inner_width}:h={inner_height}:"
         f"color=black:t=fill,boxblur={FRAME_PROTECTION_FEATHER}[mask];"
-        "[still][mask]alphamerge[border];[0:v][border]overlay=shortest=1:format=auto[v]"
+        "[motion][still][mask]maskedmerge[merged];[merged]format=yuv420p[v]"
     )
     command = [
-        "ffmpeg", "-y", "-i", str(video_path), "-loop", "1", "-i", str(image_path),
+        "ffmpeg", "-y", "-i", str(video_path), "-i", str(image_path),
         "-filter_complex", filter_graph, "-map", "[v]", "-map", "0:a?", "-c:v", "libx264",
         "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy", str(protected_path),
     ]
@@ -435,31 +445,6 @@ def _protect_decorative_frame(image_path: Path, video_path: Path) -> None:
     except (FileNotFoundError, subprocess.CalledProcessError) as exc:
         protected_path.unlink(missing_ok=True)
         raise MotionProviderError(f"Unable to protect the source image's decorative frame: {exc}") from exc
-
-
-def _blend_locked_source(image_path: Path, video_path: Path) -> None:
-    blended_path = video_path.with_name(f"{video_path.stem}.source-blended{video_path.suffix}")
-    source_weight = min(0.95, max(0.5, LOCKED_CAMERA_SOURCE_BLEND))
-    motion_weight = 1.0 - source_weight
-    filter_graph = (
-        f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=yuv420p[source];"
-        f"[0:v]format=yuv420p[motion];[motion][source]"
-        f"blend=all_expr='A*{motion_weight:.4f}+B*{source_weight:.4f}':shortest=1[v]"
-    )
-    command = [
-        "ffmpeg", "-y", "-i", str(video_path), "-loop", "1", "-i", str(image_path),
-        "-filter_complex", filter_graph, "-map", "[v]", "-map", "0:a?", "-c:v", "libx264",
-        "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy", str(blended_path),
-    ]
-    try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
-        if not blended_path.exists() or blended_path.stat().st_size == 0:
-            raise MotionProviderError("Locked source blending produced no video")
-        blended_path.replace(video_path)
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        blended_path.unlink(missing_ok=True)
-        raise MotionProviderError(f"Unable to preserve the source image in locked motion: {exc}") from exc
-
 
 def generate_motion_clip(
     image_path: Path,
@@ -518,16 +503,10 @@ def generate_motion_clip(
         }
         if camera_behavior == "locked":
             quality["stabilization"] = _stabilize_locked_camera(destination)
-            _blend_locked_source(prepared_source, destination)
-            quality["sourceImageBlend"] = LOCKED_CAMERA_SOURCE_BLEND
+        if protect_style_frame:
             _protect_decorative_frame(prepared_source, destination)
-            quality["lockedFrameEdgesProtected"] = True
+            quality["decorativeFrameProtected"] = True
         quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
         quality["sequenceIntegrity"] = _measure_sequence_integrity(destination)
-        if protect_style_frame and camera_behavior != "locked":
-            _protect_decorative_frame(prepared_source, destination)
-            quality["decorativeFrameProtected"] = True
-        elif protect_style_frame:
-            quality["decorativeFrameProtected"] = True
         _verify_video(destination)
         return quality
