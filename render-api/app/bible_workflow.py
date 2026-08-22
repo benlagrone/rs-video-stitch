@@ -622,13 +622,11 @@ def _motion_provenance(scene: dict[str, Any], still_path: Path, scene_index: int
     motion_attempt = max(1, int(scene.get("motionAttempt") or 1))
     seed_material = f"{image_seed or fingerprint}|{scene_index}|{motion_prompt}|attempt:{motion_attempt}".encode("utf-8")
     motion_seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big") % (2**63 - 1) or 1
-    protect_style_frame = bool(
-        re.search(
-            r"\b(border|marginalia|illuminated manuscript|iconography|gold-leaf|ornamental frame|decorative frame)\b",
-            image_prompt,
-            flags=re.IGNORECASE,
-        )
-    )
+    # A visual-style name does not prove that the generated pixels contain a
+    # decorative border. Freezing the perimeter of a full-bleed image creates
+    # an obvious moving inset rectangle, so frame protection is opt-in metadata
+    # set only after the generated image has been explicitly classified.
+    protect_style_frame = image_generation.get("decorativeFrameProtection") is True
     return {
         "sourceImagePrompt": image_prompt,
         "sourceImageNegativePrompt": image_negative,

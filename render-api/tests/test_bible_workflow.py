@@ -612,6 +612,7 @@ class BibleWorkflowTest(TestCase):
                         "negativePrompt": "people, buildings",
                         "seed": 4242,
                         "model": "test-checkpoint",
+                        "decorativeFrameProtection": True,
                     },
                 }],
             }],
@@ -771,6 +772,24 @@ class BibleWorkflowTest(TestCase):
             "timeline": [{
                 "prompt": "Let the physical creation fill the frame with cinematic light and a fixed horizon.",
                 "imageGeneration": {"seed": 42},
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"still")
+            provenance = bible_workflow._motion_provenance(scene, still, 1, "Light advances.")
+
+        self.assertFalse(provenance["decorativeFrameProtection"]["enabled"])
+
+    def test_visual_style_words_do_not_freeze_a_full_bleed_scene_perimeter(self):
+        scene = {
+            "title": "Genesis 1:1",
+            "timeline": [{
+                "prompt": "A full-bleed Byzantine iconography scene with gold-leaf surface treatment.",
+                "imageGeneration": {
+                    "prompt": "A full-bleed Byzantine iconography scene with gold-leaf surface treatment.",
+                    "seed": 42,
+                },
             }],
         }
         with tempfile.TemporaryDirectory() as tmp:
