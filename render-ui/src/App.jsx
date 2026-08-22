@@ -6,6 +6,12 @@ import {
   sanitizeSceneImageAssignments,
   sceneImageAssignmentsFromProject,
 } from './projectState.js';
+import {
+  EMPTY_RENDER_TRACKER,
+  renderStageLabel,
+  renderStepStates,
+  renderTrackerProgress,
+} from './renderProgress.js';
 import { YouTubeChannelSelector } from './YouTubeChannelSelector.jsx';
 
 const DEFAULT_RENDER_OPTIONS = {
@@ -342,6 +348,7 @@ export function App() {
   const [versions, setVersions] = useState([]);
   const [isRestoringVersion, setIsRestoringVersion] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
+  const [renderTracker, setRenderTracker] = useState(EMPTY_RENDER_TRACKER);
 
   const resolvedProjectId = useMemo(() => {
     if (projectId.trim()) return slugify(projectId.trim());
@@ -402,6 +409,7 @@ export function App() {
     && Number(targetSeconds) >= 5
     && !isEnhancing;
   const hasSavedProject = Boolean(lastSavedAt) && savedProjectId === resolvedProjectId;
+  const renderSteps = renderStepStates(renderTracker);
   const selectedImagePreview = useMemo(
     () => imagePreviews.find((preview) => preview.name === selectedImageName) || null,
     [imagePreviews, selectedImageName],
@@ -521,6 +529,18 @@ export function App() {
       setJob(current);
       setLogs((previous) => current.logs || previous);
       setStatus(`${current.status} - ${current.stage || 'waiting'} (${Math.round((current.progress || 0) * 100)}%)`);
+      setRenderTracker((previous) => ({
+        ...previous,
+        phase: current.status === 'SUCCEEDED' ? 'complete' : 'rendering',
+        progress: current.status === 'SUCCEEDED'
+          ? 1
+          : renderTrackerProgress({ phase: 'rendering', jobProgress: current.progress }),
+        message: current.status === 'SUCCEEDED'
+          ? 'Video and thumbnail are ready'
+          : renderStageLabel(current.stage),
+        stage: current.stage || '',
+        jobId,
+      }));
       if (current.status === 'SUCCEEDED') return current;
       if (current.status === 'FAILED' || current.status === 'CANCELLED') {
         throw new Error(current.error || `Render ${current.status.toLowerCase()}`);
@@ -582,6 +602,7 @@ export function App() {
     setLogoMargin(24);
     setOutputName('video.mp4');
     setRenderOptions({});
+    setRenderTracker(EMPTY_RENDER_TRACKER);
     setYoutubeTitle('');
     setYoutubeDescription('');
     setYoutubeTags('');
@@ -613,6 +634,7 @@ export function App() {
   async function loadProject(pid) {
     setError('');
     setIsLoadingProject(true);
+    setRenderTracker(EMPTY_RENDER_TRACKER);
     setStatus(`Loading ${pid}`);
     try {
       const result = await request(`/v1/projects/${encodeURIComponent(pid)}`);
@@ -1248,10 +1270,25 @@ export function App() {
 
     try {
       setIsRendering(true);
+      setJob(null);
+      const willDelete = hasSavedProject && outputs.includes(outputName);
+      setRenderTracker({
+        ...EMPTY_RENDER_TRACKER,
+        phase: 'saving',
+        progress: renderTrackerProgress({ phase: 'saving' }),
+        message: 'Saving the current project settings',
+        willDelete,
+      });
       await saveProject();
 
-      if (hasSavedProject && outputs.includes(outputName)) {
+      if (willDelete) {
         setStatus(`Deleting previous ${outputName}`);
+        setRenderTracker((previous) => ({
+          ...previous,
+          phase: 'deleting',
+          progress: renderTrackerProgress({ phase: 'deleting' }),
+          message: `Deleting previous ${outputName}`,
+        }));
         await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/outputs/video?filename=${encodeURIComponent(outputName)}`, {
           method: 'DELETE',
         });
@@ -1259,6 +1296,12 @@ export function App() {
       }
 
       setStatus('Queueing render');
+      setRenderTracker((previous) => ({
+        ...previous,
+        phase: 'queueing',
+        progress: renderTrackerProgress({ phase: 'queueing' }),
+        message: 'Sending the project to the render worker',
+      }));
       const renderResponse = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/render`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1283,6 +1326,15 @@ export function App() {
         }),
       });
 
+      setRenderTracker((previous) => ({
+        ...previous,
+        phase: 'rendering',
+        progress: renderTrackerProgress({ phase: 'rendering', jobProgress: 0 }),
+        message: 'Waiting for the render worker',
+        stage: 'QUEUED',
+        jobId: renderResponse.jobId,
+      }));
+
       const finishedJob = await pollJob(renderResponse.jobId);
       setStatus(`Completed ${finishedJob.jobId}`);
       setVideoHref(apiUrl(apiBase, `/v1/projects/${encodeURIComponent(resolvedProjectId)}/outputs/video?filename=${encodeURIComponent(outputName)}`));
@@ -1290,6 +1342,12 @@ export function App() {
     } catch (err) {
       setStatus('Failed');
       setError(err.message || String(err));
+      setRenderTracker((previous) => ({
+        ...previous,
+        phase: 'failed',
+        failedFrom: previous.phase,
+        message: err.message || String(err),
+      }));
     } finally {
       setIsRendering(false);
     }
@@ -1809,10 +1867,31 @@ export function App() {
           </div>
 
           <button className="primary-action" type="button" onClick={submitRender} disabled={!canRender || isRendering}>
-            {isRendering ? 'Rendering…' : hasSavedProject ? 'Delete & Re-render Video' : 'Start Render'}
+            {isRendering
+              ? `${({ saving: 'Saving', deleting: 'Deleting', queueing: 'Queueing' }[renderTracker.phase] || 'Rendering')} ${Math.round(renderTracker.progress * 100)}%`
+              : hasSavedProject ? 'Delete & Re-render Video' : 'Start Render'}
           </button>
           {hasSavedProject && (
             <p className="hint">Deletes the selected local MP4, then renders it again from the saved scenes and current settings. YouTube uploads, thumbnails, source images, and project history are not deleted. Change the output filename first to keep the previous MP4.</p>
+          )}
+          {renderTracker.phase !== 'idle' && (
+            <div className={`render-progress-tracker render-progress-${renderTracker.phase}`} aria-live="polite">
+              <div className="render-progress-heading">
+                <div>
+                  <span>{renderTracker.phase === 'complete' ? 'Render complete' : renderTracker.phase === 'failed' ? 'Render failed' : 'Render in progress'}</span>
+                  <strong>{renderTracker.message}</strong>
+                </div>
+                <b>{Math.round(renderTracker.progress * 100)}%</b>
+              </div>
+              <progress aria-label="Video render progress" aria-valuetext={`${Math.round(renderTracker.progress * 100)} percent, ${renderTracker.message}`} value={renderTracker.progress} max="1" />
+              <ol className="render-progress-steps">
+                {['Save project', 'Delete old MP4', 'Queue job', 'Build video', 'Complete'].map((label, index) => {
+                  const state = renderSteps[index];
+                  return <li className={`render-step-${state}`} key={label}><span aria-hidden="true" />{label}{state === 'skipped' ? ' (not needed)' : ''}</li>;
+                })}
+              </ol>
+              {renderTracker.jobId && <small>Job {renderTracker.jobId}{renderTracker.stage ? ` · ${renderTracker.stage}` : ''}</small>}
+            </div>
           )}
           {error && <div className="error-box">{error}</div>}
           {(previewVideoHref || outputs.length > 0) && (
@@ -1892,7 +1971,6 @@ export function App() {
         <section className="preview-panel">
           <div className="panel-heading"><h2>Generated Scenes</h2><span>{resolvedProjectId}</span></div>
           <pre>{JSON.stringify(scenesPayload, null, 2)}</pre>
-          {job && <div className="job-panel"><h3>Job {job.jobId}</h3><p>{job.status} / {job.stage}</p><progress value={job.progress || 0} max="1" /></div>}
           {(job || logs) && <div className="logs-panel"><h3>Logs</h3><pre>{logs || 'Waiting for render logs...'}</pre></div>}
           <div className="roadmap-panel">
             <h3>Roadmap</h3>

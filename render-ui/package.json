@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0 --port 3000",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 3000",
-    "test": "node --test src/projectState.test.js"
+    "test": "node --test src/*.test.js"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",
