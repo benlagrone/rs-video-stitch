@@ -1,5 +1,13 @@
 const MAX_INTRO_LINES = 5;
 
+const MANDARIN_TITLE_STYLE = {
+  fill: '#ffffff',
+  fontFile: 'input/logo/Arial-Unicode.ttf',
+  fontSize: 58,
+  outline: '#000000',
+  position: 'top-center',
+};
+
 export function sanitizeSceneImageAssignments(assignments, availableNames) {
   const available = new Set(availableNames);
   return (Array.isArray(assignments) ? assignments : []).map((sceneImages) => (
@@ -18,6 +26,27 @@ export function leadLinesFromState(state, fallbackTitle = '') {
     { length: MAX_INTRO_LINES },
     (_, index) => String(sourceLines[index] || ''),
   );
+}
+
+export function renderOptionsFromProject(state) {
+  const savedOptions = state?.renderOptions && typeof state.renderOptions === 'object'
+    ? state.renderOptions
+    : {};
+  const savedTitleStyle = savedOptions.titleStyle && typeof savedOptions.titleStyle === 'object'
+    ? savedOptions.titleStyle
+    : {};
+
+  if (!String(state?.language || '').toLowerCase().startsWith('zh')) {
+    return { ...savedOptions };
+  }
+
+  return {
+    ...savedOptions,
+    titleStyle: {
+      ...MANDARIN_TITLE_STYLE,
+      ...savedTitleStyle,
+    },
+  };
 }
 
 export function sceneImageAssignmentsFromProject(state, persistedScenes) {

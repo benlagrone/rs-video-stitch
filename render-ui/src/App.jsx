@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { BibleStudio } from './BibleStudio.jsx';
 import {
   leadLinesFromState,
+  renderOptionsFromProject,
   sanitizeSceneImageAssignments,
   sceneImageAssignmentsFromProject,
 } from './projectState.js';
@@ -247,6 +248,7 @@ function projectStateFromValues(values) {
     voice: values.voice,
     language: values.language,
     ttsApi: values.ttsApi,
+    renderOptions: values.renderOptions,
     youtubeTitle: values.youtubeTitle,
     youtubeDescription: values.youtubeDescription,
     youtubeTags: values.youtubeTags,
@@ -299,6 +301,7 @@ export function App() {
   const [voice, setVoice] = useState('Carter');
   const [language, setLanguage] = useState('en-US');
   const [ttsApi, setTtsApi] = useState('vibevoice-proxy');
+  const [renderOptions, setRenderOptions] = useState({});
   const [voiceProviders, setVoiceProviders] = useState([]);
   const [outputName, setOutputName] = useState('video.mp4');
   const [status, setStatus] = useState('Idle');
@@ -578,6 +581,7 @@ export function App() {
     setLogoCorner('top-right');
     setLogoMargin(24);
     setOutputName('video.mp4');
+    setRenderOptions({});
     setYoutubeTitle('');
     setYoutubeDescription('');
     setYoutubeTags('');
@@ -658,6 +662,7 @@ export function App() {
       const savedLanguage = state.language || language;
       setLanguage(savedLanguage);
       setTtsApi(state.ttsApi || ttsApi);
+      setRenderOptions(renderOptionsFromProject(state));
       setYoutubeTitle(state.youtubeTitle || '');
       setYoutubeDescription(state.youtubeDescription || '');
       setYoutubeTags(state.youtubeTags || '');
@@ -936,6 +941,7 @@ export function App() {
             voice,
             language,
             ttsApi,
+            renderOptions,
             youtubeTitle,
             youtubeDescription: overrides.youtubeDescription ?? youtubeDescription,
             youtubeTags,
@@ -1260,6 +1266,7 @@ export function App() {
           outputName,
           renderOptions: {
             ...DEFAULT_RENDER_OPTIONS,
+            ...renderOptions,
             tts: voice || null,
             ttsLanguage: language || null,
             ttsApi,

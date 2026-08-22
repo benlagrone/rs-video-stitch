@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   leadLinesFromState,
+  renderOptionsFromProject,
   sanitizeSceneImageAssignments,
   sceneImageAssignmentsFromProject,
 } from './projectState.js';
@@ -40,4 +41,26 @@ test('preserves up to five saved intro lines', () => {
   });
 
   assert.deepEqual(lines, ['7131 Harmony Cove', 'LeCrown Properties', 'Jie Huang', '经纪人', '']);
+});
+
+test('restores the Mandarin title font when saved render options are missing', () => {
+  const options = renderOptionsFromProject({ language: 'zh-CN' });
+
+  assert.equal(options.titleStyle.fontFile, 'input/logo/Arial-Unicode.ttf');
+  assert.equal(options.titleStyle.position, 'top-center');
+});
+
+test('preserves saved Mandarin title style overrides', () => {
+  const options = renderOptionsFromProject({
+    language: 'zh-CN',
+    renderOptions: {
+      crf: 20,
+      titleStyle: { fontSize: 52, fill: '#f0f0f0' },
+    },
+  });
+
+  assert.equal(options.crf, 20);
+  assert.equal(options.titleStyle.fontFile, 'input/logo/Arial-Unicode.ttf');
+  assert.equal(options.titleStyle.fontSize, 52);
+  assert.equal(options.titleStyle.fill, '#f0f0f0');
 });
