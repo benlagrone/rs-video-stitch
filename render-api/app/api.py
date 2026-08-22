@@ -6,6 +6,7 @@ import logging
 import mimetypes
 import os
 import threading
+import tempfile
 import uuid
 import time
 import csv
@@ -37,6 +38,7 @@ from app.schemas import (
     LeadCardGenerateResponse,
     RenderRequest,
     RoomAnnotationRequest,
+    RoomCorrectionRequest,
     ScriptEnhanceRequest,
     ScriptEnhanceResponse,
     YouTubeAuthCompleteRequest,
@@ -87,6 +89,13 @@ from app.bible_workflow import (
 )
 from app.art_styles import list_art_styles
 from app.sfx_catalog import SfxCatalogError, list_sfx_catalog
+from app.room_renamer import (
+    RoomRenamerClient,
+    RoomRenamerError,
+    canonical_room_label,
+    is_generic_header,
+    localized_room_title,
+)
 
 ALLOW_ORIGINS = (
     os.getenv("ALLOW_ORIGINS", "").split(",")
@@ -104,8 +113,10 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mixtral:latest")
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
 OLLAMA_CONNECT_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_CONNECT_TIMEOUT_SECONDS", "10"))
 VOICE_GATEWAY_URL = os.getenv("VOICE_GATEWAY_URL", "http://100.100.97.30:8133")
-ROOM_RENAMER_API_URL = os.getenv("ROOM_RENAMER_API_URL", "http://host.docker.internal:8000")
-ROOM_RENAMER_TIMEOUT_SECONDS = float(os.getenv("ROOM_RENAMER_TIMEOUT_SECONDS", "45"))
+ROOM_RENAMER_API_URL = os.getenv("ROOM_RENAMER_API_URL", "http://100.100.97.30:8014")
+ROOM_RENAMER_API_TOKEN = os.getenv("ROOM_RENAMER_API_TOKEN", "")
+ROOM_RENAMER_TIMEOUT_SECONDS = float(os.getenv("ROOM_RENAMER_TIMEOUT_SECONDS", "90"))
+ROOM_RENAMER_REQUIRED = os.getenv("ROOM_RENAMER_REQUIRED", "1").lower() not in {"0", "false", "off", "no"}
 EMOJI_PATTERN = re.compile(
     "["
     "\U0001F300-\U0001FAFF"
@@ -1034,9 +1045,180 @@ def _write_room_annotations(pid: str, req: RoomAnnotationRequest) -> dict:
     return {"projectId": pid, "count": len(req.annotations), "path": str(csv_path)}
 
 
+def _room_renamer_client() -> RoomRenamerClient:
+    return RoomRenamerClient(
+        ROOM_RENAMER_API_URL,
+        token=ROOM_RENAMER_API_TOKEN,
+        timeout_seconds=ROOM_RENAMER_TIMEOUT_SECONDS,
+    )
+
+
+def _state_image_names(state: dict, pid: str) -> list[str]:
+    names = []
+    for item in state.get("images") or []:
+        name = item if isinstance(item, str) else item.get("name") if isinstance(item, dict) else None
+        if name and name not in names:
+            names.append(name)
+    for name in list_asset_files(pid, "images"):
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _persist_room_results(pid: str, state: dict, results: list[dict], *, model: str = "") -> list[dict]:
+    language = str(state.get("language") or "en-US")
+    headers = dict(state.get("imageHeaders") or {})
+    room_info = dict(state.get("imageRoomInfo") or {})
+    normalized_results = []
+
+    for item in results:
+        filename = str(item.get("filename") or "")
+        if not filename:
+            continue
+        label = canonical_room_label(item.get("label") or "unknown") or "unknown"
+        display_label = localized_room_title(label, language)
+        prior = dict(room_info.get(filename) or {})
+        source = str(item.get("source") or (f"room-renamer:{model}" if model else "room-renamer"))
+        if prior.get("source") == "operator-correction" and source != "operator-correction":
+            label = canonical_room_label(prior.get("label") or label) or label
+            display_label = localized_room_title(label, language)
+            source = "operator-correction"
+        room_info[filename] = {
+            **prior,
+            "label": label,
+            "displayLabel": display_label,
+            "confidence": item.get("confidence"),
+            "source": source,
+        }
+        if source == "operator-correction" or is_generic_header(headers.get(filename)):
+            headers[filename] = display_label
+        normalized_results.append(
+            {
+                "filename": filename,
+                "label": label,
+                "displayLabel": headers.get(filename) or display_label,
+                "confidence": item.get("confidence"),
+                "source": source,
+            }
+        )
+
+    state["imageHeaders"] = headers
+    state["imageRoomInfo"] = room_info
+    state["roomRenamer"] = {
+        "model": model,
+        "updatedAt": time.time(),
+        "classifiedCount": len(normalized_results),
+    }
+    state["updatedAt"] = time.time()
+    save_project_state(pid, state, project_name=str(state.get("title") or pid))
+
+    scenes = _load_scenes(pid)
+    if scenes:
+        for scene in scenes.get("scenes") or []:
+            assigned = list(scene.get("images") or [])
+            for entry in scene.get("timeline") or []:
+                filename = str(entry.get("image") or "")
+                info = room_info.get(filename) or {}
+                if filename in headers:
+                    entry["header"] = headers[filename]
+                if info:
+                    entry["roomLabel"] = info.get("label") or ""
+                    entry["confidence"] = info.get("confidence")
+                    entry["roomSource"] = info.get("source") or ""
+            first_header = next((headers.get(name) for name in assigned if headers.get(name)), "")
+            if first_header and is_generic_header(scene.get("title")):
+                scene["title"] = first_header
+        save_scenes(
+            pid,
+            json.dumps(scenes, indent=2, ensure_ascii=False),
+            project_name=str(state.get("title") or pid),
+        )
+
+    annotations = []
+    for filename in _state_image_names(state, pid):
+        info = room_info.get(filename) or {}
+        annotations.append(
+            {
+                "filename": filename,
+                "header": headers.get(filename) or "",
+                "roomDescription": info.get("roomDescription") or "",
+                "label": info.get("label") or "",
+                "confidence": info.get("confidence"),
+                "source": info.get("source") or "",
+            }
+        )
+    _write_room_annotations(pid, RoomAnnotationRequest(annotations=annotations))
+    return normalized_results
+
+
+def _classify_saved_project(pid: str) -> dict:
+    state = read_project_state(pid) or _state_from_scenes(pid, _load_scenes(pid))
+    image_names = _state_image_names(state, pid)
+    room_info = dict(state.get("imageRoomInfo") or {})
+    existing_results = []
+    candidates = []
+
+    for filename in image_names:
+        info = dict(room_info.get(filename) or {})
+        label = canonical_room_label(info.get("label") or "")
+        if label and info.get("source") == "operator-correction":
+            existing_results.append({"filename": filename, **info})
+            continue
+        if label and label != "unknown":
+            existing_results.append({"filename": filename, **info})
+            continue
+        path = project_asset_path(pid, "images", filename)
+        if path.exists() and path.is_file():
+            candidates.append((filename, path))
+
+    provider_payload = {"model": "", "mode": "", "results": []}
+    if candidates:
+        try:
+            provider_payload = _room_renamer_client().classify(candidates)
+        except RoomRenamerError:
+            if ROOM_RENAMER_REQUIRED:
+                raise
+
+    combined = [
+        *existing_results,
+        *[
+            {**item, "source": f"room-renamer:{provider_payload.get('model') or 'local'}"}
+            for item in provider_payload.get("results") or []
+        ],
+    ]
+    persisted = _persist_room_results(pid, state, combined, model=str(provider_payload.get("model") or ""))
+    persisted_by_filename = {item["filename"]: item for item in persisted}
+    unresolved = [
+        filename
+        for filename in image_names
+        if filename not in persisted_by_filename
+        or persisted_by_filename[filename].get("label") == "unknown"
+        or is_generic_header(persisted_by_filename[filename].get("displayLabel"))
+    ]
+    if ROOM_RENAMER_REQUIRED and unresolved:
+        raise RoomRenamerError(
+            "Room Renamer did not resolve every project image: " + ", ".join(unresolved)
+        )
+    return {
+        "model": provider_payload.get("model") or state.get("roomRenamer", {}).get("model") or "",
+        "mode": provider_payload.get("mode") or "",
+        "results": persisted,
+        "unresolved": unresolved,
+    }
+
+
 @app.post("/v1/projects/{pid}/room-annotations")
 async def save_room_annotations(pid: str, req: RoomAnnotationRequest) -> dict:
     return _write_room_annotations(pid, req)
+
+
+@app.post("/v1/projects/{pid}/room-name-project")
+async def name_project_rooms(pid: str) -> dict:
+    try:
+        result = await run_in_threadpool(_classify_saved_project, pid)
+    except RoomRenamerError as exc:
+        raise HTTPException(status_code=503, detail=f"Room naming stopped: {exc}") from exc
+    return {"projectId": pid, **result}
 
 
 @app.get("/v1/projects")
@@ -1239,60 +1421,71 @@ async def classify_rooms(
     files: list[UploadFile] = File(...),
     threshold: Optional[float] = Form(None),
 ) -> dict:
-    results = []
-    service_url = ROOM_RENAMER_API_URL.rstrip("/") + "/classify"
-    for upload in files:
-        data = await upload.read()
-        if not upload.filename:
-            continue
-        label = ""
-        confidence = None
-        source = "filename-fallback"
-        error = None
-        if data:
-            try:
-                request_kwargs = {
-                    "files": {"file": (upload.filename, data, upload.content_type or "application/octet-stream")},
-                    "timeout": ROOM_RENAMER_TIMEOUT_SECONDS,
-                }
-                if threshold is not None:
-                    request_kwargs["params"] = {"threshold": threshold}
-                response = requests.post(service_url, **request_kwargs)
-                response.raise_for_status()
-                payload = response.json()
-                label = str(payload.get("label") or "")
-                confidence_value = payload.get("confidence")
-                confidence = float(confidence_value) if confidence_value is not None else None
-                source = "room-renamer"
-            except Exception as exc:  # noqa: BLE001
-                label = _guess_room_label(upload.filename)
-                confidence = 0.0 if label else None
-                error = str(exc)
-        results.append(
-            {
-                "filename": upload.filename,
-                "label": label,
-                "confidence": confidence,
-                "source": source,
-                **({"error": error} if error else {}),
-            }
-        )
+    del threshold  # Threshold policy is owned by the Room Renamer service.
+    with tempfile.TemporaryDirectory(prefix="mediastudio-room-renamer-") as temp_dir:
+        candidates = []
+        for upload in files:
+            if not upload.filename:
+                continue
+            target = Path(temp_dir) / Path(upload.filename).name
+            target.write_bytes(await upload.read())
+            candidates.append((upload.filename, target))
+        try:
+            payload = await run_in_threadpool(_room_renamer_client().classify, candidates)
+        except RoomRenamerError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    _write_room_annotations(
+    state = read_project_state(pid) or _state_from_scenes(pid, _load_scenes(pid))
+    results = _persist_room_results(
         pid,
-        RoomAnnotationRequest(
-            annotations=[
-                {
-                    "filename": item["filename"],
-                    "label": item.get("label") or "",
-                    "confidence": item.get("confidence"),
-                    "source": item.get("source") or "room-renamer",
-                }
-                for item in results
-            ]
-        ),
+        state,
+        [
+            {**item, "source": f"room-renamer:{payload.get('model') or 'local'}"}
+            for item in payload.get("results") or []
+        ],
+        model=str(payload.get("model") or ""),
     )
-    return {"projectId": pid, "results": results}
+    return {"projectId": pid, "model": payload.get("model"), "mode": payload.get("mode"), "results": results}
+
+
+@app.post("/v1/projects/{pid}/room-corrections")
+async def correct_room_name(pid: str, req: RoomCorrectionRequest) -> dict:
+    filename = Path(req.filename).name
+    image_path = project_asset_path(pid, "images", filename)
+    if not image_path.exists() or not image_path.is_file():
+        raise HTTPException(status_code=404, detail="project image not found")
+    label = canonical_room_label(req.correctedLabel)
+    if not label:
+        raise HTTPException(status_code=400, detail="correctedLabel must be a canonical room name")
+    state = read_project_state(pid) or _state_from_scenes(pid, _load_scenes(pid))
+    prior = dict((state.get("imageRoomInfo") or {}).get(filename) or {})
+    try:
+        training = await run_in_threadpool(
+            _room_renamer_client().submit_correction,
+            image_path=image_path,
+            filename=filename,
+            corrected_label=label,
+            predicted_label=str(prior.get("label") or ""),
+            project_id=pid,
+            language=str(state.get("language") or "en-US"),
+        )
+    except RoomRenamerError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    results = _persist_room_results(
+        pid,
+        state,
+        [
+            {
+                "filename": filename,
+                "label": label,
+                "confidence": 1.0,
+                "source": "operator-correction",
+            }
+        ],
+        model=str((state.get("roomRenamer") or {}).get("model") or ""),
+    )
+    return {"projectId": pid, "training": training, "result": results[0]}
 
 
 @app.put("/v1/projects/{pid}/scenes")
@@ -1355,6 +1548,14 @@ async def render(
     req: RenderRequest,
     db: Session = Depends(get_db),
 ) -> dict:
+    try:
+        room_naming = await run_in_threadpool(_classify_saved_project, pid)
+    except RoomRenamerError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Render stopped before room naming: {exc}",
+        ) from exc
+
     job_id = f"j_{uuid.uuid4().hex[:12]}"
     payload = req.model_dump(mode="json", by_alias=True)
 
@@ -1382,7 +1583,7 @@ async def render(
     db.add(job)
     db.commit()
 
-    return {"jobId": job_id}
+    return {"jobId": job_id, "roomNaming": room_naming}
 
 
 @app.post("/v1/projects/{pid}/youtube/upload", response_model=YouTubeUploadResponse)

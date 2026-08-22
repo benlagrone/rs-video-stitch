@@ -8,13 +8,14 @@
 
 - Keep render logs mounted continuously while a job runs, even when the latest poll has no new log bytes.
 - Capture per-image room labels and notes as project input data in `room_annotations.csv`.
-- Let MediaStudio call the `room_renamer` classifier to auto-name rooms from uploaded images.
+- [Done] Call the protected Phronesis `room_renamer` classifier automatically before every real-estate render.
+- [Done] Localize canonical room labels into English or Mandarin rolling titles.
+- [Done] Send reviewed UI corrections into protected Room Renamer training data.
 - Feed saved room labels, headers, and room notes into the Ollama script enhancer.
 
 ## Next
 
-- Add a Fortress-managed `room_renamer` service profile so room classification does not depend on a separately started local API.
-- Convert saved room annotations into curated `room_renamer/data/train/<room>/` examples.
+- Schedule reviewed retraining and model promotion after the correction dataset reaches an agreed minimum per class.
 - Add thumbnail and YouTube metadata defaults that reuse room names and project fields.
 - Add a render history view for durable output and publication events. Current
   project state already records the latest YouTube video and thumbnail result.

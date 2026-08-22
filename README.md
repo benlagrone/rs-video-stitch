@@ -97,6 +97,9 @@ mkdir -p ~/Videos/MediaStudio/{logs,projects}
 | `XTTS_API_URL` | — | Base URL for xTTS HTTP endpoint (e.g. `http://xtts:5002`). |
 | `XTTS_API_KEY` | — | Optional bearer token for the xTTS service. |
 | `XTTS_LANGUAGE` | — | Optional language code passed to xTTS (default depends on service). |
+| `ROOM_RENAMER_API_URL` | `http://100.100.97.30:8014` | Protected Phronesis Room Renamer service called only by the server. |
+| `ROOM_RENAMER_API_TOKEN` | — | Optional bearer token shared only between Sextant and Room Renamer. |
+| `ROOM_RENAMER_REQUIRED` | `1` | Fail the render before queueing if automatic room naming cannot run. |
 
 ### Optional xTTS Voice Synthesis
 
@@ -330,6 +333,20 @@ networks:
 ```
 
 First boot downloads the model into `./cache`, so keep that directory around for subsequent runs.
+
+### Automatic Room Renaming
+
+Every real-estate render now performs room classification before the FFmpeg job
+is queued. Canonical labels such as `living_room`, `street_view`, and
+`back_yard` are converted into English or Mandarin rolling titles using the
+project language. Generic captions such as `Property Photo 1` are never passed
+through to a completed render.
+
+The image editor exposes **Save correction & train** beside the canonical room
+type. A reviewed correction is persisted in project state and sent through the
+MediaStudio same-origin API to the protected Phronesis training-data intake.
+The current render immediately uses the corrected localized title; the image is
+also available for the next Room Renamer fine-tuning run.
 
 ### 2. Launch xTTS
 

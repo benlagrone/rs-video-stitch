@@ -6,6 +6,13 @@ share one API, worker, project store, render pipeline, thumbnail generator, and
 reviewed YouTube integration. Phronesis remains a protected model-serving host;
 it does not own MediaStudio workflow or project state.
 
+Real-estate image classification follows the same boundary. The protected
+`room-renamer-api` runs on Phronesis at `100.100.97.30:8014`. Sextant calls it
+from the MediaStudio API before a render job is queued, replaces generic photo
+numbers with language-correct room titles, and forwards reviewed operator
+corrections to the model's private training-data intake. The browser never
+connects to port `8014` directly.
+
 MediaStudio also owns the no-attribution sound-effects catalog. Codex or a
 Sextant-local MCP client imports individually downloaded Pixabay or Mixkit
 audio through `mcp/sfx_mcp.py`; the MCP rejects unknown providers and any item

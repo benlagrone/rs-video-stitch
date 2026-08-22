@@ -294,6 +294,7 @@ export function App() {
   const [draggedImageName, setDraggedImageName] = useState('');
   const [selectedImageName, setSelectedImageName] = useState('');
   const [isClassifyingRooms, setIsClassifyingRooms] = useState(false);
+  const [correctingRoomName, setCorrectingRoomName] = useState('');
   const [useIntro, setUseIntro] = useState(true);
   const [introLines, setIntroLines] = useState(['', '', '', '', '']);
   const [isGeneratingIntro, setIsGeneratingIntro] = useState(false);
@@ -857,6 +858,29 @@ export function App() {
     });
   }
 
+  function applyRoomNamingResults(results = []) {
+    setImageRoomInfo((current) => {
+      const next = { ...current };
+      results.forEach((item) => {
+        next[item.filename] = {
+          ...(next[item.filename] || {}),
+          label: item.label || '',
+          displayLabel: item.displayLabel || '',
+          confidence: item.confidence ?? null,
+          source: item.source || 'room-renamer',
+        };
+      });
+      return next;
+    });
+    setImageHeaders((current) => {
+      const next = { ...current };
+      results.forEach((item) => {
+        if (item.displayLabel) next[item.filename] = item.displayLabel;
+      });
+      return next;
+    });
+  }
+
   async function classifyRooms() {
     if (!images.length || isClassifyingRooms) return;
     setError('');
@@ -876,24 +900,35 @@ export function App() {
         method: 'POST',
         body: form,
       });
-      setImageRoomInfo((current) => {
-        const next = { ...current };
-        (result.results || []).forEach((item) => {
-          next[item.filename] = {
-            ...(next[item.filename] || {}),
-            label: item.label || '',
-            confidence: item.confidence ?? null,
-            source: item.source || 'room-renamer',
-          };
-        });
-        return next;
-      });
+      applyRoomNamingResults(result.results || []);
       setStatus('Room classification complete');
     } catch (err) {
       setStatus('Room classification failed');
       setError(err.message || String(err));
     } finally {
       setIsClassifyingRooms(false);
+    }
+  }
+
+  async function saveRoomCorrection(filename) {
+    const correctedLabel = String(imageRoomInfo[filename]?.label || '').trim();
+    if (!correctedLabel || correctingRoomName) return;
+    setError('');
+    setCorrectingRoomName(filename);
+    setStatus(`Saving ${filename} correction for training`);
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/room-corrections`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, correctedLabel }),
+      });
+      applyRoomNamingResults(result.result ? [result.result] : []);
+      setStatus('Room correction saved and added to Room Renamer training data');
+    } catch (err) {
+      setStatus('Room correction failed');
+      setError(err.message || String(err));
+    } finally {
+      setCorrectingRoomName('');
     }
   }
 
@@ -1281,8 +1316,20 @@ export function App() {
       });
       await saveProject();
 
+      setStatus('Naming rooms before render');
+      setRenderTracker((previous) => ({
+        ...previous,
+        phase: 'naming',
+        progress: renderTrackerProgress({ phase: 'naming' }),
+        message: 'Classifying images and localizing rolling titles',
+      }));
+      const roomNaming = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/room-name-project`, {
+        method: 'POST',
+      });
+      applyRoomNamingResults(roomNaming.results || []);
+
       if (willDelete) {
-        setStatus(`Deleting previous ${outputName}`);
+        setStatus(`Room names verified; deleting previous ${outputName}`);
         setRenderTracker((previous) => ({
           ...previous,
           phase: 'deleting',
@@ -1295,12 +1342,12 @@ export function App() {
         setOutputs((current) => current.filter((filename) => filename !== outputName));
       }
 
-      setStatus('Queueing render');
+      setStatus('Queueing verified render');
       setRenderTracker((previous) => ({
         ...previous,
         phase: 'queueing',
         progress: renderTrackerProgress({ phase: 'queueing' }),
-        message: 'Sending the project to the render worker',
+        message: 'Queueing the verified project for rendering',
       }));
       const renderResponse = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/render`, {
         method: 'POST',
@@ -1325,6 +1372,8 @@ export function App() {
           },
         }),
       });
+
+      applyRoomNamingResults(renderResponse.roomNaming?.results || []);
 
       setRenderTracker((previous) => ({
         ...previous,
@@ -1791,13 +1840,21 @@ export function App() {
                             placeholder="Kitchen with island, primary bath, lobby reception..."
                           />
                         </label>
-                        <label>Room label
+                        <label>Correct room type
                           <input
                             value={imageRoomInfo[preview.name]?.label || ''}
                             onChange={(event) => updateImageRoomInfo(preview.name, { label: event.target.value, source: 'manual' })}
-                            placeholder="kitchen"
+                            placeholder="kitchen, living_room, street_view..."
                           />
                         </label>
+                        <button
+                          type="button"
+                          onClick={() => saveRoomCorrection(preview.name)}
+                          disabled={!hasSavedProject || !imageRoomInfo[preview.name]?.label?.trim() || Boolean(correctingRoomName)}
+                          title={hasSavedProject ? 'Save this correction as Room Renamer training data' : 'Save the project before submitting training data'}
+                        >
+                          {correctingRoomName === preview.name ? 'Saving correction' : 'Save correction & train'}
+                        </button>
                         {imageRoomInfo[preview.name]?.confidence !== null && imageRoomInfo[preview.name]?.confidence !== undefined && (
                           <span>{imageRoomInfo[preview.name]?.source || 'room-renamer'} confidence {Number(imageRoomInfo[preview.name]?.confidence || 0).toFixed(2)}</span>
                         )}
@@ -1868,7 +1925,7 @@ export function App() {
 
           <button className="primary-action" type="button" onClick={submitRender} disabled={!canRender || isRendering}>
             {isRendering
-              ? `${({ saving: 'Saving', deleting: 'Deleting', queueing: 'Queueing' }[renderTracker.phase] || 'Rendering')} ${Math.round(renderTracker.progress * 100)}%`
+              ? `${({ saving: 'Saving', deleting: 'Deleting', naming: 'Naming rooms', queueing: 'Queueing' }[renderTracker.phase] || 'Rendering')} ${Math.round(renderTracker.progress * 100)}%`
               : hasSavedProject ? 'Delete & Re-render Video' : 'Start Render'}
           </button>
           {hasSavedProject && (
@@ -1885,7 +1942,7 @@ export function App() {
               </div>
               <progress aria-label="Video render progress" aria-valuetext={`${Math.round(renderTracker.progress * 100)} percent, ${renderTracker.message}`} value={renderTracker.progress} max="1" />
               <ol className="render-progress-steps">
-                {['Save project', 'Delete old MP4', 'Queue job', 'Build video', 'Complete'].map((label, index) => {
+                {['Save project', 'Name rooms', 'Delete old MP4', 'Queue job', 'Build video', 'Complete'].map((label, index) => {
                   const state = renderSteps[index];
                   return <li className={`render-step-${state}`} key={label}><span aria-hidden="true" />{label}{state === 'skipped' ? ' (not needed)' : ''}</li>;
                 })}
@@ -2018,14 +2075,22 @@ export function App() {
                     placeholder="Kitchen with island, primary bath, lobby reception..."
                   />
                 </label>
-                <label>Room label
+                <label>Correct room type
                   <input
                     value={imageRoomInfo[selectedImagePreview.name]?.label || ''}
                     onChange={(event) => updateImageRoomInfo(selectedImagePreview.name, { label: event.target.value, source: 'manual' })}
-                    placeholder="kitchen"
+                    placeholder="kitchen, living_room, street_view..."
                   />
                 </label>
                 <div className="image-modal-actions">
+                  <button
+                    type="button"
+                    onClick={() => saveRoomCorrection(selectedImagePreview.name)}
+                    disabled={!hasSavedProject || !imageRoomInfo[selectedImagePreview.name]?.label?.trim() || Boolean(correctingRoomName)}
+                    title={hasSavedProject ? 'Save this correction as Room Renamer training data' : 'Save the project before submitting training data'}
+                  >
+                    {correctingRoomName === selectedImagePreview.name ? 'Saving correction' : 'Save correction & train'}
+                  </button>
                   <button type="button" onClick={() => removeImage(selectedImagePreview.name)}>Remove image</button>
                   <button type="button" onClick={() => setSelectedImageName('')}>Done</button>
                 </div>

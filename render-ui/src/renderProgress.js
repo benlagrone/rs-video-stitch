@@ -1,9 +1,10 @@
 const PHASE_PROGRESS = {
   idle: 0,
   saving: 0.03,
-  deleting: 0.08,
-  queueing: 0.12,
-  rendering: 0.12,
+  naming: 0.08,
+  deleting: 0.12,
+  queueing: 0.18,
+  rendering: 0.18,
   complete: 1,
   failed: 0,
 };
@@ -30,7 +31,7 @@ export const EMPTY_RENDER_TRACKER = {
 export function renderTrackerProgress({ phase = 'idle', jobProgress = 0, progress } = {}) {
   if (Number.isFinite(progress)) return Math.max(0, Math.min(1, progress));
   if (phase === 'rendering') {
-    return 0.12 + Math.max(0, Math.min(1, Number(jobProgress) || 0)) * 0.86;
+    return 0.18 + Math.max(0, Math.min(1, Number(jobProgress) || 0)) * 0.80;
   }
   return PHASE_PROGRESS[phase] ?? 0;
 }
@@ -45,7 +46,7 @@ export function renderStageLabel(stage = '') {
 export function renderStepStates({ phase = 'idle', willDelete = false, failedFrom = '' } = {}) {
   const failed = phase === 'failed';
   const effectivePhase = failed ? failedFrom : phase;
-  const phaseIndex = ['saving', 'deleting', 'queueing', 'rendering', 'complete'].indexOf(effectivePhase);
+  const phaseIndex = ['saving', 'naming', 'deleting', 'queueing', 'rendering', 'complete'].indexOf(effectivePhase);
   const step = (index, skipped = false) => {
     if (skipped) return 'skipped';
     if (failed && phaseIndex === index) return 'failed';
@@ -58,9 +59,10 @@ export function renderStepStates({ phase = 'idle', willDelete = false, failedFro
 
   return [
     step(0),
-    step(1, !willDelete),
-    step(2),
+    step(1),
+    step(2, !willDelete),
     step(3),
     step(4),
+    step(5),
   ];
 }

@@ -300,3 +300,8 @@ class RoomAnnotation(BaseModel):
 
 class RoomAnnotationRequest(BaseModel):
     annotations: List[RoomAnnotation] = Field(default_factory=list)
+
+
+class RoomCorrectionRequest(BaseModel):
+    filename: str = Field(min_length=1)
+    correctedLabel: str = Field(min_length=2, max_length=64)
