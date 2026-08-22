@@ -872,6 +872,55 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["3"]["inputs"]["denoise"], motion_provider.LOCKED_CAMERA_DENOISE)
         self.assertEqual(quality["modelDenoise"], motion_provider.LOCKED_CAMERA_DENOISE)
 
+    def test_locked_motion_falls_back_to_svd_after_wan_quality_rejection(self):
+        session = mock.Mock()
+        session.get.return_value = _Response({"system": {"os": "posix"}})
+        session.post.return_value = _Response({})
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"png-data")
+            destination = Path(tmp) / "scene.mp4"
+
+            def prepare_source(_source, prepared):
+                prepared.write_bytes(b"prepared-png")
+
+            def write_candidate(_session, _workflow, candidate):
+                candidate.write_bytes(b"motion")
+
+            with mock.patch.object(
+                motion_provider, "_prepare_source_image", side_effect=prepare_source
+            ), mock.patch.object(
+                motion_provider, "_queue_and_download_workflow", side_effect=write_candidate
+            ) as queue, mock.patch.object(
+                motion_provider, "_stabilize_locked_camera", return_value={"p95TranslationPixels": 1.0}
+            ), mock.patch.object(
+                motion_provider, "_measure_source_frame_fidelity", return_value=0.82
+            ), mock.patch.object(
+                motion_provider,
+                "_measure_sequence_integrity",
+                side_effect=[
+                    motion_provider.MotionProviderError("color blocks"),
+                    {"sampleCount": 25, "meanLumaFrameDifference": 5.0},
+                ],
+            ), mock.patch.object(motion_provider, "_verify_video"):
+                quality = motion_provider.generate_motion_clip(
+                    still,
+                    destination,
+                    prompt="Fire moves along the existing arc.",
+                    negative_prompt="ghosts",
+                    seed=1234,
+                    camera_behavior="locked",
+                    session=session,
+                )
+
+        self.assertEqual(queue.call_count, 2)
+        fallback_workflow = queue.call_args_list[1].args[1]
+        self.assertEqual(fallback_workflow["1"]["inputs"]["ckpt_name"], "svd.safetensors")
+        self.assertEqual(fallback_workflow["3"]["inputs"]["motion_bucket_id"], 45)
+        self.assertEqual(quality["modelProvider"], "stable-video-diffusion")
+        self.assertEqual(quality["fallbackFrom"], "wan2.2-ti2v-5b")
+        self.assertIn("color blocks", quality["fallbackReason"])
+
     def test_motion_quality_gate_rejects_short_artifact(self):
         probe = {
             "streams": [{"codec_name": "h264", "width": 576, "height": 320, "nb_frames": "10"}],
@@ -1047,7 +1096,7 @@ class BibleWorkflowTest(TestCase):
                 "lavfi.signalstats.SATAVG=10.4",
                 "lavfi.signalstats.YDIF=3.0",
                 "frame:2 pts:2 pts_time:0.125",
-                "lavfi.signalstats.SATAVG=12.7",
+                "lavfi.signalstats.SATAVG=15.7",
                 "lavfi.signalstats.YDIF=17.3",
             ]
         )
@@ -1091,7 +1140,37 @@ class BibleWorkflowTest(TestCase):
                 metrics = motion_provider._measure_edge_tile_integrity(video)
 
             self.assertEqual(metrics["edgeTileSampleCount"], 16)
-            self.assertEqual(metrics["maxEdgeTileSaturationJump"], 0.0)
+            self.assertEqual(metrics["maxEdgeTileSaturationJump"], 0.6)
+            self.assertEqual(metrics["maxEdgeTileLumaDifference"], 5.0)
+
+    def test_edge_tile_gate_does_not_combine_unrelated_frame_spikes(self):
+        log = "\n".join(
+            [
+                "frame:0 pts:0 pts_time:0",
+                "lavfi.signalstats.SATAVG=10.0",
+                "lavfi.signalstats.YDIF=0.0",
+                "frame:1 pts:1 pts_time:0.0625",
+                "lavfi.signalstats.SATAVG=13.0",
+                "lavfi.signalstats.YDIF=4.0",
+                "frame:2 pts:2 pts_time:0.125",
+                "lavfi.signalstats.SATAVG=13.2",
+                "lavfi.signalstats.YDIF=24.0",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "scene.mp4"
+            video.write_bytes(b"motion")
+
+            def create_stats(command, **_kwargs):
+                filter_value = command[command.index("-vf") + 1]
+                Path(filter_value.split("file=", 1)[1]).write_text(log, encoding="utf-8")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_stats):
+                metrics = motion_provider._measure_edge_tile_integrity(video)
+
+        self.assertEqual(metrics["maxEdgeTileSaturationJump"], 3.0)
+        self.assertEqual(metrics["maxEdgeTileLumaDifference"], 4.0)
 
     def test_decorative_frame_protection_restores_source_border(self):
         with tempfile.TemporaryDirectory() as tmp:

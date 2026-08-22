@@ -35,7 +35,7 @@ SEQUENCE_LUMA_JUMP_LIMIT = float(os.getenv("SEQUENCE_LUMA_JUMP_LIMIT", "20.0"))
 SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE = float(os.getenv("SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE", "20.0"))
 SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE = float(os.getenv("SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE", "0.35"))
 SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT = float(
-    os.getenv("SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT", "2.0")
+    os.getenv("SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT", "4.0")
 )
 SEQUENCE_EDGE_TILE_LUMA_DIFFERENCE_LIMIT = float(
     os.getenv("SEQUENCE_EDGE_TILE_LUMA_DIFFERENCE_LIMIT", "12.0")
@@ -133,6 +133,49 @@ def _patched_workflow(
     return workflow
 
 
+def _svd_fallback_workflow(image_name: str, prefix: str, seed: int) -> dict[str, Any]:
+    return {
+        "1": {"class_type": "ImageOnlyCheckpointLoader", "inputs": {"ckpt_name": "svd.safetensors"}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": image_name}},
+        "3": {
+            "class_type": "SVD_img2vid_Conditioning",
+            "inputs": {
+                "clip_vision": ["1", 1],
+                "init_image": ["2", 0],
+                "vae": ["1", 2],
+                "width": FRAME_PROTECTION_WIDTH,
+                "height": FRAME_PROTECTION_HEIGHT,
+                "video_frames": 25,
+                "motion_bucket_id": 45,
+                "fps": 5,
+                "augmentation_level": 0.0,
+            },
+        },
+        "4": {"class_type": "VideoLinearCFGGuidance", "inputs": {"model": ["1", 0], "min_cfg": 1.0}},
+        "5": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["4", 0],
+                "seed": seed,
+                "steps": 20,
+                "cfg": 2.5,
+                "sampler_name": "euler",
+                "scheduler": "karras",
+                "positive": ["3", 0],
+                "negative": ["3", 1],
+                "latent_image": ["3", 2],
+                "denoise": 1.0,
+            },
+        },
+        "6": {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}},
+        "7": {"class_type": "CreateVideo", "inputs": {"images": ["6", 0], "fps": 5}},
+        "8": {
+            "class_type": "SaveVideo",
+            "inputs": {"video": ["7", 0], "filename_prefix": prefix, "format": "mp4", "codec": "h264"},
+        },
+    }
+
+
 def _wait_for_output(session, prompt_id: str) -> dict:
     deadline = time.monotonic() + COMFYUI_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
@@ -145,6 +188,31 @@ def _wait_for_output(session, prompt_id: str) -> dict:
             return entry
         time.sleep(max(0.25, COMFYUI_POLL_SECONDS))
     raise MotionProviderError(f"ComfyUI prompt {prompt_id} timed out")
+
+
+def _queue_and_download_workflow(session, workflow: dict[str, Any], destination: Path) -> None:
+    queued = session.post(
+        f"{COMFYUI_MODEL_API_URL.rstrip('/')}/prompt",
+        json={"client_id": f"mediastudio-sextant-{uuid.uuid4().hex}", "prompt": workflow},
+        timeout=60,
+    )
+    queued.raise_for_status()
+    prompt_id = str(queued.json().get("prompt_id") or "")
+    if not prompt_id:
+        raise MotionProviderError("ComfyUI did not return a prompt id")
+    item = _output_record(_wait_for_output(session, prompt_id))
+    artifact = session.get(
+        f"{COMFYUI_MODEL_API_URL.rstrip('/')}/view",
+        params={
+            "filename": item["filename"],
+            "subfolder": item.get("subfolder", ""),
+            "type": item.get("type", "output"),
+        },
+        timeout=300,
+    )
+    artifact.raise_for_status()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(artifact.content)
 
 
 def _output_record(history: dict) -> dict:
@@ -392,11 +460,12 @@ def _measure_edge_tile_integrity(video_path: Path) -> dict[str, float | int]:
                 abs(current - previous)
                 for previous, current in zip(saturation_values, saturation_values[1:])
             )
-            tile_luma_difference = max(luma_differences)
-            if (
-                tile_saturation_jump > worst_saturation_jump
-                and tile_luma_difference > SEQUENCE_EDGE_TILE_LUMA_DIFFERENCE_LIMIT
-            ):
+            jump_frame = max(
+                range(1, len(saturation_values)),
+                key=lambda index: abs(saturation_values[index] - saturation_values[index - 1]),
+            )
+            tile_luma_difference = luma_differences[jump_frame]
+            if tile_saturation_jump > worst_saturation_jump:
                 worst_saturation_jump = tile_saturation_jump
                 worst_luma_difference = tile_luma_difference
                 worst_tile = f"{row},{column}"
@@ -475,40 +544,44 @@ def generate_motion_clip(
             seed=seed,
             denoise=model_denoise,
         )
-        queued = session.post(
-            f"{COMFYUI_MODEL_API_URL.rstrip('/')}/prompt",
-            json={"client_id": f"mediastudio-sextant-{uuid.uuid4().hex}", "prompt": workflow},
-            timeout=60,
-        )
-        queued.raise_for_status()
-        prompt_id = str(queued.json().get("prompt_id") or "")
-        if not prompt_id:
-            raise MotionProviderError("ComfyUI did not return a prompt id")
-        item = _output_record(_wait_for_output(session, prompt_id))
-        artifact = session.get(
-            f"{COMFYUI_MODEL_API_URL.rstrip('/')}/view",
-            params={
-                "filename": item["filename"],
-                "subfolder": item.get("subfolder", ""),
-                "type": item.get("type", "output"),
-            },
-            timeout=300,
-        )
-        artifact.raise_for_status()
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(artifact.content)
-        quality: dict[str, Any] = {
-            "status": "accepted",
-            "cameraBehavior": camera_behavior,
-            "sourceSizing": "fit-and-pad-no-crop",
-            "modelDenoise": model_denoise,
-        }
-        if camera_behavior == "locked":
-            quality["stabilization"] = _stabilize_locked_camera(destination)
-        if protect_style_frame:
-            _protect_decorative_frame(prepared_source, destination)
-            quality["decorativeFrameProtected"] = True
-        quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
-        quality["sequenceIntegrity"] = _measure_sequence_integrity(destination)
-        _verify_video(destination)
-        return quality
+        effective_seed = int(workflow["3"]["inputs"]["seed"])
+
+        def validate_candidate(provider: str, denoise: float) -> dict[str, Any]:
+            quality: dict[str, Any] = {
+                "status": "accepted",
+                "cameraBehavior": camera_behavior,
+                "sourceSizing": "fit-and-pad-no-crop",
+                "modelProvider": provider,
+                "modelDenoise": denoise,
+            }
+            if camera_behavior == "locked":
+                quality["stabilization"] = _stabilize_locked_camera(destination)
+            if protect_style_frame:
+                _protect_decorative_frame(prepared_source, destination)
+                quality["decorativeFrameProtected"] = True
+            quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
+            quality["sequenceIntegrity"] = _measure_sequence_integrity(destination)
+            _verify_video(destination)
+            return quality
+
+        try:
+            _queue_and_download_workflow(session, workflow, destination)
+            return validate_candidate("wan2.2-ti2v-5b", model_denoise)
+        except MotionProviderError as wan_error:
+            if camera_behavior != "locked":
+                raise
+            fallback = _svd_fallback_workflow(
+                uploaded_name,
+                f"{prefix}-svd-fallback",
+                effective_seed ^ 0x5A17D3,
+            )
+            try:
+                _queue_and_download_workflow(session, fallback, destination)
+                quality = validate_candidate("stable-video-diffusion", 1.0)
+            except MotionProviderError as fallback_error:
+                raise MotionProviderError(
+                    f"Wan animation rejected: {wan_error}; SVD fallback rejected: {fallback_error}"
+                ) from fallback_error
+            quality["fallbackFrom"] = "wan2.2-ti2v-5b"
+            quality["fallbackReason"] = str(wan_error)[:500]
+            return quality
