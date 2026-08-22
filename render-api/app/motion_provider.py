@@ -40,6 +40,9 @@ SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT = float(
 SEQUENCE_EDGE_TILE_LUMA_DIFFERENCE_LIMIT = float(
     os.getenv("SEQUENCE_EDGE_TILE_LUMA_DIFFERENCE_LIMIT", "12.0")
 )
+SEQUENCE_EDGE_TILE_ABSOLUTE_SATURATION_LIMIT = float(
+    os.getenv("SEQUENCE_EDGE_TILE_ABSOLUTE_SATURATION_LIMIT", "7.0")
+)
 
 
 class MotionProviderError(RuntimeError):
@@ -183,6 +186,7 @@ def _svd_fallback_workflow(image_name: str, prefix: str, seed: int) -> dict[str,
 def _vace_region_workflow(
     image_name: str,
     control_video_name: str,
+    mask_video_name: str,
     prompt: str,
     negative_prompt: str,
     prefix: str,
@@ -199,13 +203,16 @@ def _vace_region_workflow(
         "6": {"class_type": "LoadImage", "inputs": {"image": image_name}},
         "7": {"class_type": "LoadVideo", "inputs": {"file": control_video_name}},
         "8": {"class_type": "GetVideoComponents", "inputs": {"video": ["7", 0]}},
+        "9": {"class_type": "LoadVideo", "inputs": {"file": mask_video_name}},
+        "10": {"class_type": "GetVideoComponents", "inputs": {"video": ["9", 0]}},
+        "11": {"class_type": "ImageToMask", "inputs": {"image": ["10", 0], "channel": "red"}},
         "12": {
             "class_type": "WanVaceToVideo",
             "inputs": {
                 "positive": ["4", 0], "negative": ["5", 0], "vae": ["3", 0],
                 "width": FRAME_PROTECTION_WIDTH, "height": FRAME_PROTECTION_HEIGHT,
                 "length": 81, "batch_size": 1, "strength": strength,
-                "control_video": ["8", 0], "reference_image": ["6", 0],
+                "control_video": ["8", 0], "control_masks": ["11", 0], "reference_image": ["6", 0],
             },
         },
         "13": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["1", 0], "shift": 8.0}},
@@ -258,7 +265,7 @@ def _generate_region_control_assets(
         f"split={len(regions) + 1}[base]{split_labels}"
     ]
     current = "base"
-    mask_boxes = []
+    mask_terms = []
     for index, region in enumerate(regions):
         box = region.get("box") or {}
         x = max(0, min(FRAME_PROTECTION_WIDTH - 24, round(float(box.get("x", 0.1)) * FRAME_PROTECTION_WIDTH)))
@@ -276,14 +283,23 @@ def _generate_region_control_assets(
         )
         graph.append(f"[{current}][{patch}]overlay=x='{x}+({dx})':y='{y}+({dy})':eval=frame:shortest=1[{output}]")
         current = output
-        mask_boxes.append(f"drawbox=x={x}:y={y}:w={width}:h={height}:color=white:t=fill")
+        mask_dx, mask_dy = dx.replace("t", "T"), dy.replace("t", "T")
+        center_x, center_y = x + (width / 2), y + (height / 2)
+        spread_x, spread_y = max(18, width / 2.8), max(18, height / 2.8)
+        mask_terms.append(
+            f"255*exp(-(((X-({center_x}+({mask_dx})))*(X-({center_x}+({mask_dx})))/(2*{spread_x}*{spread_x}))"
+            f"+((Y-({center_y}+({mask_dy})))*(Y-({center_y}+({mask_dy})))/(2*{spread_y}*{spread_y}))))"
+        )
     graph.append(f"[{current}]format=yuv420p[control]")
     control_command = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-loop", "1", "-framerate", "16", "-i", str(image_path),
         "-filter_complex", ";".join(graph), "-map", "[control]", "-t", "5.0625", "-r", "16",
         "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", str(control_destination),
     ]
-    mask_filter = ",".join(mask_boxes + ["boxblur=10:2", "format=yuv420p"])
+    mask_expression = mask_terms[0]
+    for term in mask_terms[1:]:
+        mask_expression = f"max({mask_expression},{term})"
+    mask_filter = f"format=gray,geq=lum='{mask_expression}',boxblur=6:1,format=yuv420p"
     mask_command = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
         f"color=black:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d=5.0625",
@@ -612,6 +628,12 @@ def _measure_edge_tile_integrity(video_path: Path) -> dict[str, float | int]:
             f"tile {worst_tile}, saturation jump {worst_saturation_jump:.2f}, "
             f"luma difference {worst_luma_difference:.2f}"
         )
+    if worst_saturation_jump > SEQUENCE_EDGE_TILE_ABSOLUTE_SATURATION_LIMIT:
+        raise MotionProviderError(
+            "Animation rejected for localized chroma corruption or control-boundary leakage: "
+            f"tile {worst_tile}, saturation jump {worst_saturation_jump:.2f} exceeds "
+            f"{SEQUENCE_EDGE_TILE_ABSOLUTE_SATURATION_LIMIT:.2f}"
+        )
     return metrics
 
 
@@ -679,6 +701,103 @@ def _generate_coherent_environmental_fallback(image_path: Path, destination: Pat
         raise MotionProviderError("Coherent environmental motion produced no video")
 
 
+def _generate_region_environmental_fallback(
+    image_path: Path,
+    destination: Path,
+    motion_plan: dict[str, Any],
+) -> int:
+    """Animate planned environmental energy without moving or regenerating source pixels."""
+    duration = 5.0625
+    regions = [region for region in motion_plan.get("regions") or [] if region.get("enabled") is not False][:5]
+    if not regions:
+        raise MotionProviderError("Motion plan has no enabled environmental regions")
+    command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-loop", "1", "-framerate", "16",
+        "-i", str(image_path),
+    ]
+    graph = [
+        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        "format=yuv420p[base]"
+    ]
+    current = "base"
+    fire_region: dict[str, Any] | None = None
+    for index, region in enumerate(regions, start=1):
+        command.extend([
+            "-f", "lavfi", "-i",
+            f"color=c=black@0.0:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d={duration},format=rgba",
+        ])
+        box = region.get("box") or {}
+        center_x = (float(box.get("x", 0.1)) + (float(box.get("width", 0.35)) / 2))
+        center_y = (float(box.get("y", 0.1)) + (float(box.get("height", 0.35)) / 2))
+        spread = max(28, round(min(
+            float(box.get("width", 0.35)) * FRAME_PROTECTION_WIDTH,
+            float(box.get("height", 0.35)) * FRAME_PROTECTION_HEIGHT,
+        ) * 0.42))
+        label = f"{region.get('label', '')} {region.get('effect', '')}".lower()
+        if "fire" in label or "surge" in label:
+            red, green, blue, alpha = 255, 112, 28, 86
+            fire_region = region
+        elif "dust" in label or "roll" in label:
+            red, green, blue, alpha = 205, 138, 68, 44
+        elif "atmos" in label or "haze" in label:
+            red, green, blue, alpha = 190, 210, 225, 28
+        else:
+            red, green, blue, alpha = 255, 174, 62, 42
+        dx, dy = _region_motion_offset(region, index)
+        dx, dy = dx.replace("t", "T"), dy.replace("t", "T")
+        x_expression = f"W*{center_x:.4f}+3*({dx})"
+        y_expression = f"H*{center_y:.4f}+3*({dy})"
+        glow = f"glow{index}"
+        output = f"environment{index}"
+        graph.append(
+            f"[{index}:v]geq=r='{red}':g='{green}':b='{blue}':"
+            f"a='{alpha}*exp(-((X-({x_expression}))*(X-({x_expression}))"
+            f"+(Y-({y_expression}))*(Y-({y_expression})))/(2*{spread}*{spread}))'[{glow}]"
+        )
+        graph.append(f"[{current}][{glow}]overlay=shortest=1[{output}]")
+        current = output
+
+    if fire_region:
+        command.extend([
+            "-f", "lavfi", "-i",
+            f"color=c=black@0.0:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d={duration},format=rgba",
+        ])
+        box = fire_region.get("box") or {}
+        x0 = round(float(box.get("x", 0.72)) * FRAME_PROTECTION_WIDTH)
+        y0 = round((float(box.get("y", 0.02)) + float(box.get("height", 0.96)) * 0.82) * FRAME_PROTECTION_HEIGHT)
+        terms = []
+        for spark in range(9):
+            sx = min(FRAME_PROTECTION_WIDTH - 4, x0 + 4 + (spark % 4) * 17)
+            sy = y0 - spark * 19
+            moving_y = f"mod({sy}-({44 + spark * 3})*T+{FRAME_PROTECTION_HEIGHT},{FRAME_PROTECTION_HEIGHT})"
+            terms.append(f"if(lt((X-{sx})*(X-{sx})+(Y-({moving_y}))*(Y-({moving_y})),{4 + (spark % 3) * 3}),210,0)")
+        spark_alpha = terms[0]
+        for term in terms[1:]:
+            spark_alpha = f"max({spark_alpha},{term})"
+        sparks_input = len(regions) + 1
+        graph.append(
+            f"[{sparks_input}:v]geq=r='255':g='178':b='62':a='{spark_alpha}'[sparks]"
+        )
+        graph.append(f"[{current}][sparks]overlay=shortest=1[withsparks]")
+        current = "withsparks"
+    graph.append(f"[{current}]format=yuv420p[v]")
+    command.extend([
+        "-filter_complex", ";".join(graph), "-map", "[v]", "-t", str(duration), "-r", "16",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart", str(destination),
+    ])
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        raise MotionProviderError(f"Unable to create region environmental motion: {detail[-600:]}") from exc
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise MotionProviderError("Region environmental motion produced no video")
+    return len(regions)
+
+
 def generate_motion_clip(
     image_path: Path,
     destination: Path,
@@ -735,8 +854,9 @@ def generate_motion_clip(
             try:
                 region_count = _generate_region_control_assets(prepared_source, motion_plan, control_path, mask_path)
                 control_name = _upload_asset(session, control_path, "video/mp4")
+                mask_name = _upload_asset(session, mask_path, "video/mp4")
                 region_workflow = _vace_region_workflow(
-                    uploaded_name, control_name, prompt, negative_prompt,
+                    uploaded_name, control_name, mask_name, prompt, negative_prompt,
                     f"{prefix}-region-control", effective_seed,
                 )
                 _queue_and_download_workflow(session, region_workflow, destination)
@@ -749,7 +869,7 @@ def generate_motion_clip(
                 region_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
                 try:
                     restrained_workflow = _vace_region_workflow(
-                        uploaded_name, control_name, prompt, negative_prompt,
+                        uploaded_name, control_name, mask_name, prompt, negative_prompt,
                         f"{prefix}-region-control-restrained", effective_seed ^ 0x13A7,
                         strength=0.48,
                     )
@@ -765,6 +885,21 @@ def generate_motion_clip(
                     region_error = MotionProviderError(
                         f"VACE: {region_error}; restrained VACE: {restrained_error}"
                     )
+            try:
+                region_count = _generate_region_environmental_fallback(
+                    prepared_source, destination, motion_plan
+                )
+                quality = validate_candidate("region-environmental-composite", 0.0)
+                quality["motionRegionCount"] = region_count
+                quality["motionPlanSummary"] = str(motion_plan.get("summary") or "")[:320]
+                quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
+                quality["fallbackFrom"] = "wan2.1-vace-region-control"
+                quality["fallbackReason"] = str(region_error)[:500]
+                return quality
+            except MotionProviderError as environmental_region_error:
+                region_error = MotionProviderError(
+                    f"{region_error}; region environmental composite: {environmental_region_error}"
+                )
 
         try:
             _queue_and_download_workflow(session, workflow, destination)
