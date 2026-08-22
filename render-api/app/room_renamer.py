@@ -75,6 +75,17 @@ class RoomRenamerClient:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
+    @staticmethod
+    def _error_detail(response: requests.Response | None) -> str:
+        if response is None:
+            return ""
+        try:
+            payload = response.json()
+        except (requests.JSONDecodeError, ValueError):
+            return str(response.text or "").strip()[:500]
+        detail = payload.get("detail") if isinstance(payload, dict) else ""
+        return str(detail or "").strip()[:500]
+
     def classify(self, images: Iterable[tuple[str, Path]]) -> dict:
         opened = []
         files = []
@@ -97,6 +108,10 @@ class RoomRenamerClient:
             if not isinstance(payload.get("results"), list):
                 raise ValueError("Room Renamer response did not contain results.")
             return payload
+        except requests.HTTPError as exc:
+            detail = self._error_detail(exc.response)
+            suffix = f" Provider detail: {detail}" if detail else ""
+            raise RoomRenamerError(f"Room Renamer failed at {self.base_url}: {exc}.{suffix}") from exc
         except (OSError, requests.RequestException, ValueError) as exc:
             raise RoomRenamerError(f"Room Renamer failed at {self.base_url}: {exc}") from exc
         finally:
@@ -132,4 +147,3 @@ class RoomRenamerClient:
             return response.json()
         except (OSError, requests.RequestException, ValueError) as exc:
             raise RoomRenamerError(f"Room Renamer correction failed at {self.base_url}: {exc}") from exc
-

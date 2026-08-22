@@ -1,7 +1,10 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
+
+import requests
 
 from app.room_renamer import (
     RoomRenamerClient,
@@ -26,6 +29,23 @@ class _Response:
 
 
 class RoomRenamerTests(unittest.TestCase):
+    def test_project_image_inventory_excludes_fonts_and_other_non_images(self):
+        state = {
+            "images": [
+                {"name": "front.jpg"},
+                {"name": "ArialUnicode.ttf"},
+                {"name": "../outside.png"},
+            ]
+        }
+        with patch.object(
+            api,
+            "list_asset_files",
+            return_value=["front.jpg", "kitchen.jpeg", "ArialUnicode.ttf", "notes.json"],
+        ):
+            names = api._state_image_names(state, "harmony-zh")
+
+        self.assertEqual(names, ["front.jpg", "kitchen.jpeg"])
+
     def test_detects_numbered_fallback_headers(self):
         self.assertTrue(is_generic_header("Property Photo 1"))
         self.assertTrue(is_generic_header("房产照片 7"))
@@ -57,6 +77,21 @@ class RoomRenamerTests(unittest.TestCase):
             with patch("app.room_renamer.requests.post", side_effect=OSError("offline")):
                 with self.assertRaises(RoomRenamerError):
                     RoomRenamerClient("http://phronesis:8014").classify([("front.jpg", image)])
+
+    def test_client_preserves_provider_error_detail(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image = Path(temp_dir) / "ArialUnicode.ttf"
+            image.write_bytes(b"font")
+            response = requests.Response()
+            response.status_code = 400
+            response._content = json.dumps(
+                {"detail": "ArialUnicode.ttf: Unsupported image format"}
+            ).encode("utf-8")
+            with patch("app.room_renamer.requests.post", return_value=response):
+                with self.assertRaisesRegex(RoomRenamerError, "ArialUnicode.ttf"):
+                    RoomRenamerClient("http://phronesis:8014").classify(
+                        [("ArialUnicode.ttf", image)]
+                    )
 
     def test_persistence_replaces_generic_mandarin_header_and_scene_title(self):
         state = {

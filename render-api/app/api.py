@@ -117,6 +117,7 @@ ROOM_RENAMER_API_URL = os.getenv("ROOM_RENAMER_API_URL", "http://100.100.97.30:8
 ROOM_RENAMER_API_TOKEN = os.getenv("ROOM_RENAMER_API_TOKEN", "")
 ROOM_RENAMER_TIMEOUT_SECONDS = float(os.getenv("ROOM_RENAMER_TIMEOUT_SECONDS", "90"))
 ROOM_RENAMER_REQUIRED = os.getenv("ROOM_RENAMER_REQUIRED", "1").lower() not in {"0", "false", "off", "no"}
+ROOM_RENAMER_IMAGE_SUFFIXES = {".jpeg", ".jpg", ".png", ".webp"}
 EMOJI_PATTERN = re.compile(
     "["
     "\U0001F300-\U0001FAFF"
@@ -1057,10 +1058,19 @@ def _state_image_names(state: dict, pid: str) -> list[str]:
     names = []
     for item in state.get("images") or []:
         name = item if isinstance(item, str) else item.get("name") if isinstance(item, dict) else None
-        if name and name not in names:
+        if (
+            name
+            and Path(name).name == name
+            and Path(name).suffix.lower() in ROOM_RENAMER_IMAGE_SUFFIXES
+            and name not in names
+        ):
             names.append(name)
     for name in list_asset_files(pid, "images"):
-        if name not in names:
+        if (
+            Path(name).name == name
+            and Path(name).suffix.lower() in ROOM_RENAMER_IMAGE_SUFFIXES
+            and name not in names
+        ):
             names.append(name)
     return names
 
