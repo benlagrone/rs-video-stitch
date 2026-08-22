@@ -90,6 +90,7 @@ def loop(stop_event: Event | None = None) -> None:
                         int(payload.get("sceneIndex") or 0),
                         str(payload.get("prompt") or ""),
                         str(payload.get("cameraBehavior") or "locked"),
+                        dict(payload.get("motionPlan") or {}),
                         progress=progress,
                         log=log,
                     )

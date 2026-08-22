@@ -74,15 +74,19 @@ def _set_path(document: dict[str, Any], dotted_path: str, value: Any) -> None:
 
 
 def _upload_image(session, image_path: Path) -> str:
-    with image_path.open("rb") as handle:
+    return _upload_asset(session, image_path, "image/png")
+
+
+def _upload_asset(session, asset_path: Path, content_type: str) -> str:
+    with asset_path.open("rb") as handle:
         response = session.post(
             f"{COMFYUI_MODEL_API_URL.rstrip('/')}/upload/image",
-            files={"image": (image_path.name, handle, "image/png")},
+            files={"image": (asset_path.name, handle, content_type)},
             data={"overwrite": "true"},
             timeout=120,
         )
     response.raise_for_status()
-    return str(response.json().get("name") or image_path.name)
+    return str(response.json().get("name") or asset_path.name)
 
 
 def _patched_workflow(
@@ -174,6 +178,126 @@ def _svd_fallback_workflow(image_name: str, prefix: str, seed: int) -> dict[str,
             "inputs": {"video": ["7", 0], "filename_prefix": prefix, "format": "mp4", "codec": "h264"},
         },
     }
+
+
+def _vace_region_workflow(
+    image_name: str,
+    control_video_name: str,
+    mask_video_name: str,
+    prompt: str,
+    negative_prompt: str,
+    prefix: str,
+    seed: int,
+) -> dict[str, Any]:
+    """Build a Wan VACE graph using an explicit full-frame control track and motion mask."""
+    return {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "wan2.1_vace_1.3B_fp16.safetensors", "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "type": "wan", "device": "default"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": "wan2.1_vae.pth"}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["2", 0]}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt, "clip": ["2", 0]}},
+        "6": {"class_type": "LoadImage", "inputs": {"image": image_name}},
+        "7": {"class_type": "LoadVideo", "inputs": {"file": control_video_name}},
+        "8": {"class_type": "GetVideoComponents", "inputs": {"video": ["7", 0]}},
+        "9": {"class_type": "LoadVideo", "inputs": {"file": mask_video_name}},
+        "10": {"class_type": "GetVideoComponents", "inputs": {"video": ["9", 0]}},
+        "11": {"class_type": "ImageToMask", "inputs": {"image": ["10", 0], "channel": "red"}},
+        "12": {
+            "class_type": "WanVaceToVideo",
+            "inputs": {
+                "positive": ["4", 0], "negative": ["5", 0], "vae": ["3", 0],
+                "width": FRAME_PROTECTION_WIDTH, "height": FRAME_PROTECTION_HEIGHT,
+                "length": 81, "batch_size": 1, "strength": 0.82,
+                "control_video": ["8", 0], "control_masks": ["11", 0], "reference_image": ["6", 0],
+            },
+        },
+        "13": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["1", 0], "shift": 8.0}},
+        "14": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["13", 0], "seed": seed, "steps": 20, "cfg": 3.5,
+                "sampler_name": "uni_pc", "scheduler": "simple",
+                "positive": ["12", 0], "negative": ["12", 1], "latent_image": ["12", 2], "denoise": 1.0,
+            },
+        },
+        "15": {"class_type": "VAEDecode", "inputs": {"samples": ["14", 0], "vae": ["3", 0]}},
+        "16": {"class_type": "CreateVideo", "inputs": {"images": ["15", 0], "fps": 16}},
+        "17": {"class_type": "SaveVideo", "inputs": {"video": ["16", 0], "filename_prefix": prefix, "format": "mp4", "codec": "h264"}},
+    }
+
+
+def _region_motion_offset(region: dict[str, Any], index: int) -> tuple[str, str]:
+    strength = min(1.0, max(0.1, float(region.get("strength") or 0.5)))
+    distance = round(5 + (strength * 15), 2)
+    direction = str(region.get("direction") or "right")
+    phase = round(index * 0.8, 2)
+    wave = f"sin(2*PI*t/5.0625+{phase})"
+    mapping = {
+        "left": (f"-{distance}*t/5.0625", f"2*{wave}"),
+        "right": (f"{distance}*t/5.0625", f"2*{wave}"),
+        "up": (f"2*{wave}", f"-{distance}*t/5.0625"),
+        "down": (f"2*{wave}", f"{distance}*t/5.0625"),
+        "outward": (f"{distance}*{wave}", f"{distance / 2}*sin(PI*t/5.0625)"),
+        "clockwise": (f"{distance}*sin(2*PI*t/5.0625)", f"{distance}*cos(2*PI*t/5.0625)"),
+        "counterclockwise": (f"-{distance}*sin(2*PI*t/5.0625)", f"{distance}*cos(2*PI*t/5.0625)"),
+        "pulse": ("0", f"2*{wave}"),
+    }
+    return mapping.get(direction, mapping["right"])
+
+
+def _generate_region_control_assets(
+    image_path: Path,
+    motion_plan: dict[str, Any],
+    control_destination: Path,
+    mask_destination: Path,
+) -> int:
+    """Create source-aligned control tracks; only planned regions move, never the frame."""
+    regions = [region for region in motion_plan.get("regions") or [] if region.get("enabled") is not False][:5]
+    if not regions:
+        raise MotionProviderError("Motion plan has no enabled regions")
+    split_labels = "".join(f"[region{index}]" for index in range(len(regions)))
+    graph = [
+        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,format=yuv420p,"
+        f"split={len(regions) + 1}[base]{split_labels}"
+    ]
+    current = "base"
+    mask_boxes = []
+    for index, region in enumerate(regions):
+        box = region.get("box") or {}
+        x = max(0, min(FRAME_PROTECTION_WIDTH - 24, round(float(box.get("x", 0.1)) * FRAME_PROTECTION_WIDTH)))
+        y = max(0, min(FRAME_PROTECTION_HEIGHT - 24, round(float(box.get("y", 0.1)) * FRAME_PROTECTION_HEIGHT)))
+        width = max(24, min(FRAME_PROTECTION_WIDTH - x, round(float(box.get("width", 0.35)) * FRAME_PROTECTION_WIDTH)))
+        height = max(24, min(FRAME_PROTECTION_HEIGHT - y, round(float(box.get("height", 0.35)) * FRAME_PROTECTION_HEIGHT)))
+        dx, dy = _region_motion_offset(region, index)
+        patch = f"patch{index}"
+        output = f"layer{index}"
+        graph.append(f"[region{index}]crop={width}:{height}:{x}:{y},format=rgba,colorchannelmixer=aa=0.82[{patch}]")
+        graph.append(f"[{current}][{patch}]overlay=x='{x}+({dx})':y='{y}+({dy})':eval=frame:shortest=1[{output}]")
+        current = output
+        mask_boxes.append(f"drawbox=x={x}:y={y}:w={width}:h={height}:color=white:t=fill")
+    graph.append(f"[{current}]format=yuv420p[control]")
+    control_command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-loop", "1", "-framerate", "16", "-i", str(image_path),
+        "-filter_complex", ";".join(graph), "-map", "[control]", "-t", "5.0625", "-r", "16",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", str(control_destination),
+    ]
+    mask_filter = ",".join(mask_boxes + ["boxblur=10:2", "format=yuv420p"])
+    mask_command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+        f"color=black:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d=5.0625",
+        "-vf", mask_filter, "-t", "5.0625", "-r", "16", "-c:v", "libx264", "-preset", "fast",
+        "-crf", "12", "-pix_fmt", "yuv420p", str(mask_destination),
+    ]
+    try:
+        subprocess.run(control_command, check=True, capture_output=True, text=True)
+        subprocess.run(mask_command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        raise MotionProviderError(f"Unable to build region-control tracks: {detail[-600:]}") from exc
+    if not control_destination.exists() or not mask_destination.exists():
+        raise MotionProviderError("Region-control track generation produced no video")
+    return len(regions)
 
 
 def _wait_for_output(session, prompt_id: str) -> dict:
@@ -563,6 +687,7 @@ def generate_motion_clip(
     seed: int | None = None,
     protect_style_frame: bool = False,
     camera_behavior: str = "locked",
+    motion_plan: dict[str, Any] | None = None,
     session=requests,
 ) -> dict[str, Any]:
     model_health = session.get(f"{COMFYUI_MODEL_API_URL.rstrip('/')}/system_stats", timeout=10)
@@ -582,6 +707,8 @@ def generate_motion_clip(
             denoise=model_denoise,
         )
         effective_seed = int(workflow["3"]["inputs"]["seed"])
+        region_count = 0
+        region_error: MotionProviderError | None = None
 
         def validate_candidate(provider: str, denoise: float) -> dict[str, Any]:
             quality: dict[str, Any] = {
@@ -601,9 +728,33 @@ def generate_motion_clip(
             _verify_video(destination)
             return quality
 
+        if motion_plan and any(region.get("enabled") is not False for region in motion_plan.get("regions") or []):
+            control_path = Path(temp_dir) / f"control-{image_path.stem}.mp4"
+            mask_path = Path(temp_dir) / f"mask-{image_path.stem}.mp4"
+            try:
+                region_count = _generate_region_control_assets(prepared_source, motion_plan, control_path, mask_path)
+                control_name = _upload_asset(session, control_path, "video/mp4")
+                mask_name = _upload_asset(session, mask_path, "video/mp4")
+                region_workflow = _vace_region_workflow(
+                    uploaded_name, control_name, mask_name, prompt, negative_prompt,
+                    f"{prefix}-region-control", effective_seed,
+                )
+                _queue_and_download_workflow(session, region_workflow, destination)
+                quality = validate_candidate("wan2.1-vace-region-control", 1.0)
+                quality["motionRegionCount"] = region_count
+                quality["motionPlanSummary"] = str(motion_plan.get("summary") or "")[:320]
+                quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
+                return quality
+            except Exception as exc:  # noqa: BLE001 - provider failures must preserve the existing fallback chain
+                region_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
+
         try:
             _queue_and_download_workflow(session, workflow, destination)
-            return validate_candidate("wan2.2-ti2v-5b", model_denoise)
+            quality = validate_candidate("wan2.2-ti2v-5b", model_denoise)
+            if region_error:
+                quality["fallbackFrom"] = "wan2.1-vace-region-control"
+                quality["fallbackReason"] = str(region_error)[:500]
+            return quality
         except MotionProviderError as wan_error:
             if camera_behavior != "locked":
                 raise
@@ -624,9 +775,14 @@ def generate_motion_clip(
                         f"Wan animation rejected: {wan_error}; SVD fallback rejected: {fallback_error}; "
                         f"coherent environmental fallback rejected: {environmental_error}"
                     ) from environmental_error
-                quality["fallbackFrom"] = "wan2.2-ti2v-5b,stable-video-diffusion"
-                quality["fallbackReason"] = f"Wan: {wan_error}; SVD: {fallback_error}"[:500]
+                providers = "wan2.2-ti2v-5b,stable-video-diffusion"
+                reasons = f"Wan: {wan_error}; SVD: {fallback_error}"
+                if region_error:
+                    providers = f"wan2.1-vace-region-control,{providers}"
+                    reasons = f"Region control: {region_error}; {reasons}"
+                quality["fallbackFrom"] = providers
+                quality["fallbackReason"] = reasons[:500]
                 return quality
-            quality["fallbackFrom"] = "wan2.2-ti2v-5b"
-            quality["fallbackReason"] = str(wan_error)[:500]
+            quality["fallbackFrom"] = "wan2.2-ti2v-5b" if not region_error else "wan2.1-vace-region-control,wan2.2-ti2v-5b"
+            quality["fallbackReason"] = (str(wan_error) if not region_error else f"Region control: {region_error}; Wan: {wan_error}")[:500]
             return quality

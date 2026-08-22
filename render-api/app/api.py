@@ -32,6 +32,8 @@ from app.schemas import (
     SceneAnimationPromptRequest,
     SceneAnimationBatchRequest,
     SceneAnimationPromptResponse,
+    SceneMotionPlanRequest,
+    SceneMotionPlanResponse,
     BibleTitleCardRequest,
     LeadCardGenerateRequest,
     LeadCardGenerateResponse,
@@ -83,6 +85,8 @@ from app.bible_workflow import (
     GOD_CHARACTER_DESIGN,
     capability_health,
     generate_scene_animation_prompt,
+    generate_scene_motion_plan,
+    save_scene_motion_plan,
     scene_animation_context,
 )
 from app.art_styles import list_art_styles
@@ -348,6 +352,27 @@ async def scene_animation_prompt(
     return SceneAnimationPromptResponse(projectId=pid, sceneIndex=scene_index, prompt=prompt)
 
 
+@app.post(
+    "/v1/projects/{pid}/scenes/{scene_index}/motion-plan",
+    response_model=SceneMotionPlanResponse,
+)
+async def scene_motion_plan(
+    pid: str,
+    scene_index: int,
+    req: SceneMotionPlanRequest = SceneMotionPlanRequest(),
+) -> SceneMotionPlanResponse:
+    try:
+        if req.regenerate or not req.motionPlan:
+            plan = await run_in_threadpool(generate_scene_motion_plan, pid, scene_index)
+        else:
+            plan = await run_in_threadpool(save_scene_motion_plan, pid, scene_index, req.motionPlan)
+    except (FileNotFoundError, IndexError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Motion region planning failed: {exc}") from exc
+    return SceneMotionPlanResponse(projectId=pid, sceneIndex=scene_index, motionPlan=plan)
+
+
 @app.post("/v1/projects/{pid}/scenes/{scene_index}/animate", status_code=202)
 async def animate_scene(
     pid: str,
@@ -375,6 +400,7 @@ async def animate_scene(
                 "sceneIndex": scene_index,
                 "prompt": req.prompt.strip(),
                 "cameraBehavior": req.cameraBehavior,
+                "motionPlan": req.motionPlan or {},
             },
             progress=0.0,
             stage="QUEUED",
@@ -429,6 +455,7 @@ async def animate_all_scenes(
                     "sceneIndex": scene_index,
                     "prompt": str(req.prompts.get(scene_index, "")).strip(),
                     "cameraBehavior": req.cameraBehaviors.get(scene_index, "locked"),
+                    "motionPlan": req.motionPlans.get(scene_index) or scene.get("motionPlan") or {},
                 },
                 progress=0.0,
                 stage="QUEUED",

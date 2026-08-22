@@ -2,7 +2,7 @@ import unittest
 from unittest import mock
 
 from app import api
-from app.schemas import SceneAnimationBatchRequest, SceneAnimationPromptRequest, SceneAnimationRequest
+from app.schemas import SceneAnimationBatchRequest, SceneAnimationPromptRequest, SceneAnimationRequest, SceneMotionPlanRequest
 
 
 class _Database:
@@ -57,6 +57,32 @@ class SceneAnimationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queued_job.payload["prompt"], "Water ripples outward.")
         self.assertEqual(queued_job.payload["cameraBehavior"], "locked")
         self.assertTrue(database.committed)
+
+    async def test_motion_plan_endpoint_persists_generated_regions(self):
+        plan = {"summary": "Fire advances.", "regions": [{"id": "fire", "label": "Fire"}]}
+        with mock.patch.object(api, "generate_scene_motion_plan", return_value=plan) as generate:
+            result = await api.scene_motion_plan(
+                "bible-genesis-1",
+                1,
+                SceneMotionPlanRequest(regenerate=True),
+            )
+
+        self.assertEqual(result.motionPlan, plan)
+        generate.assert_called_once_with("bible-genesis-1", 1)
+
+    async def test_animate_scene_carries_edited_motion_plan_into_job(self):
+        database = _Database()
+        plan = {"summary": "Cataclysm continues", "regions": [{"id": "fire-arc", "enabled": True}]}
+        with mock.patch.object(api, "scene_animation_context"):
+            await api.animate_scene(
+                "bible-genesis-1",
+                1,
+                SceneAnimationRequest(prompt="Fire advances.", motionPlan=plan),
+                db=database,
+            )
+
+        queued_job = next(value for value in database.added if hasattr(value, "payload"))
+        self.assertEqual(queued_job.payload["motionPlan"], plan)
 
     async def test_animate_all_scenes_queues_each_still_in_storyboard_order(self):
         database = _Database()

@@ -888,6 +888,44 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["3"]["inputs"]["denoise"], motion_provider.LOCKED_CAMERA_DENOISE)
         self.assertEqual(quality["modelDenoise"], motion_provider.LOCKED_CAMERA_DENOISE)
 
+    def test_vace_region_workflow_uses_source_control_mask_and_reference(self):
+        workflow = motion_provider._vace_region_workflow(
+            "source.png", "control.mp4", "mask.mp4", "fire advances", "no warping", "test/region", 42
+        )
+
+        self.assertEqual(workflow["1"]["inputs"]["unet_name"], "wan2.1_vace_1.3B_fp16.safetensors")
+        self.assertEqual(workflow["7"]["inputs"]["file"], "control.mp4")
+        self.assertEqual(workflow["9"]["inputs"]["file"], "mask.mp4")
+        self.assertEqual(workflow["12"]["inputs"]["reference_image"], ["6", 0])
+        self.assertEqual(workflow["12"]["inputs"]["control_masks"], ["11", 0])
+        self.assertEqual(workflow["14"]["inputs"]["seed"], 42)
+
+    def test_motion_plan_sanitizer_clamps_regions_and_preserves_actions(self):
+        plan = bible_workflow._sanitize_motion_plan({
+            "summary": "  Fire   and terrain continue. ",
+            "regions": [{
+                "id": "Fire Arc", "label": "Existing fire arc", "action": "Fire advances.",
+                "effect": "surge", "direction": "clockwise", "strength": 5,
+                "box": {"x": 0.8, "y": -1, "width": 0.8, "height": 0.4},
+            }],
+        })
+
+        self.assertEqual(plan["summary"], "Fire and terrain continue.")
+        self.assertEqual(plan["regions"][0]["id"], "fire-arc")
+        self.assertEqual(plan["regions"][0]["strength"], 1.0)
+        self.assertEqual(plan["regions"][0]["box"]["width"], 0.2)
+        self.assertEqual(plan["regions"][0]["direction"], "clockwise")
+
+    def test_cataclysm_fallback_plan_separates_environmental_actions(self):
+        plan = bible_workflow._fallback_motion_plan({
+            "title": "Genesis 1:1",
+            "VO": "In the beginning God created the heaven and the earth.",
+            "timeline": [{"imageGeneration": {"prompt": "A cataclysmic forming planet with a fiery arc and fractured terrain"}}],
+        }, 1)
+
+        self.assertEqual([region["id"] for region in plan["regions"]], ["fire-arc", "forming-terrain", "dust-front"])
+        self.assertTrue(plan["lockedBackground"])
+
     def test_locked_motion_falls_back_to_svd_after_wan_quality_rejection(self):
         session = mock.Mock()
         session.get.return_value = _Response({"system": {"os": "posix"}})
