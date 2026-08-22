@@ -891,14 +891,13 @@ class BibleWorkflowTest(TestCase):
 
     def test_vace_region_workflow_uses_source_control_mask_and_reference(self):
         workflow = motion_provider._vace_region_workflow(
-            "source.png", "control.mp4", "mask.mp4", "fire advances", "no warping", "test/region", 42
+            "source.png", "control.mp4", "fire advances", "no warping", "test/region", 42
         )
 
         self.assertEqual(workflow["1"]["inputs"]["unet_name"], "wan2.1_vace_1.3B_fp16.safetensors")
         self.assertEqual(workflow["7"]["inputs"]["file"], "control.mp4")
-        self.assertEqual(workflow["9"]["inputs"]["file"], "mask.mp4")
         self.assertEqual(workflow["12"]["inputs"]["reference_image"], ["6", 0])
-        self.assertEqual(workflow["12"]["inputs"]["control_masks"], ["11", 0])
+        self.assertNotIn("control_masks", workflow["12"]["inputs"])
         self.assertEqual(workflow["14"]["inputs"]["seed"], 42)
 
     def test_motion_plan_sanitizer_clamps_regions_and_preserves_actions(self):
