@@ -667,6 +667,7 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(generate_motion.call_args.kwargs["seed"], saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["motionSeed"])
         self.assertEqual(saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["sourceImageSeed"], 4242)
         self.assertEqual(saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["sourceImageModel"], "test-checkpoint")
+        self.assertEqual(saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["motionAttempt"], 1)
         self.assertTrue(saved_document["scenes"][0]["timeline"][0]["motionGeneration"]["decorativeFrameProtection"]["enabled"])
         self.assertTrue(generate_motion.call_args.kwargs["protect_style_frame"])
         self.assertEqual(generate_motion.call_args.kwargs["camera_behavior"], "locked")
@@ -760,6 +761,7 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(preserved_clip, b"previous-accepted-clip")
         self.assertEqual(rejected["status"], "rejected")
         self.assertIn("uncontrolled camera shake", rejected["reason"])
+        self.assertEqual(rejected_scene["motionAttempt"], 2)
         self.assertNotIn("camera pans", rejected_scene["motionPrompt"].lower())
         self.assertIn("Keep the camera locked", rejected_scene["motionPrompt"])
 
@@ -777,6 +779,23 @@ class BibleWorkflowTest(TestCase):
             provenance = bible_workflow._motion_provenance(scene, still, 1, "Light advances.")
 
         self.assertFalse(provenance["decorativeFrameProtection"]["enabled"])
+
+    def test_motion_retry_attempt_changes_seed_for_same_prompt(self):
+        scene = {
+            "title": "Genesis 1:1",
+            "timeline": [{"prompt": "A still cosmos", "imageGeneration": {"seed": 42}}],
+            "motionAttempt": 1,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"still")
+            first = bible_workflow._motion_provenance(scene, still, 1, "Light advances.")
+            scene["motionAttempt"] = 2
+            second = bible_workflow._motion_provenance(scene, still, 1, "Light advances.")
+
+        self.assertEqual(first["motionAttempt"], 1)
+        self.assertEqual(second["motionAttempt"], 2)
+        self.assertNotEqual(first["motionSeed"], second["motionSeed"])
 
     def test_generate_motion_submits_comfyui_workflow_and_downloads_artifact(self):
         session = mock.Mock()

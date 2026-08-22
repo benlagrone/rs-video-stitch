@@ -619,7 +619,8 @@ def _motion_provenance(scene: dict[str, Any], still_path: Path, scene_index: int
     image_seed = image_generation.get("seed")
     fingerprint_source = still_path.read_bytes() if still_path.exists() else f"{still_path.name}|{image_prompt}".encode("utf-8")
     fingerprint = hashlib.sha256(fingerprint_source).hexdigest()
-    seed_material = f"{image_seed or fingerprint}|{scene_index}|{motion_prompt}".encode("utf-8")
+    motion_attempt = max(1, int(scene.get("motionAttempt") or 1))
+    seed_material = f"{image_seed or fingerprint}|{scene_index}|{motion_prompt}|attempt:{motion_attempt}".encode("utf-8")
     motion_seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big") % (2**63 - 1) or 1
     protect_style_frame = bool(
         re.search(
@@ -635,6 +636,7 @@ def _motion_provenance(scene: dict[str, Any], still_path: Path, scene_index: int
         "sourceImageModel": image_generation.get("model") or STABLE_DIFFUSION_CHECKPOINT,
         "sourceImageFingerprint": fingerprint,
         "motionSeed": motion_seed,
+        "motionAttempt": motion_attempt,
         "cameraBehavior": "locked",
         "decorativeFrameProtection": {
             "enabled": protect_style_frame,
@@ -707,6 +709,13 @@ def animate_bible_scene(
         )
     resolved_prompt = _enforce_camera_behavior_prompt(resolved_prompt, scene, camera_behavior)
     scene["motionPrompt"] = resolved_prompt
+    prior_generation = ((scene.get("timeline") or [{}])[0].get("motionGeneration") or {})
+    prior_attempt = scene.get("motionAttempt")
+    if prior_attempt is None:
+        prior_attempt = prior_generation.get("motionAttempt")
+    if prior_attempt is None and (scene.get("timeline") or [{}])[0].get("video"):
+        prior_attempt = 1
+    scene["motionAttempt"] = max(0, int(prior_attempt or 0)) + 1
     provenance = _motion_provenance(scene, still_path, scene_index, resolved_prompt)
     provenance["cameraBehavior"] = camera_behavior
     provider_prompt = _motion_provider_prompt(resolved_prompt, scene, provenance)
@@ -1086,6 +1095,7 @@ def prepare_bible_project(
             clip_path = motion_dir / clip_name
             log(f"Generating motion clip {index}/{len(scenes)} for {scene['title']}")
             scene["motionPrompt"] = _enforce_camera_behavior_prompt(scene["motionPrompt"], scene, "locked")
+            scene["motionAttempt"] = 1
             provenance = _motion_provenance(scene, still_path, index, scene["motionPrompt"])
             quality = generate_motion_clip(
                 still_path,
