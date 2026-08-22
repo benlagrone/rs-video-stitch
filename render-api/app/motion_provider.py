@@ -188,6 +188,7 @@ def _vace_region_workflow(
     negative_prompt: str,
     prefix: str,
     seed: int,
+    strength: float = 0.68,
 ) -> dict[str, Any]:
     """Build a Wan VACE graph using an explicit full-frame control track and motion mask."""
     return {
@@ -207,7 +208,7 @@ def _vace_region_workflow(
             "inputs": {
                 "positive": ["4", 0], "negative": ["5", 0], "vae": ["3", 0],
                 "width": FRAME_PROTECTION_WIDTH, "height": FRAME_PROTECTION_HEIGHT,
-                "length": 81, "batch_size": 1, "strength": 0.82,
+                "length": 81, "batch_size": 1, "strength": strength,
                 "control_video": ["8", 0], "control_masks": ["11", 0], "reference_image": ["6", 0],
             },
         },
@@ -230,16 +231,15 @@ def _region_motion_offset(region: dict[str, Any], index: int) -> tuple[str, str]
     strength = min(1.0, max(0.1, float(region.get("strength") or 0.5)))
     distance = round(5 + (strength * 15), 2)
     direction = str(region.get("direction") or "right")
-    phase = round(index * 0.8, 2)
-    wave = f"sin(2*PI*t/5.0625+{phase})"
+    wave = "sin(2*PI*t/5.0625)"
     mapping = {
         "left": (f"-{distance}*t/5.0625", f"2*{wave}"),
         "right": (f"{distance}*t/5.0625", f"2*{wave}"),
         "up": (f"2*{wave}", f"-{distance}*t/5.0625"),
         "down": (f"2*{wave}", f"{distance}*t/5.0625"),
         "outward": (f"{distance}*{wave}", f"{distance / 2}*sin(PI*t/5.0625)"),
-        "clockwise": (f"{distance}*sin(2*PI*t/5.0625)", f"{distance}*cos(2*PI*t/5.0625)"),
-        "counterclockwise": (f"-{distance}*sin(2*PI*t/5.0625)", f"{distance}*cos(2*PI*t/5.0625)"),
+        "clockwise": (f"{distance}*sin(2*PI*t/5.0625)", f"{distance}*(1-cos(2*PI*t/5.0625))"),
+        "counterclockwise": (f"-{distance}*sin(2*PI*t/5.0625)", f"{distance}*(1-cos(2*PI*t/5.0625))"),
         "pulse": ("0", f"2*{wave}"),
     }
     return mapping.get(direction, mapping["right"])
@@ -272,7 +272,12 @@ def _generate_region_control_assets(
         dx, dy = _region_motion_offset(region, index)
         patch = f"patch{index}"
         output = f"layer{index}"
-        graph.append(f"[region{index}]crop={width}:{height}:{x}:{y},format=rgba,colorchannelmixer=aa=0.82[{patch}]")
+        feather = max(8, min(22, round(min(width, height) * 0.12)))
+        alpha = f"min(255,255*min(min(X,W-1-X),min(Y,H-1-Y))/{feather})"
+        graph.append(
+            f"[region{index}]crop={width}:{height}:{x}:{y},format=rgba,"
+            f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='{alpha}'[{patch}]"
+        )
         graph.append(f"[{current}][{patch}]overlay=x='{x}+({dx})':y='{y}+({dy})':eval=frame:shortest=1[{output}]")
         current = output
         mask_boxes.append(f"drawbox=x={x}:y={y}:w={width}:h={height}:color=white:t=fill")
@@ -747,6 +752,24 @@ def generate_motion_clip(
                 return quality
             except Exception as exc:  # noqa: BLE001 - provider failures must preserve the existing fallback chain
                 region_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
+                try:
+                    restrained_workflow = _vace_region_workflow(
+                        uploaded_name, control_name, mask_name, prompt, negative_prompt,
+                        f"{prefix}-region-control-restrained", effective_seed ^ 0x13A7,
+                        strength=0.48,
+                    )
+                    _queue_and_download_workflow(session, restrained_workflow, destination)
+                    quality = validate_candidate("wan2.1-vace-region-control-restrained", 1.0)
+                    quality["motionRegionCount"] = region_count
+                    quality["motionPlanSummary"] = str(motion_plan.get("summary") or "")[:320]
+                    quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
+                    quality["fallbackFrom"] = "wan2.1-vace-region-control"
+                    quality["fallbackReason"] = str(region_error)[:500]
+                    return quality
+                except Exception as restrained_error:  # noqa: BLE001 - retain the existing model fallback ladder
+                    region_error = MotionProviderError(
+                        f"VACE: {region_error}; restrained VACE: {restrained_error}"
+                    )
 
         try:
             _queue_and_download_workflow(session, workflow, destination)
