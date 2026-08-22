@@ -811,6 +811,8 @@ class BibleWorkflowTest(TestCase):
             with mock.patch.object(motion_provider, "_prepare_source_image", side_effect=prepare_source), mock.patch.object(
                 motion_provider, "_stabilize_locked_camera", return_value={"p95TranslationPixels": 2.0}
             ) as stabilize, mock.patch.object(
+                motion_provider, "_blend_locked_source"
+            ) as blend_source, mock.patch.object(
                 motion_provider, "_measure_source_frame_fidelity", return_value=0.88
             ) as fidelity, mock.patch.object(
                 motion_provider,
@@ -832,6 +834,7 @@ class BibleWorkflowTest(TestCase):
             verify.assert_called_once_with(destination)
             protect_frame.assert_called_once()
             stabilize.assert_called_once_with(destination)
+            blend_source.assert_called_once()
             fidelity.assert_called_once()
             integrity.assert_called_once_with(destination)
             self.assertEqual(quality["sourceSizing"], "fit-and-pad-no-crop")

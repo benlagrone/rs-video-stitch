@@ -28,6 +28,7 @@ LOCKED_CAMERA_P95_TRANSLATION_LIMIT = float(os.getenv("LOCKED_CAMERA_P95_TRANSLA
 LOCKED_CAMERA_LARGE_CORRECTION_RATIO = float(os.getenv("LOCKED_CAMERA_LARGE_CORRECTION_RATIO", "0.20"))
 SOURCE_FRAME_MIN_SSIM = float(os.getenv("SOURCE_FRAME_MIN_SSIM", "0.28"))
 LOCKED_CAMERA_DENOISE = float(os.getenv("LOCKED_CAMERA_DENOISE", "0.20"))
+LOCKED_CAMERA_SOURCE_BLEND = float(os.getenv("LOCKED_CAMERA_SOURCE_BLEND", "0.75"))
 SEQUENCE_SATURATION_JUMP_LIMIT = float(os.getenv("SEQUENCE_SATURATION_JUMP_LIMIT", "6.0"))
 SEQUENCE_LUMA_JUMP_LIMIT = float(os.getenv("SEQUENCE_LUMA_JUMP_LIMIT", "20.0"))
 SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE = float(os.getenv("SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE", "20.0"))
@@ -436,6 +437,30 @@ def _protect_decorative_frame(image_path: Path, video_path: Path) -> None:
         raise MotionProviderError(f"Unable to protect the source image's decorative frame: {exc}") from exc
 
 
+def _blend_locked_source(image_path: Path, video_path: Path) -> None:
+    blended_path = video_path.with_name(f"{video_path.stem}.source-blended{video_path.suffix}")
+    source_weight = min(0.95, max(0.5, LOCKED_CAMERA_SOURCE_BLEND))
+    motion_weight = 1.0 - source_weight
+    filter_graph = (
+        f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=yuv420p[source];"
+        f"[0:v]format=yuv420p[motion];[motion][source]"
+        f"blend=all_expr='A*{motion_weight:.4f}+B*{source_weight:.4f}':shortest=1[v]"
+    )
+    command = [
+        "ffmpeg", "-y", "-i", str(video_path), "-loop", "1", "-i", str(image_path),
+        "-filter_complex", filter_graph, "-map", "[v]", "-map", "0:a?", "-c:v", "libx264",
+        "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy", str(blended_path),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        if not blended_path.exists() or blended_path.stat().st_size == 0:
+            raise MotionProviderError("Locked source blending produced no video")
+        blended_path.replace(video_path)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        blended_path.unlink(missing_ok=True)
+        raise MotionProviderError(f"Unable to preserve the source image in locked motion: {exc}") from exc
+
+
 def generate_motion_clip(
     image_path: Path,
     destination: Path,
@@ -493,6 +518,8 @@ def generate_motion_clip(
         }
         if camera_behavior == "locked":
             quality["stabilization"] = _stabilize_locked_camera(destination)
+            _blend_locked_source(prepared_source, destination)
+            quality["sourceImageBlend"] = LOCKED_CAMERA_SOURCE_BLEND
             _protect_decorative_frame(prepared_source, destination)
             quality["lockedFrameEdgesProtected"] = True
         quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
