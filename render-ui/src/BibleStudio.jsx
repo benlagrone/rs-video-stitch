@@ -24,6 +24,13 @@ function stageLabel(stage) {
   return String(stage || 'QUEUED').replaceAll('_', ' ').toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function MotionPlanEditor({ plan, busy, onPlan, onSave, onRegionChange }) {
+  if (!plan) {
+    return <div className="motion-plan-empty"><strong>Controlled motion regions</strong><span>Plan separate actions for the fire, terrain, atmosphere, or other existing parts of this still.</span><button type="button" className="secondary-action" onClick={onPlan} disabled={busy}>{busy ? 'Planning regions…' : 'Plan motion regions'}</button></div>;
+  }
+  return <section className="motion-plan-editor"><div className="motion-plan-heading"><div><strong>Controlled motion regions</strong><span>{plan.summary}</span><small>Grounded in the source-image prompt and scripture. The unselected background stays fixed.</small></div><div><button type="button" className="secondary-action" onClick={onSave} disabled={busy}>Save plan</button><button type="button" className="secondary-action" onClick={onPlan} disabled={busy}>{busy ? 'Replanning…' : 'Replan'}</button></div></div><div className="motion-region-list">{(plan.regions || []).map((region, index) => <div className="motion-region" key={region.id || index}><label className="motion-region-toggle"><input type="checkbox" checked={region.enabled !== false} onChange={(event) => onRegionChange(index, { enabled: event.target.checked })} />{region.label}</label><input aria-label={`${region.label} action`} value={region.action || ''} onChange={(event) => onRegionChange(index, { action: event.target.value })} /><select aria-label={`${region.label} direction`} value={region.direction || 'right'} onChange={(event) => onRegionChange(index, { direction: event.target.value })}><option value="left">Left</option><option value="right">Right</option><option value="up">Up</option><option value="down">Down</option><option value="outward">Outward</option><option value="clockwise">Clockwise</option><option value="counterclockwise">Counterclockwise</option><option value="pulse">Pulse</option></select><label>Strength<input type="range" min="0.1" max="1" step="0.05" value={region.strength || 0.5} onChange={(event) => onRegionChange(index, { strength: Number(event.target.value) })} /></label></div>)}</div></section>;
+}
+
 export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, onOpenProjects }) {
   const effectiveApiBase = window.location.port === '3000'
     ? `${window.location.protocol}//${window.location.hostname}:8082`
@@ -58,6 +65,8 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
   const [youtubeProfile, setYoutubeProfile] = useState('animals');
   const [isConnectingYoutube, setIsConnectingYoutube] = useState(false);
   const [animationPrompts, setAnimationPrompts] = useState({});
+  const [motionPlans, setMotionPlans] = useState({});
+  const [planningMotionFor, setPlanningMotionFor] = useState(0);
   const [cameraBehaviors, setCameraBehaviors] = useState({});
   const [animationJobs, setAnimationJobs] = useState({});
   const [writingPromptFor, setWritingPromptFor] = useState(0);
@@ -97,6 +106,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     const savedYoutubeProfile = state.youtubeProfile || state.youtubeUpload?.profile || 'animals';
     setYoutubeProfile(savedYoutubeProfile === 'bible' ? 'animals' : savedYoutubeProfile);
     setAnimationPrompts(Object.fromEntries(loadedScenes.map((scene, index) => [index + 1, scene.motionPrompt || ''])));
+    setMotionPlans(Object.fromEntries(loadedScenes.map((scene, index) => [index + 1, scene.motionPlan]).filter(([, plan]) => plan)));
     setCameraBehaviors(Object.fromEntries(loadedScenes.map((scene, index) => [
       index + 1,
       scene.animationQuality?.cameraBehavior || scene.timeline?.[0]?.motionGeneration?.cameraBehavior || 'locked',
@@ -297,6 +307,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
         body: JSON.stringify({
           prompt: promptOverride ?? animationPrompts[sceneIndex] ?? '',
           cameraBehavior: cameraBehaviors[sceneIndex] || 'locked',
+          motionPlan: motionPlans[sceneIndex] || null,
         }),
       });
       setAnimationJobs((previous) => ({
@@ -306,6 +317,35 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     } catch (animationError) {
       setError(animationError.message || String(animationError));
     }
+  }
+
+  async function planSceneMotion(sceneIndex, regenerate = true) {
+    if (!project?.projectId) return null;
+    setError('');
+    setPlanningMotionFor(sceneIndex);
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(project.projectId)}/scenes/${sceneIndex}/motion-plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ regenerate, motionPlan: regenerate ? null : motionPlans[sceneIndex] }),
+      });
+      setMotionPlans((previous) => ({ ...previous, [sceneIndex]: result.motionPlan }));
+      return result.motionPlan;
+    } catch (planError) {
+      setError(planError.message || String(planError));
+      return null;
+    } finally {
+      setPlanningMotionFor(0);
+    }
+  }
+
+  function updateMotionRegion(sceneIndex, regionIndex, patch) {
+    setMotionPlans((previous) => {
+      const plan = previous[sceneIndex];
+      if (!plan) return previous;
+      const regions = plan.regions.map((region, index) => index === regionIndex ? { ...region, ...patch } : region);
+      return { ...previous, [sceneIndex]: { ...plan, regions } };
+    });
   }
 
   async function retryRejectedScene(sceneIndex) {
@@ -326,7 +366,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
       const created = await request(`/v1/projects/${encodeURIComponent(project.projectId)}/scenes/animate-all`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompts: animationPrompts, cameraBehaviors, includeAnimated: false }),
+        body: JSON.stringify({ prompts: animationPrompts, cameraBehaviors, motionPlans, includeAnimated: false }),
       });
       setAnimationJobs((previous) => ({
         ...previous,
@@ -546,7 +586,9 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
             const stillBusy = stillRegenerationJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(stillRegenerationJob.status) && (stillRegenerationJob.sceneIndexes || []).includes(sceneIndex);
             const animationRejected = animationJob?.status === 'FAILED' || scene.animationQuality?.status === 'rejected';
             const rejectionReason = animationJob?.error || scene.animationQuality?.reason || animationJob?.stage;
-            return <article className="bible-scene" key={`${scene.title}-${index}`}><span className="scene-number">{sceneIndex}</span><div className="scene-media">{motionUrl ? <video controls preload="metadata" poster={imageUrl} src={motionUrl} /> : <img src={imageUrl} alt="" />}<span>{motionUrl ? 'Motion clip' : 'Still image'}</span></div><div><h3>{scene.title}</h3><p>{scene.VO}</p>{scene.action && <dl className="motion-beat"><div><dt>Action</dt><dd>{scene.action}</dd></div><div><dt>Camera</dt><dd>{scene.camera}</dd></div><div><dt>Continuity</dt><dd>{scene.continuity}</dd></div><div><dt>Ends with</dt><dd>{scene.endState}</dd></div></dl>}<div className="scene-animation-tools"><label>Animation prompt<textarea value={animationPrompts[sceneIndex] || ''} onChange={(event) => setAnimationPrompts((previous) => ({ ...previous, [sceneIndex]: event.target.value }))} placeholder="Optional — leave blank and Fortress will write a continuity-safe prompt" /></label><label>Camera behavior<select value={cameraBehaviors[sceneIndex] || 'locked'} onChange={(event) => setCameraBehaviors((previous) => ({ ...previous, [sceneIndex]: event.target.value }))}><option value="locked">Locked composition (recommended)</option><option value="slow-push">Smooth slow push</option><option value="pan-left">Smooth pan left</option><option value="pan-right">Smooth pan right</option></select></label><small>Locked composition keeps the original frame edges, crop, scale, and horizon fixed. Motion comes from the scene rather than camera shake.</small><div><button type="button" className="secondary-action" onClick={() => regenerateStills(sceneIndex)} disabled={stillBusy || animationBusy}>{stillBusy ? 'Regenerating still…' : 'Regenerate still'}</button><button type="button" className="secondary-action" onClick={() => autoWriteAnimationPrompt(sceneIndex)} disabled={writingPromptFor === sceneIndex || animationBusy || stillBusy}>{writingPromptFor === sceneIndex ? 'Writing prompt…' : 'Auto-write prompt'}</button><button type="button" className="primary-action" onClick={() => animationRejected ? retryRejectedScene(sceneIndex) : animateScene(sceneIndex)} disabled={animationBusy || stillBusy || writingPromptFor === sceneIndex}>{animationBusy ? `${stageLabel(animationJob.stage)} · ${Math.round((animationJob.progress || 0) * 100)}%` : writingPromptFor === sceneIndex ? 'Writing prompt…' : animationRejected ? 'Retry animation' : (clip ? 'Re-animate image' : 'Animate image')}</button></div>{animationRejected && <small className="scene-animation-error">Animation rejected: {rejectionReason}. The original still and any previously accepted clip were preserved. Edit the prompt and retry it directly, or clear the prompt to have Fortress write a new one.</small>}{scene.animationQuality?.status === 'accepted' && <small className="scene-animation-quality">Quality accepted · {scene.animationQuality.cameraBehavior === 'locked' ? 'locked framing stabilized' : 'deliberate camera move'} · source fit without cropping</small>}</div><small>{Math.round(scene.duration || 0)} sec · {clip ? 'Motion clip attached; regenerating the still will detach it' : 'Still image ready to animate'}</small></div></article>;
+            const motionPlan = motionPlans[sceneIndex] || scene.motionPlan;
+            const motionPlanningBusy = planningMotionFor === sceneIndex;
+            return <article className="bible-scene" key={`${scene.title}-${index}`}><span className="scene-number">{sceneIndex}</span><div className="scene-media">{motionUrl ? <video controls preload="metadata" poster={imageUrl} src={motionUrl} /> : <img src={imageUrl} alt="" />}<span>{motionUrl ? 'Motion clip' : 'Still image'}</span></div><div><h3>{scene.title}</h3><p>{scene.VO}</p>{scene.action && <dl className="motion-beat"><div><dt>Action</dt><dd>{scene.action}</dd></div><div><dt>Camera</dt><dd>{scene.camera}</dd></div><div><dt>Continuity</dt><dd>{scene.continuity}</dd></div><div><dt>Ends with</dt><dd>{scene.endState}</dd></div></dl>}<div className="scene-animation-tools"><label>Animation prompt<textarea value={animationPrompts[sceneIndex] || ''} onChange={(event) => setAnimationPrompts((previous) => ({ ...previous, [sceneIndex]: event.target.value }))} placeholder="Optional — leave blank and Fortress will write a continuity-safe prompt" /></label><label>Camera behavior<select value={cameraBehaviors[sceneIndex] || 'locked'} onChange={(event) => setCameraBehaviors((previous) => ({ ...previous, [sceneIndex]: event.target.value }))}><option value="locked">Locked composition (recommended)</option><option value="slow-push">Smooth slow push</option><option value="pan-left">Smooth pan left</option><option value="pan-right">Smooth pan right</option></select></label><small>Locked composition keeps the original frame edges, crop, scale, and horizon fixed. Motion comes from the scene rather than camera shake.</small><MotionPlanEditor plan={motionPlan} busy={motionPlanningBusy || animationBusy || stillBusy} onPlan={() => planSceneMotion(sceneIndex, true)} onSave={() => planSceneMotion(sceneIndex, false)} onRegionChange={(regionIndex, patch) => updateMotionRegion(sceneIndex, regionIndex, patch)} /><div><button type="button" className="secondary-action" onClick={() => regenerateStills(sceneIndex)} disabled={stillBusy || animationBusy}>{stillBusy ? 'Regenerating still…' : 'Regenerate still'}</button><button type="button" className="secondary-action" onClick={() => autoWriteAnimationPrompt(sceneIndex)} disabled={writingPromptFor === sceneIndex || animationBusy || stillBusy}>{writingPromptFor === sceneIndex ? 'Writing prompt…' : 'Auto-write prompt'}</button><button type="button" className="primary-action" onClick={() => animationRejected ? retryRejectedScene(sceneIndex) : animateScene(sceneIndex)} disabled={animationBusy || stillBusy || writingPromptFor === sceneIndex}>{animationBusy ? `${stageLabel(animationJob.stage)} · ${Math.round((animationJob.progress || 0) * 100)}%` : writingPromptFor === sceneIndex ? 'Writing prompt…' : animationRejected ? 'Retry animation' : (clip ? 'Re-animate image' : 'Animate image')}</button></div>{animationRejected && <small className="scene-animation-error">Animation rejected: {rejectionReason}. The original still and any previously accepted clip were preserved. Edit the prompt and retry it directly, or clear the prompt to have Fortress write a new one.</small>}{scene.animationQuality?.status === 'accepted' && <small className="scene-animation-quality">Quality accepted · {scene.animationQuality.cameraBehavior === 'locked' ? 'locked framing stabilized' : 'deliberate camera move'} · source fit without cropping</small>}</div><small>{Math.round(scene.duration || 0)} sec · {clip ? 'Motion clip attached; regenerating the still will detach it' : 'Still image ready to animate'}</small></div></article>;
           })}</div> : <div className="storyboard-empty"><div className="empty-frame">16:9</div><h3>Name a passage. Sextant handles the rest.</h3><p>Motion mode plans the whole passage as one continuous sequence, gives every scene a visible action, and carries each scene's final frame into the next shot.</p></div>}
         </section>
 

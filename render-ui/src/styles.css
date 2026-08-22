@@ -131,6 +131,23 @@ button { font: inherit; }
 .scene-animation-tools select { margin-top: 6px; text-transform: none; width: 100%; }
 .scene-animation-tools > div { display: flex; flex-wrap: wrap; gap: 8px; }
 .scene-animation-tools button { min-height: 34px; }
+.motion-plan-empty { align-items: start; background: var(--surface-strong); border: 1px dashed var(--line-strong); border-radius: 5px; display: grid !important; gap: 6px !important; padding: 9px; }
+.motion-plan-empty strong, .motion-plan-heading strong { color: var(--accent-strong); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.motion-plan-empty span, .motion-plan-heading span { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.motion-plan-empty button { justify-self: start; }
+.motion-plan-editor { background: var(--surface-strong); border: 1px solid var(--line); border-radius: 5px; display: grid; gap: 9px; padding: 9px; }
+.motion-plan-heading { align-items: start; display: flex; gap: 10px; justify-content: space-between; }
+.motion-plan-heading > div:first-child { display: grid; gap: 4px; }
+.motion-plan-heading > div:last-child { display: flex; flex-shrink: 0; gap: 6px; }
+.motion-plan-heading small { font-size: 10px; margin: 0; }
+.motion-region-list { display: grid; gap: 6px; }
+.motion-region { align-items: center; border-top: 1px solid var(--line); display: grid; gap: 7px; grid-template-columns: 150px minmax(220px, 1fr) 112px 120px; padding-top: 7px; }
+.motion-region > input { min-width: 0; text-transform: none; width: 100%; }
+.motion-region select { margin: 0; }
+.motion-region label { align-items: center; display: flex; gap: 6px; margin: 0; text-transform: none; }
+.motion-region-toggle { color: var(--text) !important; }
+.motion-region input[type="checkbox"] { width: auto; }
+.motion-region input[type="range"] { padding: 0; }
 .scene-animation-error { color: var(--danger) !important; margin-top: 0 !important; }
 .scene-animation-quality { color: #74d3a3 !important; margin-top: 0 !important; }
 .storyboard-empty { color: var(--muted); margin: 14vh auto; max-width: 460px; text-align: center; }
@@ -185,12 +202,15 @@ button { font: inherit; }
 @media (max-width: 1180px) {
   .bible-workspace { grid-template-columns: 260px minmax(0, 1fr); }
   .bible-output { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .motion-region { grid-template-columns: 130px minmax(180px, 1fr); }
 }
 
 @media (max-width: 760px) {
   .bible-workspace { grid-template-columns: 1fr; }
   .bible-output { grid-column: auto; grid-template-columns: 1fr; }
   .bible-scene { grid-template-columns: 28px 100px minmax(0, 1fr); }
+  .motion-plan-heading { align-items: stretch; flex-direction: column; }
+  .motion-region { grid-template-columns: 1fr; }
   .bible-top-actions span { display: none; }
 }
 
