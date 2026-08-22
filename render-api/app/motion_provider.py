@@ -517,6 +517,43 @@ def _protect_decorative_frame(image_path: Path, video_path: Path) -> None:
         protected_path.unlink(missing_ok=True)
         raise MotionProviderError(f"Unable to protect the source image's decorative frame: {exc}") from exc
 
+
+def _generate_coherent_environmental_fallback(image_path: Path, destination: Path) -> None:
+    """Create clean full-frame motion when image-to-video models corrupt the source.
+
+    The source remains geometrically fixed while a broad, soft light movement
+    crosses the complete composition. This is deliberately conservative: it
+    provides visible environmental motion without hallucinating subjects,
+    warping objects, cropping the frame, or compositing a moving inset panel.
+    """
+    duration = 5.0625
+    filter_graph = (
+        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        "format=yuv420p,"
+        f"eq=brightness='0.008*sin(2*PI*t/{duration})':"
+        f"contrast='1+0.006*sin(2*PI*t/{duration})'[base];"
+        "[1:v]geq=r='255':g='205':b='125':"
+        f"a='56*exp(-((X-W*(-0.5+2*T/{duration}))*(X-W*(-0.5+2*T/{duration}))"
+        "+(Y-H*0.62)*(Y-H*0.62))/(2*80*80))'[glow];"
+        "[base][glow]overlay=shortest=1,format=yuv420p[v]"
+    )
+    command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-loop", "1", "-framerate", "16",
+        "-i", str(image_path), "-f", "lavfi", "-i",
+        f"color=c=black@0.0:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d={duration},format=rgba",
+        "-filter_complex", filter_graph, "-map", "[v]", "-t", str(duration), "-r", "16",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-movflags", "+faststart", str(destination),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise MotionProviderError(f"Unable to create coherent environmental motion: {exc}") from exc
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise MotionProviderError("Coherent environmental motion produced no video")
+
+
 def generate_motion_clip(
     image_path: Path,
     destination: Path,
@@ -579,9 +616,17 @@ def generate_motion_clip(
                 _queue_and_download_workflow(session, fallback, destination)
                 quality = validate_candidate("stable-video-diffusion", 1.0)
             except MotionProviderError as fallback_error:
-                raise MotionProviderError(
-                    f"Wan animation rejected: {wan_error}; SVD fallback rejected: {fallback_error}"
-                ) from fallback_error
+                try:
+                    _generate_coherent_environmental_fallback(prepared_source, destination)
+                    quality = validate_candidate("coherent-environmental-motion", 0.0)
+                except MotionProviderError as environmental_error:
+                    raise MotionProviderError(
+                        f"Wan animation rejected: {wan_error}; SVD fallback rejected: {fallback_error}; "
+                        f"coherent environmental fallback rejected: {environmental_error}"
+                    ) from environmental_error
+                quality["fallbackFrom"] = "wan2.2-ti2v-5b,stable-video-diffusion"
+                quality["fallbackReason"] = f"Wan: {wan_error}; SVD: {fallback_error}"[:500]
+                return quality
             quality["fallbackFrom"] = "wan2.2-ti2v-5b"
             quality["fallbackReason"] = str(wan_error)[:500]
             return quality

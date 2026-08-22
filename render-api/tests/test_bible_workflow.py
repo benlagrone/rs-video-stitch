@@ -612,6 +612,7 @@ class BibleWorkflowTest(TestCase):
                         "negativePrompt": "people, buildings",
                         "seed": 4242,
                         "model": "test-checkpoint",
+                        "decorativeFrameProtection": True,
                     },
                 }],
             }],
@@ -780,6 +781,24 @@ class BibleWorkflowTest(TestCase):
 
         self.assertFalse(provenance["decorativeFrameProtection"]["enabled"])
 
+    def test_visual_style_words_do_not_freeze_a_full_bleed_scene_perimeter(self):
+        scene = {
+            "title": "Genesis 1:1",
+            "timeline": [{
+                "prompt": "A full-bleed Byzantine iconography scene with gold-leaf surface treatment.",
+                "imageGeneration": {
+                    "prompt": "A full-bleed Byzantine iconography scene with gold-leaf surface treatment.",
+                    "seed": 42,
+                },
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"still")
+            provenance = bible_workflow._motion_provenance(scene, still, 1, "Light advances.")
+
+        self.assertFalse(provenance["decorativeFrameProtection"]["enabled"])
+
     def test_motion_retry_attempt_changes_seed_for_same_prompt(self):
         scene = {
             "title": "Genesis 1:1",
@@ -918,6 +937,62 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(quality["modelProvider"], "stable-video-diffusion")
         self.assertEqual(quality["fallbackFrom"], "wan2.2-ti2v-5b")
         self.assertIn("color blocks", quality["fallbackReason"])
+
+    def test_locked_motion_uses_coherent_environmental_fallback_after_both_models_reject(self):
+        session = mock.Mock()
+        session.get.return_value = _Response({"system": {"os": "posix"}})
+        session.post.return_value = _Response({})
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"png-data")
+            destination = Path(tmp) / "scene.mp4"
+
+            def prepare_source(_source, prepared):
+                prepared.write_bytes(b"prepared-png")
+
+            def write_candidate(_session, _workflow, candidate):
+                candidate.write_bytes(b"model-motion")
+
+            def write_environmental(_source, candidate):
+                candidate.write_bytes(b"clean-full-frame-motion")
+
+            with mock.patch.object(
+                motion_provider, "_prepare_source_image", side_effect=prepare_source
+            ), mock.patch.object(
+                motion_provider, "_queue_and_download_workflow", side_effect=write_candidate
+            ) as queue, mock.patch.object(
+                motion_provider, "_generate_coherent_environmental_fallback", side_effect=write_environmental
+            ) as environmental, mock.patch.object(
+                motion_provider, "_stabilize_locked_camera", return_value={"p95TranslationPixels": 0.0}
+            ), mock.patch.object(
+                motion_provider, "_measure_source_frame_fidelity", return_value=0.99
+            ), mock.patch.object(
+                motion_provider,
+                "_measure_sequence_integrity",
+                side_effect=[
+                    motion_provider.MotionProviderError("Wan scene jump"),
+                    motion_provider.MotionProviderError("SVD color blocks"),
+                    {"sampleCount": 81, "meanLumaFrameDifference": 0.4},
+                ],
+            ), mock.patch.object(motion_provider, "_verify_video"):
+                quality = motion_provider.generate_motion_clip(
+                    still,
+                    destination,
+                    prompt="Light moves across the existing landscape.",
+                    negative_prompt="ghosts, warping",
+                    seed=1234,
+                    camera_behavior="locked",
+                    session=session,
+                )
+            rendered_bytes = destination.read_bytes()
+
+        self.assertEqual(queue.call_count, 2)
+        environmental.assert_called_once()
+        self.assertEqual(rendered_bytes, b"clean-full-frame-motion")
+        self.assertEqual(quality["modelProvider"], "coherent-environmental-motion")
+        self.assertEqual(quality["fallbackFrom"], "wan2.2-ti2v-5b,stable-video-diffusion")
+        self.assertIn("Wan scene jump", quality["fallbackReason"])
+        self.assertIn("SVD color blocks", quality["fallbackReason"])
 
     def test_motion_quality_gate_rejects_short_artifact(self):
         probe = {
