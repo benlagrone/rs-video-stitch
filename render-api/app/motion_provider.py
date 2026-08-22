@@ -183,7 +183,6 @@ def _svd_fallback_workflow(image_name: str, prefix: str, seed: int) -> dict[str,
 def _vace_region_workflow(
     image_name: str,
     control_video_name: str,
-    mask_video_name: str,
     prompt: str,
     negative_prompt: str,
     prefix: str,
@@ -200,16 +199,13 @@ def _vace_region_workflow(
         "6": {"class_type": "LoadImage", "inputs": {"image": image_name}},
         "7": {"class_type": "LoadVideo", "inputs": {"file": control_video_name}},
         "8": {"class_type": "GetVideoComponents", "inputs": {"video": ["7", 0]}},
-        "9": {"class_type": "LoadVideo", "inputs": {"file": mask_video_name}},
-        "10": {"class_type": "GetVideoComponents", "inputs": {"video": ["9", 0]}},
-        "11": {"class_type": "ImageToMask", "inputs": {"image": ["10", 0], "channel": "red"}},
         "12": {
             "class_type": "WanVaceToVideo",
             "inputs": {
                 "positive": ["4", 0], "negative": ["5", 0], "vae": ["3", 0],
                 "width": FRAME_PROTECTION_WIDTH, "height": FRAME_PROTECTION_HEIGHT,
                 "length": 81, "batch_size": 1, "strength": strength,
-                "control_video": ["8", 0], "control_masks": ["11", 0], "reference_image": ["6", 0],
+                "control_video": ["8", 0], "reference_image": ["6", 0],
             },
         },
         "13": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["1", 0], "shift": 8.0}},
@@ -739,9 +735,8 @@ def generate_motion_clip(
             try:
                 region_count = _generate_region_control_assets(prepared_source, motion_plan, control_path, mask_path)
                 control_name = _upload_asset(session, control_path, "video/mp4")
-                mask_name = _upload_asset(session, mask_path, "video/mp4")
                 region_workflow = _vace_region_workflow(
-                    uploaded_name, control_name, mask_name, prompt, negative_prompt,
+                    uploaded_name, control_name, prompt, negative_prompt,
                     f"{prefix}-region-control", effective_seed,
                 )
                 _queue_and_download_workflow(session, region_workflow, destination)
@@ -754,7 +749,7 @@ def generate_motion_clip(
                 region_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
                 try:
                     restrained_workflow = _vace_region_workflow(
-                        uploaded_name, control_name, mask_name, prompt, negative_prompt,
+                        uploaded_name, control_name, prompt, negative_prompt,
                         f"{prefix}-region-control-restrained", effective_seed ^ 0x13A7,
                         strength=0.48,
                     )
