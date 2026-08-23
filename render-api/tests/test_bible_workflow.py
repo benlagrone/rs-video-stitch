@@ -1366,8 +1366,9 @@ class BibleWorkflowTest(TestCase):
             self.assertIn("maskedmerge", filter_graph)
             self.assertNotIn("crop", filter_graph)
             self.assertNotIn("overlay", filter_graph)
-            self.assertNotIn("-loop", command)
+            self.assertIn("-loop", command)
             self.assertNotIn("-shortest", command)
+            self.assertEqual(command[command.index("-t") + 1], "5.0")
 
     def test_extract_last_frame_creates_next_scene_start(self):
         with tempfile.TemporaryDirectory() as tmp:
