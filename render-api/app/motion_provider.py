@@ -24,6 +24,7 @@ FRAME_PROTECTION_HEIGHT = 320
 FRAME_PROTECTION_X = 69
 FRAME_PROTECTION_Y = 45
 FRAME_PROTECTION_FEATHER = 4
+LOCKED_EDGE_PROTECTION = 8
 LOCKED_CAMERA_P95_TRANSLATION_LIMIT = float(os.getenv("LOCKED_CAMERA_P95_TRANSLATION_LIMIT", "12"))
 LOCKED_CAMERA_LARGE_CORRECTION_RATIO = float(os.getenv("LOCKED_CAMERA_LARGE_CORRECTION_RATIO", "0.20"))
 SOURCE_FRAME_MIN_SSIM = float(os.getenv("SOURCE_FRAME_MIN_SSIM", "0.28"))
@@ -692,6 +693,34 @@ def _protect_decorative_frame(image_path: Path, video_path: Path) -> None:
         raise MotionProviderError(f"Unable to protect the source image's decorative frame: {exc}") from exc
 
 
+def _protect_locked_frame_edges(image_path: Path, video_path: Path) -> None:
+    """Restore a narrow source perimeter so stabilization cannot expose moving black edge bars."""
+    protected_path = video_path.with_name(f"{video_path.stem}.edge-protected{video_path.suffix}")
+    inset = LOCKED_EDGE_PROTECTION
+    filter_graph = (
+        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[motion];"
+        f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[still];"
+        f"color=white:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT},format=gray,"
+        f"drawbox=x={inset}:y={inset}:w={FRAME_PROTECTION_WIDTH - (inset * 2)}:"
+        f"h={FRAME_PROTECTION_HEIGHT - (inset * 2)}:color=black:t=fill,boxblur=2[mask];"
+        "[motion][still][mask]maskedmerge,format=yuv420p[v]"
+    )
+    command = [
+        "ffmpeg", "-y", "-i", str(video_path), "-loop", "1", "-i", str(image_path),
+        "-filter_complex", filter_graph, "-map", "[v]", "-map", "0:a?", "-shortest",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-c:a", "copy", str(protected_path),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        if not protected_path.exists() or protected_path.stat().st_size == 0:
+            raise MotionProviderError("Locked-edge protection produced no video")
+        protected_path.replace(video_path)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        protected_path.unlink(missing_ok=True)
+        raise MotionProviderError(f"Unable to protect locked frame edges: {exc}") from exc
+
+
 def _generate_coherent_environmental_fallback(image_path: Path, destination: Path) -> None:
     """Create clean full-frame motion when image-to-video models corrupt the source.
 
@@ -867,6 +896,8 @@ def generate_motion_clip(
             }
             if camera_behavior == "locked":
                 quality["stabilization"] = _stabilize_locked_camera(destination)
+                _protect_locked_frame_edges(prepared_source, destination)
+                quality["lockedEdgesProtected"] = True
             if protect_style_frame:
                 _protect_decorative_frame(prepared_source, destination)
                 quality["decorativeFrameProtected"] = True
