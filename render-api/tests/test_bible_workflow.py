@@ -901,6 +901,44 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["12"]["inputs"]["control_masks"], ["11", 0])
         self.assertEqual(workflow["14"]["inputs"]["seed"], 42)
 
+    def test_vace_region_assets_use_static_masked_inpaint_not_moving_crops(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.png"
+            control = Path(tmp) / "control.mp4"
+            mask = Path(tmp) / "mask.mp4"
+            source.write_bytes(b"source")
+
+            def create_asset(command, **_kwargs):
+                if command[-1] != "-":
+                    Path(command[-1]).write_bytes(b"video")
+                return mock.Mock(stdout="lavfi.signalstats.YDIF=0.0\n")
+
+            plan = {"regions": [{
+                "label": "Existing fire arc",
+                "box": {"x": 0.72, "y": 0.02, "width": 0.27, "height": 0.96},
+            }]}
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_asset) as run:
+                count = motion_provider._generate_region_control_assets(source, plan, control, mask)
+
+        self.assertEqual(count, 1)
+        mask_command, control_command = [call.args[0] for call in run.call_args_list[:2]]
+        mask_filter = mask_command[mask_command.index("-vf") + 1]
+        control_graph = control_command[control_command.index("-filter_complex") + 1]
+        self.assertNotIn("T", mask_filter)
+        self.assertIn("color=gray", " ".join(control_command))
+        self.assertIn("maskedmerge", control_graph)
+        self.assertNotIn("crop=", control_graph)
+        self.assertNotIn("overlay", control_graph)
+
+    def test_static_control_gate_rejects_temporal_source_patch_motion(self):
+        completed = mock.Mock(stdout="\n".join([
+            "lavfi.signalstats.YDIF=0.0",
+            "lavfi.signalstats.YDIF=2.4",
+        ]))
+        with mock.patch.object(motion_provider.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(motion_provider.MotionProviderError, "translated source patches"):
+                motion_provider._verify_static_control_track(Path("control.mp4"), "control")
+
     def test_motion_plan_sanitizer_clamps_regions_and_preserves_actions(self):
         plan = bible_workflow._sanitize_motion_plan({
             "summary": "  Fire   and terrain continue. ",
@@ -976,7 +1014,7 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(quality["fallbackFrom"], "wan2.2-ti2v-5b")
         self.assertIn("color blocks", quality["fallbackReason"])
 
-    def test_locked_motion_uses_coherent_environmental_fallback_after_both_models_reject(self):
+    def test_locked_motion_rejects_after_all_generative_models_fail(self):
         session = mock.Mock()
         session.get.return_value = _Response({"system": {"os": "posix"}})
         session.post.return_value = _Response({})
@@ -991,16 +1029,11 @@ class BibleWorkflowTest(TestCase):
             def write_candidate(_session, _workflow, candidate):
                 candidate.write_bytes(b"model-motion")
 
-            def write_environmental(_source, candidate):
-                candidate.write_bytes(b"clean-full-frame-motion")
-
             with mock.patch.object(
                 motion_provider, "_prepare_source_image", side_effect=prepare_source
             ), mock.patch.object(
                 motion_provider, "_queue_and_download_workflow", side_effect=write_candidate
             ) as queue, mock.patch.object(
-                motion_provider, "_generate_coherent_environmental_fallback", side_effect=write_environmental
-            ) as environmental, mock.patch.object(
                 motion_provider, "_stabilize_locked_camera", return_value={"p95TranslationPixels": 0.0}
             ), mock.patch.object(
                 motion_provider, "_measure_source_frame_fidelity", return_value=0.99
@@ -1010,27 +1043,23 @@ class BibleWorkflowTest(TestCase):
                 side_effect=[
                     motion_provider.MotionProviderError("Wan scene jump"),
                     motion_provider.MotionProviderError("SVD color blocks"),
-                    {"sampleCount": 81, "meanLumaFrameDifference": 0.4},
                 ],
             ), mock.patch.object(motion_provider, "_verify_video"):
-                quality = motion_provider.generate_motion_clip(
-                    still,
-                    destination,
-                    prompt="Light moves across the existing landscape.",
-                    negative_prompt="ghosts, warping",
-                    seed=1234,
-                    camera_behavior="locked",
-                    session=session,
-                )
-            rendered_bytes = destination.read_bytes()
+                with self.assertRaisesRegex(
+                    motion_provider.MotionProviderError,
+                    "procedural motion is disabled",
+                ):
+                    motion_provider.generate_motion_clip(
+                        still,
+                        destination,
+                        prompt="Light moves across the existing landscape.",
+                        negative_prompt="ghosts, warping",
+                        seed=1234,
+                        camera_behavior="locked",
+                        session=session,
+                    )
 
         self.assertEqual(queue.call_count, 2)
-        environmental.assert_called_once()
-        self.assertEqual(rendered_bytes, b"clean-full-frame-motion")
-        self.assertEqual(quality["modelProvider"], "coherent-environmental-motion")
-        self.assertEqual(quality["fallbackFrom"], "wan2.2-ti2v-5b,stable-video-diffusion")
-        self.assertIn("Wan scene jump", quality["fallbackReason"])
-        self.assertIn("SVD color blocks", quality["fallbackReason"])
 
     def test_motion_quality_gate_rejects_short_artifact(self):
         probe = {
