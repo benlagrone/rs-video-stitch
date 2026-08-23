@@ -706,8 +706,8 @@ def _protect_locked_frame_edges(image_path: Path, video_path: Path) -> None:
         "[motion][still][mask]maskedmerge,format=yuv420p[v]"
     )
     command = [
-        "ffmpeg", "-y", "-i", str(video_path), "-loop", "1", "-i", str(image_path),
-        "-filter_complex", filter_graph, "-map", "[v]", "-map", "0:a?", "-shortest",
+        "ffmpeg", "-y", "-i", str(video_path), "-i", str(image_path),
+        "-filter_complex", filter_graph, "-map", "[v]", "-map", "0:a?",
         "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
         "-c:a", "copy", str(protected_path),
     ]
