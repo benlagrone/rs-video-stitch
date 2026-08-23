@@ -697,6 +697,7 @@ def _protect_locked_frame_edges(image_path: Path, video_path: Path) -> None:
     """Restore a narrow source perimeter so stabilization cannot expose moving black edge bars."""
     protected_path = video_path.with_name(f"{video_path.stem}.edge-protected{video_path.suffix}")
     inset = LOCKED_EDGE_PROTECTION
+    duration = 5.0
     filter_graph = (
         f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[motion];"
         f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[still];"
@@ -706,8 +707,9 @@ def _protect_locked_frame_edges(image_path: Path, video_path: Path) -> None:
         "[motion][still][mask]maskedmerge,format=yuv420p[v]"
     )
     command = [
-        "ffmpeg", "-y", "-i", str(video_path), "-i", str(image_path),
+        "ffmpeg", "-y", "-i", str(video_path), "-loop", "1", "-i", str(image_path),
         "-filter_complex", filter_graph, "-map", "[v]", "-map", "0:a?",
+        "-t", str(duration),
         "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
         "-c:a", "copy", str(protected_path),
     ]
