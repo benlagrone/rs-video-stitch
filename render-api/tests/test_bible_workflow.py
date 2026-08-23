@@ -856,7 +856,7 @@ class BibleWorkflowTest(TestCase):
                 return_value={"sampleCount": 81, "maxSaturationJump": 0.8, "maxLumaFrameDifference": 3.0},
             ) as integrity, mock.patch.object(motion_provider, "_verify_video") as verify, mock.patch.object(
                 motion_provider, "_protect_decorative_frame"
-            ) as protect_frame:
+            ) as protect_frame, mock.patch.object(motion_provider, "_protect_locked_frame_edges") as protect_edges:
                 quality = motion_provider.generate_motion_clip(
                     still,
                     destination,
@@ -869,6 +869,7 @@ class BibleWorkflowTest(TestCase):
             self.assertEqual(destination.read_bytes(), b"mp4-data")
             verify.assert_called_once_with(destination)
             protect_frame.assert_called_once()
+            protect_edges.assert_called_once()
             stabilize.assert_called_once_with(destination)
             fidelity.assert_called_once()
             integrity.assert_called_once_with(destination)
@@ -1000,7 +1001,9 @@ class BibleWorkflowTest(TestCase):
                     motion_provider.MotionProviderError("color blocks"),
                     {"sampleCount": 25, "meanLumaFrameDifference": 5.0},
                 ],
-            ), mock.patch.object(motion_provider, "_verify_video"):
+            ), mock.patch.object(motion_provider, "_verify_video"), mock.patch.object(
+                motion_provider, "_protect_locked_frame_edges"
+            ):
                 quality = motion_provider.generate_motion_clip(
                     still,
                     destination,
@@ -1049,7 +1052,9 @@ class BibleWorkflowTest(TestCase):
                     motion_provider.MotionProviderError("Wan scene jump"),
                     motion_provider.MotionProviderError("SVD color blocks"),
                 ],
-            ), mock.patch.object(motion_provider, "_verify_video"):
+            ), mock.patch.object(motion_provider, "_verify_video"), mock.patch.object(
+                motion_provider, "_protect_locked_frame_edges"
+            ):
                 with self.assertRaisesRegex(
                     motion_provider.MotionProviderError,
                     "procedural motion is disabled",
@@ -1339,6 +1344,28 @@ class BibleWorkflowTest(TestCase):
             self.assertNotIn("overlay", filter_graph)
             self.assertIn("lutrgb=r=255:g=255:b=255", filter_graph)
             self.assertIn("boxblur=4", filter_graph)
+
+    def test_locked_edge_protection_restores_only_a_static_perimeter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.png"
+            video = Path(tmp) / "scene.mp4"
+            source.write_bytes(b"source-frame")
+            video.write_bytes(b"generated-motion")
+
+            def create_protected(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"edge-protected-motion")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_protected) as run:
+                motion_provider._protect_locked_frame_edges(source, video)
+
+            self.assertEqual(video.read_bytes(), b"edge-protected-motion")
+            command = run.call_args.args[0]
+            filter_graph = command[command.index("-filter_complex") + 1]
+            self.assertIn("drawbox=x=8:y=8", filter_graph)
+            self.assertIn("maskedmerge", filter_graph)
+            self.assertNotIn("crop", filter_graph)
+            self.assertNotIn("overlay", filter_graph)
 
     def test_extract_last_frame_creates_next_scene_start(self):
         with tempfile.TemporaryDirectory() as tmp:
