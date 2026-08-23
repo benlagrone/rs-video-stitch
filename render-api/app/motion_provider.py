@@ -24,7 +24,8 @@ FRAME_PROTECTION_HEIGHT = 320
 FRAME_PROTECTION_X = 69
 FRAME_PROTECTION_Y = 45
 FRAME_PROTECTION_FEATHER = 4
-LOCKED_EDGE_PROTECTION = 8
+LOCKED_EDGE_PROTECTION = 24
+LOCKED_EDGE_FEATHER = 6
 LOCKED_CAMERA_P95_TRANSLATION_LIMIT = float(os.getenv("LOCKED_CAMERA_P95_TRANSLATION_LIMIT", "12"))
 LOCKED_CAMERA_LARGE_CORRECTION_RATIO = float(os.getenv("LOCKED_CAMERA_LARGE_CORRECTION_RATIO", "0.20"))
 SOURCE_FRAME_MIN_SSIM = float(os.getenv("SOURCE_FRAME_MIN_SSIM", "0.28"))
@@ -703,7 +704,7 @@ def _protect_locked_frame_edges(image_path: Path, video_path: Path) -> None:
         f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[still];"
         f"color=white:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT},format=gray,"
         f"drawbox=x={inset}:y={inset}:w={FRAME_PROTECTION_WIDTH - (inset * 2)}:"
-        f"h={FRAME_PROTECTION_HEIGHT - (inset * 2)}:color=black:t=fill,boxblur=2[mask];"
+        f"h={FRAME_PROTECTION_HEIGHT - (inset * 2)}:color=black:t=fill,boxblur={LOCKED_EDGE_FEATHER}[mask];"
         "[motion][still][mask]maskedmerge,format=yuv420p[v]"
     )
     command = [

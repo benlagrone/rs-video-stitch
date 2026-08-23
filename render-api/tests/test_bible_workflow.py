@@ -1362,7 +1362,8 @@ class BibleWorkflowTest(TestCase):
             self.assertEqual(video.read_bytes(), b"edge-protected-motion")
             command = run.call_args.args[0]
             filter_graph = command[command.index("-filter_complex") + 1]
-            self.assertIn("drawbox=x=8:y=8", filter_graph)
+            self.assertIn("drawbox=x=24:y=24", filter_graph)
+            self.assertIn("boxblur=6", filter_graph)
             self.assertIn("maskedmerge", filter_graph)
             self.assertNotIn("crop", filter_graph)
             self.assertNotIn("overlay", filter_graph)
