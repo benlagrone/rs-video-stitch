@@ -254,67 +254,83 @@ def _generate_region_control_assets(
     control_destination: Path,
     mask_destination: Path,
 ) -> int:
-    """Create source-aligned control tracks; only planned regions move, never the frame."""
+    """Create VACE inpaint tracks; planned regions regenerate while the source stays fixed."""
     regions = [region for region in motion_plan.get("regions") or [] if region.get("enabled") is not False][:5]
     if not regions:
         raise MotionProviderError("Motion plan has no enabled regions")
-    split_labels = "".join(f"[region{index}]" for index in range(len(regions)))
-    graph = [
-        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
-        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,format=yuv420p,"
-        f"split={len(regions) + 1}[base]{split_labels}"
-    ]
-    current = "base"
     mask_terms = []
-    for index, region in enumerate(regions):
+    for region in regions:
         box = region.get("box") or {}
         x = max(0, min(FRAME_PROTECTION_WIDTH - 24, round(float(box.get("x", 0.1)) * FRAME_PROTECTION_WIDTH)))
         y = max(0, min(FRAME_PROTECTION_HEIGHT - 24, round(float(box.get("y", 0.1)) * FRAME_PROTECTION_HEIGHT)))
         width = max(24, min(FRAME_PROTECTION_WIDTH - x, round(float(box.get("width", 0.35)) * FRAME_PROTECTION_WIDTH)))
         height = max(24, min(FRAME_PROTECTION_HEIGHT - y, round(float(box.get("height", 0.35)) * FRAME_PROTECTION_HEIGHT)))
-        dx, dy = _region_motion_offset(region, index)
-        patch = f"patch{index}"
-        output = f"layer{index}"
-        feather = max(8, min(22, round(min(width, height) * 0.12)))
-        alpha = f"min(255,255*min(min(X,W-1-X),min(Y,H-1-Y))/{feather})"
-        graph.append(
-            f"[region{index}]crop={width}:{height}:{x}:{y},format=rgba,"
-            f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='{alpha}'[{patch}]"
-        )
-        graph.append(f"[{current}][{patch}]overlay=x='{x}+({dx})':y='{y}+({dy})':eval=frame:shortest=1[{output}]")
-        current = output
-        mask_dx, mask_dy = dx.replace("t", "T"), dy.replace("t", "T")
         center_x, center_y = x + (width / 2), y + (height / 2)
         spread_x, spread_y = max(18, width / 2.8), max(18, height / 2.8)
         mask_terms.append(
-            f"255*exp(-(((X-({center_x}+({mask_dx})))*(X-({center_x}+({mask_dx})))/(2*{spread_x}*{spread_x}))"
-            f"+((Y-({center_y}+({mask_dy})))*(Y-({center_y}+({mask_dy})))/(2*{spread_y}*{spread_y}))))"
+            f"255*exp(-(((X-{center_x})*(X-{center_x})/(2*{spread_x}*{spread_x}))"
+            f"+((Y-{center_y})*(Y-{center_y})/(2*{spread_y}*{spread_y}))))"
         )
-    graph.append(f"[{current}]format=yuv420p[control]")
-    control_command = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-loop", "1", "-framerate", "16", "-i", str(image_path),
-        "-filter_complex", ";".join(graph), "-map", "[control]", "-t", "5.0625", "-r", "16",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", str(control_destination),
-    ]
     mask_expression = mask_terms[0]
     for term in mask_terms[1:]:
         mask_expression = f"max({mask_expression},{term})"
-    mask_filter = f"format=gray,geq=lum='{mask_expression}',boxblur=6:1,format=yuv420p"
+    mask_filter = f"format=gray,geq=lum='{mask_expression}',boxblur=8:1,format=yuv420p"
     mask_command = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
         f"color=black:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d=5.0625",
         "-vf", mask_filter, "-t", "5.0625", "-r", "16", "-c:v", "libx264", "-preset", "fast",
         "-crf", "12", "-pix_fmt", "yuv420p", str(mask_destination),
     ]
+    control_graph = (
+        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        "format=yuv420p[source];"
+        "[1:v]format=gray[mask];"
+        "[2:v]format=yuv420p[neutral];"
+        "[source][neutral][mask]maskedmerge,format=yuv420p[control]"
+    )
+    control_command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-loop", "1", "-framerate", "16",
+        "-i", str(image_path), "-i", str(mask_destination), "-f", "lavfi", "-i",
+        f"color=gray:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d=5.0625",
+        "-filter_complex", control_graph, "-map", "[control]", "-t", "5.0625", "-r", "16",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", str(control_destination),
+    ]
     try:
-        subprocess.run(control_command, check=True, capture_output=True, text=True)
         subprocess.run(mask_command, check=True, capture_output=True, text=True)
+        subprocess.run(control_command, check=True, capture_output=True, text=True)
     except (FileNotFoundError, subprocess.CalledProcessError) as exc:
         detail = getattr(exc, "stderr", "") or str(exc)
         raise MotionProviderError(f"Unable to build region-control tracks: {detail[-600:]}") from exc
     if not control_destination.exists() or not mask_destination.exists():
         raise MotionProviderError("Region-control track generation produced no video")
+    _verify_static_control_track(control_destination, "control")
+    _verify_static_control_track(mask_destination, "mask")
     return len(regions)
+
+
+def _verify_static_control_track(path: Path, label: str) -> None:
+    """Reject temporal control tracks so VACE cannot be driven by translated source patches."""
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+        "-vf", "signalstats,metadata=print:file=-", "-f", "null", "-",
+    ]
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise MotionProviderError(f"Unable to validate the VACE {label} track: {exc}") from exc
+    frame_differences = [
+        float(line.split("=", 1)[1])
+        for line in completed.stdout.splitlines()
+        if line.startswith("lavfi.signalstats.YDIF=")
+    ]
+    if not frame_differences:
+        raise MotionProviderError(f"Unable to measure temporal movement in the VACE {label} track")
+    if max(frame_differences) > 0.05:
+        raise MotionProviderError(
+            f"VACE {label} track contains temporal image movement; translated source patches are prohibited"
+        )
 
 
 def _wait_for_output(session, prompt_id: str) -> dict:
@@ -864,6 +880,8 @@ def generate_motion_clip(
                 quality["motionRegionCount"] = region_count
                 quality["motionPlanSummary"] = str(motion_plan.get("summary") or "")[:320]
                 quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
+                quality["controlMode"] = "masked-generative-inpaint"
+                quality["semanticMotionGate"] = "static-control-verified"
                 return quality
             except Exception as exc:  # noqa: BLE001 - provider failures must preserve the existing fallback chain
                 region_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
@@ -878,6 +896,8 @@ def generate_motion_clip(
                     quality["motionRegionCount"] = region_count
                     quality["motionPlanSummary"] = str(motion_plan.get("summary") or "")[:320]
                     quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
+                    quality["controlMode"] = "masked-generative-inpaint"
+                    quality["semanticMotionGate"] = "static-control-verified"
                     quality["fallbackFrom"] = "wan2.1-vace-region-control"
                     quality["fallbackReason"] = str(region_error)[:500]
                     return quality
@@ -885,22 +905,6 @@ def generate_motion_clip(
                     region_error = MotionProviderError(
                         f"VACE: {region_error}; restrained VACE: {restrained_error}"
                     )
-            try:
-                region_count = _generate_region_environmental_fallback(
-                    prepared_source, destination, motion_plan
-                )
-                quality = validate_candidate("region-environmental-composite", 0.0)
-                quality["motionRegionCount"] = region_count
-                quality["motionPlanSummary"] = str(motion_plan.get("summary") or "")[:320]
-                quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
-                quality["fallbackFrom"] = "wan2.1-vace-region-control"
-                quality["fallbackReason"] = str(region_error)[:500]
-                return quality
-            except MotionProviderError as environmental_region_error:
-                region_error = MotionProviderError(
-                    f"{region_error}; region environmental composite: {environmental_region_error}"
-                )
-
         try:
             _queue_and_download_workflow(session, workflow, destination)
             quality = validate_candidate("wan2.2-ti2v-5b", model_denoise)
@@ -920,14 +924,10 @@ def generate_motion_clip(
                 _queue_and_download_workflow(session, fallback, destination)
                 quality = validate_candidate("stable-video-diffusion", 1.0)
             except MotionProviderError as fallback_error:
-                try:
-                    _generate_coherent_environmental_fallback(prepared_source, destination)
-                    quality = validate_candidate("coherent-environmental-motion", 0.0)
-                except MotionProviderError as environmental_error:
-                    raise MotionProviderError(
-                        f"Wan animation rejected: {wan_error}; SVD fallback rejected: {fallback_error}; "
-                        f"coherent environmental fallback rejected: {environmental_error}"
-                    ) from environmental_error
+                raise MotionProviderError(
+                    f"Wan animation rejected: {wan_error}; SVD fallback rejected: {fallback_error}; "
+                    "procedural motion is disabled because it is not generative scene animation"
+                ) from fallback_error
                 providers = "wan2.2-ti2v-5b,stable-video-diffusion"
                 reasons = f"Wan: {wan_error}; SVD: {fallback_error}"
                 if region_error:
