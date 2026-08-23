@@ -34,6 +34,7 @@ SEQUENCE_SATURATION_JUMP_LIMIT = float(os.getenv("SEQUENCE_SATURATION_JUMP_LIMIT
 SEQUENCE_LUMA_JUMP_LIMIT = float(os.getenv("SEQUENCE_LUMA_JUMP_LIMIT", "20.0"))
 SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE = float(os.getenv("SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE", "20.0"))
 SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE = float(os.getenv("SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE", "0.35"))
+GENERATIVE_MIN_MEAN_LUMA_DIFFERENCE = float(os.getenv("GENERATIVE_MIN_MEAN_LUMA_DIFFERENCE", "0.9"))
 SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT = float(
     os.getenv("SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT", "4.0")
 )
@@ -191,7 +192,7 @@ def _vace_region_workflow(
     negative_prompt: str,
     prefix: str,
     seed: int,
-    strength: float = 0.68,
+    strength: float = 1.0,
 ) -> dict[str, Any]:
     """Build a Wan VACE graph using an explicit full-frame control track and motion mask."""
     return {
@@ -588,6 +589,16 @@ def _measure_sequence_integrity(video_path: Path) -> dict[str, float | int]:
         stats_path.unlink(missing_ok=True)
 
 
+def _verify_visible_generative_motion(metrics: dict[str, float | int]) -> None:
+    mean_difference = float(metrics.get("meanLumaFrameDifference") or 0.0)
+    if mean_difference < GENERATIVE_MIN_MEAN_LUMA_DIFFERENCE:
+        raise MotionProviderError(
+            "Animation rejected because model-generated scene motion is too subtle: "
+            f"mean luma-frame difference {mean_difference:.2f} is below "
+            f"{GENERATIVE_MIN_MEAN_LUMA_DIFFERENCE:.2f}"
+        )
+
+
 def _measure_edge_tile_integrity(video_path: Path) -> dict[str, float | int]:
     # Localized model corruption can hide inside healthy whole-frame averages. Sample every
     # 4x4 tile so central generation failures are caught as well as edge artifacts.
@@ -861,6 +872,8 @@ def generate_motion_clip(
                 quality["decorativeFrameProtected"] = True
             quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
             quality["sequenceIntegrity"] = _measure_sequence_integrity(destination)
+            if provider.startswith("wan2.1-vace-region-control"):
+                _verify_visible_generative_motion(quality["sequenceIntegrity"])
             _verify_video(destination)
             return quality
 
@@ -881,7 +894,7 @@ def generate_motion_clip(
                 quality["motionPlanSummary"] = str(motion_plan.get("summary") or "")[:320]
                 quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
                 quality["controlMode"] = "masked-generative-inpaint"
-                quality["semanticMotionGate"] = "static-control-verified"
+                quality["semanticMotionGate"] = "static-control-and-visible-generation"
                 return quality
             except Exception as exc:  # noqa: BLE001 - provider failures must preserve the existing fallback chain
                 region_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
@@ -889,7 +902,7 @@ def generate_motion_clip(
                     restrained_workflow = _vace_region_workflow(
                         uploaded_name, control_name, mask_name, prompt, negative_prompt,
                         f"{prefix}-region-control-restrained", effective_seed ^ 0x13A7,
-                        strength=0.48,
+                        strength=0.72,
                     )
                     _queue_and_download_workflow(session, restrained_workflow, destination)
                     quality = validate_candidate("wan2.1-vace-region-control-restrained", 1.0)
@@ -897,7 +910,7 @@ def generate_motion_clip(
                     quality["motionPlanSummary"] = str(motion_plan.get("summary") or "")[:320]
                     quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
                     quality["controlMode"] = "masked-generative-inpaint"
-                    quality["semanticMotionGate"] = "static-control-verified"
+                    quality["semanticMotionGate"] = "static-control-and-visible-generation"
                     quality["fallbackFrom"] = "wan2.1-vace-region-control"
                     quality["fallbackReason"] = str(region_error)[:500]
                     return quality

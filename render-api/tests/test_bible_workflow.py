@@ -899,6 +899,7 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["9"]["inputs"]["file"], "mask.mp4")
         self.assertEqual(workflow["12"]["inputs"]["reference_image"], ["6", 0])
         self.assertEqual(workflow["12"]["inputs"]["control_masks"], ["11", 0])
+        self.assertEqual(workflow["12"]["inputs"]["strength"], 1.0)
         self.assertEqual(workflow["14"]["inputs"]["seed"], 42)
 
     def test_vace_region_assets_use_static_masked_inpaint_not_moving_crops(self):
@@ -938,6 +939,10 @@ class BibleWorkflowTest(TestCase):
         with mock.patch.object(motion_provider.subprocess, "run", return_value=completed):
             with self.assertRaisesRegex(motion_provider.MotionProviderError, "translated source patches"):
                 motion_provider._verify_static_control_track(Path("control.mp4"), "control")
+
+    def test_generative_motion_gate_rejects_nearly_static_model_output(self):
+        with self.assertRaisesRegex(motion_provider.MotionProviderError, "too subtle"):
+            motion_provider._verify_visible_generative_motion({"meanLumaFrameDifference": 0.64})
 
     def test_motion_plan_sanitizer_clamps_regions_and_preserves_actions(self):
         plan = bible_workflow._sanitize_motion_plan({
