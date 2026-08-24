@@ -19,6 +19,14 @@ COMFYUI_MODEL_API_URL = os.getenv("COMFYUI_MODEL_API_URL", "http://100.100.97.30
 COMFYUI_TIMEOUT_SECONDS = float(os.getenv("COMFYUI_TIMEOUT_SECONDS", "7200"))
 COMFYUI_POLL_SECONDS = float(os.getenv("COMFYUI_POLL_SECONDS", "5"))
 WORKFLOW_PATH = Path(__file__).resolve().parent / "workflows" / "wan2_2_ti2v_5b_api.json"
+LTX_LOCAL_ENABLED = os.getenv("LTX_LOCAL_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+LTX_LOCAL_CHECKPOINT = os.getenv(
+    "LTX_LOCAL_CHECKPOINT", "ltxv-2b-0.9.8-distilled-fp8.safetensors"
+)
+LTX_LOCAL_TEXT_ENCODER = os.getenv(
+    "LTX_LOCAL_TEXT_ENCODER", "t5xxl_fp16.safetensors"
+)
+LTX_LOCAL_PROVIDER = "ltx-video-local-2b"
 FRAME_PROTECTION_WIDTH = 576
 FRAME_PROTECTION_HEIGHT = 320
 FRAME_PROTECTION_X = 69
@@ -50,6 +58,59 @@ SEQUENCE_EDGE_TILE_ABSOLUTE_SATURATION_LIMIT = float(
 
 class MotionProviderError(RuntimeError):
     pass
+
+
+def _node_options(object_info: dict[str, Any], node: str, field: str) -> set[str]:
+    try:
+        values = object_info[node]["input"]["required"][field][0]
+    except (KeyError, IndexError, TypeError):
+        return set()
+    return {str(value) for value in values if isinstance(value, str)}
+
+
+def ltx_local_status(*, session=requests) -> dict[str, Any]:
+    """Report whether the protected Phronesis runtime can execute local LTX.
+
+    This deliberately validates only local ComfyUI nodes and model files. API
+    nodes are never accepted as readiness because they can create external
+    usage charges.
+    """
+    status: dict[str, Any] = {
+        "id": LTX_LOCAL_PROVIDER,
+        "owner": "fortress-phronesis:comfyui",
+        "billing": "local-hardware-only",
+        "enabled": LTX_LOCAL_ENABLED,
+        "checkpoint": LTX_LOCAL_CHECKPOINT,
+        "textEncoder": LTX_LOCAL_TEXT_ENCODER,
+    }
+    if not LTX_LOCAL_ENABLED:
+        return {**status, "ok": False, "detail": "disabled"}
+    try:
+        response = session.get(f"{COMFYUI_MODEL_API_URL.rstrip('/')}/object_info", timeout=30)
+        response.raise_for_status()
+        object_info = response.json()
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        return {**status, "ok": False, "detail": f"object-info-{type(exc).__name__}"}
+
+    required_nodes = {
+        "CheckpointLoaderSimple", "CLIPLoader", "CLIPTextEncode", "LTXVConditioning",
+        "LTXVImgToVideo", "LTXVScheduler", "KSamplerSelect", "SamplerCustom",
+        "VAEDecode", "CreateVideo", "SaveVideo",
+    }
+    missing_nodes = sorted(required_nodes.difference(object_info))
+    checkpoints = _node_options(object_info, "CheckpointLoaderSimple", "ckpt_name")
+    text_encoders = _node_options(object_info, "CLIPLoader", "clip_name")
+    missing_models = []
+    if LTX_LOCAL_CHECKPOINT not in checkpoints:
+        missing_models.append(LTX_LOCAL_CHECKPOINT)
+    if LTX_LOCAL_TEXT_ENCODER not in text_encoders:
+        missing_models.append(LTX_LOCAL_TEXT_ENCODER)
+    return {
+        **status,
+        "ok": not missing_nodes and not missing_models,
+        "missingNodes": missing_nodes,
+        "missingModels": missing_models,
+    }
 
 
 def extract_last_frame(video_path: Path, destination: Path) -> None:
@@ -182,6 +243,64 @@ def _svd_fallback_workflow(image_name: str, prefix: str, seed: int) -> dict[str,
         "8": {
             "class_type": "SaveVideo",
             "inputs": {"video": ["7", 0], "filename_prefix": prefix, "format": "mp4", "codec": "h264"},
+        },
+    }
+
+
+def _ltx_local_workflow(
+    image_name: str,
+    prompt: str,
+    negative_prompt: str,
+    prefix: str,
+    seed: int,
+) -> dict[str, Any]:
+    """Build an entirely local LTX image-to-video graph for Phronesis.
+
+    Every class in this graph executes against local model files. In
+    particular, the similarly named LtxvApi* nodes are intentionally excluded.
+    """
+    return {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": LTX_LOCAL_CHECKPOINT}},
+        "2": {
+            "class_type": "CLIPLoader",
+            "inputs": {"clip_name": LTX_LOCAL_TEXT_ENCODER, "type": "ltxv", "device": "default"},
+        },
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["2", 0]}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt, "clip": ["2", 0]}},
+        "5": {"class_type": "LoadImage", "inputs": {"image": image_name}},
+        "6": {
+            "class_type": "LTXVImgToVideo",
+            "inputs": {
+                "positive": ["3", 0], "negative": ["4", 0], "vae": ["1", 2], "image": ["5", 0],
+                "width": FRAME_PROTECTION_WIDTH, "height": FRAME_PROTECTION_HEIGHT,
+                "length": 81, "batch_size": 1, "strength": 0.15,
+            },
+        },
+        "7": {
+            "class_type": "LTXVConditioning",
+            "inputs": {"positive": ["6", 0], "negative": ["6", 1], "frame_rate": 16.0},
+        },
+        "8": {
+            "class_type": "LTXVScheduler",
+            "inputs": {
+                "steps": 30, "max_shift": 2.05, "base_shift": 0.95,
+                "stretch": True, "terminal": 0.1, "latent": ["6", 2],
+            },
+        },
+        "9": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "10": {
+            "class_type": "SamplerCustom",
+            "inputs": {
+                "model": ["1", 0], "add_noise": True, "noise_seed": seed, "cfg": 3.0,
+                "positive": ["7", 0], "negative": ["7", 1], "sampler": ["9", 0],
+                "sigmas": ["8", 0], "latent_image": ["6", 2],
+            },
+        },
+        "11": {"class_type": "VAEDecode", "inputs": {"samples": ["10", 0], "vae": ["1", 2]}},
+        "12": {"class_type": "CreateVideo", "inputs": {"images": ["11", 0], "fps": 16.0}},
+        "13": {
+            "class_type": "SaveVideo",
+            "inputs": {"video": ["12", 0], "filename_prefix": prefix, "format": "mp4", "codec": "h264"},
         },
     }
 
@@ -888,6 +1007,7 @@ def generate_motion_clip(
         effective_seed = int(workflow["3"]["inputs"]["seed"])
         region_count = 0
         region_error: MotionProviderError | None = None
+        ltx_error: MotionProviderError | None = None
 
         def validate_candidate(provider: str, denoise: float) -> dict[str, Any]:
             quality: dict[str, Any] = {
@@ -906,10 +1026,46 @@ def generate_motion_clip(
                 quality["decorativeFrameProtected"] = True
             quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
             quality["sequenceIntegrity"] = _measure_sequence_integrity(destination)
-            if provider.startswith("wan2.1-vace-region-control"):
+            if provider.startswith("wan2.1-vace-region-control") or provider == LTX_LOCAL_PROVIDER:
                 _verify_visible_generative_motion(quality["sequenceIntegrity"])
             _verify_video(destination)
             return quality
+
+        def add_fallback(
+            quality: dict[str, Any],
+            provider: str | None = None,
+            reason: str | None = None,
+        ) -> dict[str, Any]:
+            providers = [LTX_LOCAL_PROVIDER] if ltx_error else []
+            reasons = [f"LTX: {ltx_error}"] if ltx_error else []
+            if provider:
+                providers.append(provider)
+            if reason:
+                reasons.append(reason)
+            if providers:
+                quality["fallbackFrom"] = ",".join(providers)
+                quality["fallbackReason"] = "; ".join(reasons)[:500]
+            return quality
+
+        ltx_status = ltx_local_status(session=session)
+        if ltx_status.get("ok"):
+            try:
+                ltx_workflow = _ltx_local_workflow(
+                    uploaded_name,
+                    prompt,
+                    negative_prompt,
+                    f"{prefix}-ltx-local",
+                    effective_seed,
+                )
+                _queue_and_download_workflow(session, ltx_workflow, destination)
+                quality = validate_candidate(LTX_LOCAL_PROVIDER, 1.0)
+                quality["providerPolicy"] = "fortress-local-only"
+                quality["checkpoint"] = LTX_LOCAL_CHECKPOINT
+                quality["textEncoder"] = LTX_LOCAL_TEXT_ENCODER
+                quality["controlMode"] = "full-frame-image-conditioned-generation"
+                return quality
+            except Exception as exc:  # noqa: BLE001 - continue only to other local providers
+                ltx_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
 
         if motion_plan and any(region.get("enabled") is not False for region in motion_plan.get("regions") or []):
             control_path = Path(temp_dir) / f"control-{image_path.stem}.mp4"
@@ -929,7 +1085,7 @@ def generate_motion_clip(
                 quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
                 quality["controlMode"] = "masked-generative-inpaint"
                 quality["semanticMotionGate"] = "static-control-and-visible-generation"
-                return quality
+                return add_fallback(quality)
             except Exception as exc:  # noqa: BLE001 - provider failures must preserve the existing fallback chain
                 region_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
                 try:
@@ -945,9 +1101,11 @@ def generate_motion_clip(
                     quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
                     quality["controlMode"] = "masked-generative-inpaint"
                     quality["semanticMotionGate"] = "static-control-and-visible-generation"
-                    quality["fallbackFrom"] = "wan2.1-vace-region-control"
-                    quality["fallbackReason"] = str(region_error)[:500]
-                    return quality
+                    return add_fallback(
+                        quality,
+                        "wan2.1-vace-region-control",
+                        str(region_error),
+                    )
                 except Exception as restrained_error:  # noqa: BLE001 - retain the existing model fallback ladder
                     region_error = MotionProviderError(
                         f"VACE: {region_error}; restrained VACE: {restrained_error}"
@@ -956,9 +1114,12 @@ def generate_motion_clip(
             _queue_and_download_workflow(session, workflow, destination)
             quality = validate_candidate("wan2.2-ti2v-5b", model_denoise)
             if region_error:
-                quality["fallbackFrom"] = "wan2.1-vace-region-control"
-                quality["fallbackReason"] = str(region_error)[:500]
-            return quality
+                return add_fallback(
+                    quality,
+                    "wan2.1-vace-region-control",
+                    str(region_error),
+                )
+            return add_fallback(quality)
         except MotionProviderError as wan_error:
             if camera_behavior != "locked":
                 raise
@@ -971,18 +1132,14 @@ def generate_motion_clip(
                 _queue_and_download_workflow(session, fallback, destination)
                 quality = validate_candidate("stable-video-diffusion", 1.0)
             except MotionProviderError as fallback_error:
+                ltx_detail = f"LTX animation rejected: {ltx_error}; " if ltx_error else ""
                 raise MotionProviderError(
-                    f"Wan animation rejected: {wan_error}; SVD fallback rejected: {fallback_error}; "
+                    f"{ltx_detail}Wan animation rejected: {wan_error}; SVD fallback rejected: {fallback_error}; "
                     "procedural motion is disabled because it is not generative scene animation"
                 ) from fallback_error
-                providers = "wan2.2-ti2v-5b,stable-video-diffusion"
-                reasons = f"Wan: {wan_error}; SVD: {fallback_error}"
-                if region_error:
-                    providers = f"wan2.1-vace-region-control,{providers}"
-                    reasons = f"Region control: {region_error}; {reasons}"
-                quality["fallbackFrom"] = providers
-                quality["fallbackReason"] = reasons[:500]
-                return quality
-            quality["fallbackFrom"] = "wan2.2-ti2v-5b" if not region_error else "wan2.1-vace-region-control,wan2.2-ti2v-5b"
-            quality["fallbackReason"] = (str(wan_error) if not region_error else f"Region control: {region_error}; Wan: {wan_error}")[:500]
-            return quality
+            providers = "wan2.2-ti2v-5b"
+            reasons = f"Wan: {wan_error}"
+            if region_error:
+                providers = f"wan2.1-vace-region-control,{providers}"
+                reasons = f"Region control: {region_error}; {reasons}"
+            return add_fallback(quality, providers, reasons)

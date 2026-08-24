@@ -824,6 +824,7 @@ class BibleWorkflowTest(TestCase):
         ]
         session.get.side_effect = [
             _Response({"system": {"os": "posix"}}),
+            _Response({}),
             _Response(
                 {
                     "motion-1": {
@@ -889,6 +890,93 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["3"]["inputs"]["seed"], 8675309)
         self.assertEqual(workflow["3"]["inputs"]["denoise"], motion_provider.LOCKED_CAMERA_DENOISE)
         self.assertEqual(quality["modelDenoise"], motion_provider.LOCKED_CAMERA_DENOISE)
+
+    def test_ltx_local_readiness_requires_matching_text_encoder(self):
+        session = mock.Mock()
+        required_nodes = {
+            name: {}
+            for name in (
+                "CheckpointLoaderSimple", "CLIPLoader", "CLIPTextEncode", "LTXVConditioning",
+                "LTXVImgToVideo", "LTXVScheduler", "KSamplerSelect", "SamplerCustom",
+                "VAEDecode", "CreateVideo", "SaveVideo",
+            )
+        }
+        required_nodes["CheckpointLoaderSimple"] = {
+            "input": {"required": {"ckpt_name": [[motion_provider.LTX_LOCAL_CHECKPOINT]]}}
+        }
+        required_nodes["CLIPLoader"] = {
+            "input": {"required": {"clip_name": [["umt5_xxl_fp8_e4m3fn_scaled.safetensors"]]}}
+        }
+        session.get.return_value = _Response(required_nodes)
+
+        status = motion_provider.ltx_local_status(session=session)
+
+        self.assertFalse(status["ok"])
+        self.assertEqual(status["billing"], "local-hardware-only")
+        self.assertEqual(status["missingNodes"], [])
+        self.assertEqual(status["missingModels"], [motion_provider.LTX_LOCAL_TEXT_ENCODER])
+
+    def test_ltx_local_workflow_never_uses_paid_api_nodes(self):
+        workflow = motion_provider._ltx_local_workflow(
+            "source.png", "planet moves downward", "no seams", "test/ltx", 42
+        )
+
+        self.assertEqual(workflow["1"]["inputs"]["ckpt_name"], motion_provider.LTX_LOCAL_CHECKPOINT)
+        self.assertEqual(workflow["2"]["inputs"]["clip_name"], motion_provider.LTX_LOCAL_TEXT_ENCODER)
+        self.assertEqual(workflow["2"]["inputs"]["type"], "ltxv")
+        self.assertEqual(workflow["6"]["inputs"]["strength"], 0.15)
+        self.assertEqual(workflow["8"]["inputs"]["steps"], 30)
+        self.assertEqual(workflow["9"]["inputs"]["sampler_name"], "euler")
+        self.assertEqual(workflow["10"]["inputs"]["cfg"], 3.0)
+        self.assertFalse(any("Api" in node["class_type"] for node in workflow.values()))
+
+    def test_generate_motion_prefers_ready_local_ltx(self):
+        session = mock.Mock()
+        session.get.return_value = _Response({"system": {"os": "posix"}})
+        session.post.return_value = _Response({})
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"png-data")
+            destination = Path(tmp) / "scene.mp4"
+
+            def prepare_source(_source, prepared):
+                prepared.write_bytes(b"prepared-png")
+
+            def write_candidate(_session, _workflow, candidate):
+                candidate.write_bytes(b"ltx-motion")
+
+            with mock.patch.object(
+                motion_provider, "_prepare_source_image", side_effect=prepare_source
+            ), mock.patch.object(
+                motion_provider, "ltx_local_status", return_value={"ok": True}
+            ), mock.patch.object(
+                motion_provider, "_queue_and_download_workflow", side_effect=write_candidate
+            ) as queue, mock.patch.object(
+                motion_provider, "_stabilize_locked_camera", return_value={"p95TranslationPixels": 1.0}
+            ), mock.patch.object(
+                motion_provider, "_measure_source_frame_fidelity", return_value=0.86
+            ), mock.patch.object(
+                motion_provider,
+                "_measure_sequence_integrity",
+                return_value={"sampleCount": 81, "meanLumaFrameDifference": 2.0},
+            ), mock.patch.object(motion_provider, "_verify_video"), mock.patch.object(
+                motion_provider, "_protect_locked_frame_edges"
+            ):
+                quality = motion_provider.generate_motion_clip(
+                    still,
+                    destination,
+                    prompt="Planet moves downward.",
+                    negative_prompt="seams, duplicate planet",
+                    seed=42,
+                    camera_behavior="locked",
+                    session=session,
+                )
+
+        self.assertEqual(queue.call_count, 1)
+        self.assertEqual(queue.call_args.args[1]["1"]["inputs"]["ckpt_name"], motion_provider.LTX_LOCAL_CHECKPOINT)
+        self.assertEqual(quality["modelProvider"], motion_provider.LTX_LOCAL_PROVIDER)
+        self.assertEqual(quality["providerPolicy"], "fortress-local-only")
+        self.assertEqual(quality["controlMode"], "full-frame-image-conditioned-generation")
 
     def test_vace_region_workflow_uses_source_control_mask_and_reference(self):
         workflow = motion_provider._vace_region_workflow(

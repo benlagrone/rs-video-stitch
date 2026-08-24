@@ -17,7 +17,7 @@ from urllib.parse import quote
 import requests
 
 from app.art_styles import resolve_art_style
-from app.motion_provider import COMFYUI_MODEL_API_URL, extract_last_frame, generate_motion_clip
+from app.motion_provider import COMFYUI_MODEL_API_URL, extract_last_frame, generate_motion_clip, ltx_local_status
 from app.storage import ensure_dirs, p_input, read_project_state, save_project_state, save_scenes
 
 BIBLE_TEXT_API_URL = os.getenv("BIBLE_TEXT_API_URL", "https://bible-api.com")
@@ -108,6 +108,7 @@ def capability_health(*, session=requests) -> dict[str, Any]:
             result[name] = {"ok": response.ok, "status": response.status_code}
         except requests.RequestException as exc:
             result[name] = {"ok": False, "detail": type(exc).__name__}
+    result["motionLocal"] = ltx_local_status(session=session)
     result["mediastudio"] = {"ok": True}
     if SEXTANT_ORCHESTRATOR_URL:
         try:
