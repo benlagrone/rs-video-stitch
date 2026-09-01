@@ -1021,7 +1021,7 @@ class BibleWorkflowTest(TestCase):
             def prepare_source(_source, prepared):
                 prepared.write_bytes(b"prepared-png")
 
-            def render_vector(_source, _plan, rendered):
+            def render_vector(_source, _plan, rendered, **_kwargs):
                 rendered.write_bytes(b"vector-motion")
                 return {"regions": [{"id": "planet", "dyPixels": 64}], "backgroundInpainted": True}
 
@@ -1072,7 +1072,7 @@ class BibleWorkflowTest(TestCase):
             def prepare_source(_source, prepared):
                 prepared.write_bytes(b"prepared-png")
 
-            def render_vector(_source, _plan, rendered):
+            def render_vector(_source, _plan, rendered, **_kwargs):
                 rendered.write_bytes(b"vector-motion")
                 return {"regions": [{"id": "planet", "dyPixels": 64}], "backgroundInpainted": True}
 

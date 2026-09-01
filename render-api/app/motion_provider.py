@@ -1,6 +1,7 @@
 """Sextant-owned adapter for the model-only ComfyUI runtime on Fortress LAN."""
 from __future__ import annotations
 
+import base64
 import json
 import os
 import random
@@ -17,6 +18,10 @@ from typing import Any
 import requests
 
 COMFYUI_MODEL_API_URL = os.getenv("COMFYUI_MODEL_API_URL", "http://100.100.97.30:8188")
+STABLE_DIFFUSION_API_URL = os.getenv(
+    "STABLE_DIFFUSION_API_URL", "http://100.100.97.30:7861/sdapi/v1/txt2img"
+)
+BACKGROUND_PLATE_API_URL = STABLE_DIFFUSION_API_URL.replace("/txt2img", "/img2img")
 COMFYUI_TIMEOUT_SECONDS = float(os.getenv("COMFYUI_TIMEOUT_SECONDS", "7200"))
 COMFYUI_POLL_SECONDS = float(os.getenv("COMFYUI_POLL_SECONDS", "5"))
 WORKFLOW_PATH = Path(__file__).resolve().parent / "workflows" / "wan2_2_ti2v_5b_api.json"
@@ -891,10 +896,84 @@ def _vector_easing_expression(easing: str, duration: float) -> str:
     }.get(easing, f"(3*{unit}*{unit}-2*{unit}*{unit}*{unit})")
 
 
+def _generate_background_plate(
+    image,
+    object_mask,
+    *,
+    labels: list[str],
+    scene_prompt: str,
+    negative_prompt: str,
+    session=requests,
+):
+    """Use protected local inpainting to reconstruct only pixels hidden by a large object."""
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except ImportError as exc:
+        raise MotionProviderError("Background-plate generation requires the bundled OpenCV runtime") from exc
+
+    expanded_mask = cv2.dilate(object_mask, np.ones((11, 11), dtype=np.uint8), iterations=2)
+    ok_image, encoded_image = cv2.imencode(".png", image)
+    ok_mask, encoded_mask = cv2.imencode(".png", expanded_mask)
+    if not ok_image or not ok_mask:
+        raise MotionProviderError("Unable to encode the source and mask for background reconstruction")
+    object_names = ", ".join(label for label in labels if label) or "masked foreground object"
+    prompt = (
+        "Create an empty background plate for this exact image. Reconstruct only the scenery hidden "
+        f"behind the masked {object_names}; remove that object completely. Continue the existing sky, "
+        "terrain, atmosphere, palette, texture, lighting, and art style across the masked area. "
+        "Do not add a subject, planet, person, structure, symbol, text, border, or new focal object. "
+        f"Scene context: {scene_prompt[:900]}"
+    )
+    response = session.post(
+        BACKGROUND_PLATE_API_URL,
+        json={
+            "init_images": [base64.b64encode(encoded_image.tobytes()).decode("ascii")],
+            "mask": base64.b64encode(encoded_mask.tobytes()).decode("ascii"),
+            "prompt": prompt,
+            "negative_prompt": (
+                f"{negative_prompt}, {object_names}, duplicate object, foreground subject, hard mask edge, "
+                "black hole, circular cutout, seam, text, watermark"
+            )[:1800],
+            "width": FRAME_PROTECTION_WIDTH,
+            "height": FRAME_PROTECTION_HEIGHT,
+            "steps": 24,
+            "cfg_scale": 6.0,
+            "sampler_name": "DPM++ 2M Karras",
+            "denoising_strength": 0.82,
+            "mask_blur": 20,
+            "inpainting_fill": 1,
+            "inpaint_full_res": False,
+            "inpaint_full_res_padding": 48,
+        },
+        timeout=600,
+    )
+    response.raise_for_status()
+    images = response.json().get("images") or []
+    if not images:
+        raise MotionProviderError("Background reconstruction returned no image")
+    try:
+        decoded = base64.b64decode(str(images[0]).split(",")[-1])
+        generated = cv2.imdecode(np.frombuffer(decoded, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except (ValueError, TypeError) as exc:
+        raise MotionProviderError("Background reconstruction returned an invalid image") from exc
+    if generated is None:
+        raise MotionProviderError("Background reconstruction returned an unreadable image")
+    if generated.shape[:2] != image.shape[:2]:
+        generated = cv2.resize(generated, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+    blend_mask = cv2.GaussianBlur(expanded_mask, (0, 0), sigmaX=10.0, sigmaY=10.0)
+    alpha = (blend_mask.astype(np.float32) / 255.0)[:, :, None]
+    return np.clip((generated.astype(np.float32) * alpha) + (image.astype(np.float32) * (1.0 - alpha)), 0, 255).astype(np.uint8)
+
+
 def _generate_object_vector_clip(
     image_path: Path,
     motion_plan: dict[str, Any],
     destination: Path,
+    *,
+    scene_prompt: str = "",
+    negative_prompt: str = "",
+    session=requests,
 ) -> dict[str, Any]:
     """Segment existing objects, inpaint their old locations, and tween exact vectors.
 
@@ -927,6 +1006,7 @@ def _generate_object_vector_clip(
     union_mask = np.zeros((height, width), dtype=np.uint8)
     sprite_paths: list[Path] = []
     route_regions: list[dict[str, Any]] = []
+    region_labels: list[str] = []
     try:
         for index, region in enumerate(regions, start=1):
             box = region.get("box") or {}
@@ -985,6 +1065,7 @@ def _generate_object_vector_clip(
             if not cv2.imwrite(str(sprite_path), sprite):
                 raise MotionProviderError("Unable to save an object-vector sprite")
             sprite_paths.append(sprite_path)
+            region_labels.append(str(region.get("label") or f"Region {index}"))
 
             vector = region.get("vector") or {}
             dx = round(float(vector.get("dx", 0.0)) * width, 3)
@@ -1002,8 +1083,21 @@ def _generate_object_vector_clip(
                 "matteAreaRatio": round(area_ratio, 4),
             })
 
-        inpaint_mask = cv2.dilate(union_mask, np.ones((7, 7), dtype=np.uint8), iterations=2)
-        background = cv2.inpaint(image, inpaint_mask, 5, cv2.INPAINT_TELEA)
+        occlusion_ratio = float(np.count_nonzero(union_mask)) / float(width * height)
+        if occlusion_ratio >= 0.10:
+            background = _generate_background_plate(
+                image,
+                union_mask,
+                labels=region_labels,
+                scene_prompt=scene_prompt,
+                negative_prompt=negative_prompt,
+                session=session,
+            )
+            background_mode = "protected-local-generative-plate"
+        else:
+            inpaint_mask = cv2.dilate(union_mask, np.ones((7, 7), dtype=np.uint8), iterations=2)
+            background = cv2.inpaint(image, inpaint_mask, 5, cv2.INPAINT_TELEA)
+            background_mode = "deterministic-small-object-inpaint"
         background_path = temp_root / "background.png"
         if not cv2.imwrite(str(background_path), background):
             raise MotionProviderError("Unable to save the object-vector background")
@@ -1037,7 +1131,12 @@ def _generate_object_vector_clip(
             raise MotionProviderError(f"Unable to render object-vector motion: {detail[-600:]}") from exc
         if not destination.exists() or destination.stat().st_size == 0:
             raise MotionProviderError("Object-vector rendering produced no video")
-        return {"regions": route_regions, "backgroundInpainted": True}
+        return {
+            "regions": route_regions,
+            "backgroundInpainted": True,
+            "backgroundMode": background_mode,
+            "occlusionRatio": round(occlusion_ratio, 4),
+        }
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -1092,7 +1191,14 @@ def generate_motion_clip(
 
         if object_regions:
             vector_path = Path(temp_dir) / f"vector-{image_path.stem}.mp4"
-            vector_route = _generate_object_vector_clip(prepared_source, motion_plan or {}, vector_path)
+            vector_route = _generate_object_vector_clip(
+                prepared_source,
+                motion_plan or {},
+                vector_path,
+                scene_prompt=prompt,
+                negative_prompt=negative_prompt,
+                session=session,
+            )
             if not generative_regions:
                 shutil.copy2(vector_path, destination)
                 return validate_object_vector()
