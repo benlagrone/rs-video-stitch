@@ -1122,6 +1122,39 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(quality["suppressedGenerativeRegionCount"], 1)
 
     @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
+    def test_large_background_plate_rejects_regenerated_planets(self):
+        import cv2
+        import numpy as np
+
+        image = np.zeros((320, 576, 3), dtype=np.uint8)
+        cv2.circle(image, (175, 82), 70, (190, 145, 85), -1, cv2.LINE_AA)
+        mask = np.zeros((320, 576), dtype=np.uint8)
+        cv2.circle(mask, (175, 82), 72, 255, -1, cv2.LINE_AA)
+        ok, encoded = cv2.imencode(".png", image)
+        self.assertTrue(ok)
+        generated = base64.b64encode(encoded.tobytes()).decode("ascii")
+        session = mock.Mock()
+        session.post.side_effect = [
+            _Response({"images": [generated]}),
+            _Response({"caption": "a planet with a moon in the background"}),
+        ] * 3
+
+        with self.assertRaisesRegex(
+            motion_provider.MotionProviderError,
+            "removed object remained or was regenerated",
+        ):
+            motion_provider._generate_background_plate(
+                image,
+                mask,
+                labels=["Existing planet"],
+                scene_prompt="A planet descends.",
+                negative_prompt="duplicate planet",
+                session=session,
+            )
+
+        self.assertEqual(session.post.call_count, 6)
+
+    @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
     def test_object_vector_renderer_moves_one_segmented_object_without_duplication(self):
         import cv2
         import numpy as np

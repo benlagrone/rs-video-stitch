@@ -22,6 +22,7 @@ STABLE_DIFFUSION_API_URL = os.getenv(
     "STABLE_DIFFUSION_API_URL", "http://100.100.97.30:7861/sdapi/v1/txt2img"
 )
 BACKGROUND_PLATE_API_URL = STABLE_DIFFUSION_API_URL.replace("/txt2img", "/img2img")
+IMAGE_INTERROGATE_API_URL = STABLE_DIFFUSION_API_URL.replace("/txt2img", "/interrogate")
 COMFYUI_TIMEOUT_SECONDS = float(os.getenv("COMFYUI_TIMEOUT_SECONDS", "7200"))
 COMFYUI_POLL_SECONDS = float(os.getenv("COMFYUI_POLL_SECONDS", "5"))
 WORKFLOW_PATH = Path(__file__).resolve().parent / "workflows" / "wan2_2_ti2v_5b_api.json"
@@ -936,45 +937,92 @@ def _generate_background_plate(
         f"Remove the masked {object_names} completely. The filled area must contain background only. "
         "Do not add any subject, focal object, figure, structure, symbol, text, or border."
     )
-    response = session.post(
-        BACKGROUND_PLATE_API_URL,
-        json={
-            "init_images": [base64.b64encode(encoded_image.tobytes()).decode("ascii")],
-            "mask": base64.b64encode(encoded_mask.tobytes()).decode("ascii"),
-            "prompt": prompt,
-            "negative_prompt": (
-                f"{negative_prompt}, {object_negatives}, duplicate object, foreground subject, hard mask edge, "
-                "black hole, circular cutout, seam, text, watermark"
-            )[:1800],
-            "width": FRAME_PROTECTION_WIDTH,
-            "height": FRAME_PROTECTION_HEIGHT,
-            "steps": 24,
-            "cfg_scale": 6.0,
-            "sampler_name": "DPM++ 2M Karras",
-            "denoising_strength": 0.92,
-            "mask_blur": 24,
-            "inpainting_fill": 2,
-            "inpaint_full_res": False,
-            "inpaint_full_res_padding": 48,
-        },
-        timeout=600,
-    )
-    response.raise_for_status()
-    images = response.json().get("images") or []
-    if not images:
-        raise MotionProviderError("Background reconstruction returned no image")
-    try:
-        decoded = base64.b64decode(str(images[0]).split(",")[-1])
-        generated = cv2.imdecode(np.frombuffer(decoded, dtype=np.uint8), cv2.IMREAD_COLOR)
-    except (ValueError, TypeError) as exc:
-        raise MotionProviderError("Background reconstruction returned an invalid image") from exc
-    if generated is None:
-        raise MotionProviderError("Background reconstruction returned an unreadable image")
-    if generated.shape[:2] != image.shape[:2]:
-        generated = cv2.resize(generated, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+    payload = {
+        "init_images": [base64.b64encode(encoded_image.tobytes()).decode("ascii")],
+        "mask": base64.b64encode(encoded_mask.tobytes()).decode("ascii"),
+        "prompt": prompt,
+        "negative_prompt": (
+            f"{negative_prompt}, {object_negatives}, duplicate object, foreground subject, hard mask edge, "
+            "black hole, circular cutout, seam, text, watermark"
+        )[:1800],
+        "width": FRAME_PROTECTION_WIDTH,
+        "height": FRAME_PROTECTION_HEIGHT,
+        "steps": 24,
+        "cfg_scale": 6.0,
+        "sampler_name": "DPM++ 2M Karras",
+        "denoising_strength": 0.92,
+        "mask_blur": 24,
+        "inpainting_fill": 2,
+        "inpaint_full_res": False,
+        "inpaint_full_res_padding": 48,
+    }
+    forbidden_terms = {
+        "planet": {"planet", "moon", "sun", "orb", "sphere", "celestial body"},
+        "moon": {"planet", "moon", "sun", "orb", "sphere", "celestial body"},
+        "person": {"person", "people", "man", "woman", "human", "figure"},
+        "car": {"car", "vehicle", "automobile", "truck"},
+        "boat": {"boat", "ship", "vessel"},
+        "bird": {"bird", "animal"},
+    }
+    forbidden = set()
+    for category, terms in forbidden_terms.items():
+        if category in label_text:
+            forbidden.update(terms)
+    if not forbidden:
+        forbidden.update(
+            token for token in re.findall(r"[a-z]{4,}", label_text)
+            if token not in {"existing", "foreground", "object", "region"}
+        )
+
     blend_mask = cv2.GaussianBlur(expanded_mask, (0, 0), sigmaX=10.0, sigmaY=10.0)
     alpha = (blend_mask.astype(np.float32) / 255.0)[:, :, None]
-    return np.clip((generated.astype(np.float32) * alpha) + (image.astype(np.float32) * (1.0 - alpha)), 0, 255).astype(np.uint8)
+    rejected_captions: list[str] = []
+    for _attempt in range(3):
+        payload["seed"] = random.randint(1, 2**31 - 1)
+        response = session.post(BACKGROUND_PLATE_API_URL, json=payload, timeout=600)
+        response.raise_for_status()
+        images = response.json().get("images") or []
+        if not images:
+            raise MotionProviderError("Background reconstruction returned no image")
+        try:
+            decoded = base64.b64decode(str(images[0]).split(",")[-1])
+            generated = cv2.imdecode(np.frombuffer(decoded, dtype=np.uint8), cv2.IMREAD_COLOR)
+        except (ValueError, TypeError) as exc:
+            raise MotionProviderError("Background reconstruction returned an invalid image") from exc
+        if generated is None:
+            raise MotionProviderError("Background reconstruction returned an unreadable image")
+        if generated.shape[:2] != image.shape[:2]:
+            generated = cv2.resize(
+                generated, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LANCZOS4
+            )
+        candidate = np.clip(
+            (generated.astype(np.float32) * alpha) + (image.astype(np.float32) * (1.0 - alpha)),
+            0,
+            255,
+        ).astype(np.uint8)
+        ok_candidate, encoded_candidate = cv2.imencode(".png", candidate)
+        if not ok_candidate:
+            raise MotionProviderError("Unable to validate the reconstructed background plate")
+        interrogation = session.post(
+            IMAGE_INTERROGATE_API_URL,
+            json={
+                "image": base64.b64encode(encoded_candidate.tobytes()).decode("ascii"),
+                "model": "clip",
+            },
+            timeout=300,
+        )
+        interrogation.raise_for_status()
+        caption = str(interrogation.json().get("caption") or "").strip().lower()
+        if not caption:
+            raise MotionProviderError("Background semantic validation returned no caption")
+        matches = sorted(term for term in forbidden if term in caption)
+        if not matches:
+            return candidate
+        rejected_captions.append(caption[:240])
+    raise MotionProviderError(
+        "Background plate rejected because the removed object remained or was regenerated: "
+        + "; ".join(rejected_captions)
+    )
 
 
 def _generate_object_vector_clip(
