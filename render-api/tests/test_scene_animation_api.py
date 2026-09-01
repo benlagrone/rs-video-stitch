@@ -64,11 +64,11 @@ class SceneAnimationApiTests(unittest.IsolatedAsyncioTestCase):
             result = await api.scene_motion_plan(
                 "bible-genesis-1",
                 1,
-                SceneMotionPlanRequest(regenerate=True),
+                SceneMotionPlanRequest(regenerate=True, prompt="The planet moves downward."),
             )
 
         self.assertEqual(result.motionPlan, plan)
-        generate.assert_called_once_with("bible-genesis-1", 1)
+        generate.assert_called_once_with("bible-genesis-1", 1, "The planet moves downward.")
 
     async def test_animate_scene_carries_edited_motion_plan_into_job(self):
         database = _Database()

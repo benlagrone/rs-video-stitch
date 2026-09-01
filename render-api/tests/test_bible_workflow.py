@@ -1,9 +1,10 @@
 import base64
+import importlib.util
 import json
 import sys
 import tempfile
 from pathlib import Path
-from unittest import TestCase, mock
+from unittest import TestCase, mock, skipUnless
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -1048,6 +1049,45 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(plan["regions"][0]["strength"], 1.0)
         self.assertEqual(plan["regions"][0]["box"]["width"], 0.2)
         self.assertEqual(plan["regions"][0]["direction"], "clockwise")
+        self.assertEqual(plan["version"], 2)
+        self.assertEqual(plan["regions"][0]["method"], "generative-region")
+        self.assertFalse(plan["allowFullFrameGeneration"])
+
+    def test_object_vector_plan_derives_a_bounded_displacement(self):
+        plan = bible_workflow._sanitize_motion_plan({
+            "summary": "Move the existing planet downward.",
+            "allowFullFrameGeneration": True,
+            "regions": [{
+                "id": "planet",
+                "label": "Existing planet",
+                "action": "The planet moves down.",
+                "method": "object-vector",
+                "direction": "down",
+                "strength": 1,
+                "box": {"x": 0.04, "y": 0.03, "width": 0.42, "height": 0.52},
+            }],
+        })
+
+        self.assertEqual(plan["regions"][0]["vector"], {"dx": 0.0, "dy": 0.2})
+        self.assertEqual(plan["regions"][0]["easing"], "ease-in-out")
+        self.assertTrue(plan["allowFullFrameGeneration"])
+
+    def test_explicit_planet_instruction_falls_back_to_exact_object_vector(self):
+        plan = bible_workflow._fallback_motion_plan(
+            {
+                "title": "Genesis 1:1",
+                "VO": "In the beginning God created the heaven and the earth.",
+                "timeline": [{"imageGeneration": {"prompt": "A forming planet in a dark cosmos"}}],
+            },
+            1,
+            "The planet begins higher and moves down through the frame.",
+        )
+
+        self.assertEqual(len(plan["regions"]), 1)
+        self.assertEqual(plan["regions"][0]["id"], "planet")
+        self.assertEqual(plan["regions"][0]["method"], "object-vector")
+        self.assertEqual(plan["regions"][0]["vector"]["dy"], 0.2)
+        self.assertFalse(plan["allowFullFrameGeneration"])
 
     def test_cataclysm_fallback_plan_separates_environmental_actions(self):
         plan = bible_workflow._fallback_motion_plan({
@@ -1058,6 +1098,147 @@ class BibleWorkflowTest(TestCase):
 
         self.assertEqual([region["id"] for region in plan["regions"]], ["fire-arc", "forming-terrain", "dust-front"])
         self.assertTrue(plan["lockedBackground"])
+
+    def test_object_vector_route_never_calls_the_model_service(self):
+        session = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"png-data")
+            destination = Path(tmp) / "scene.mp4"
+
+            def prepare_source(_source, prepared):
+                prepared.write_bytes(b"prepared-png")
+
+            def render_vector(_source, _plan, rendered):
+                rendered.write_bytes(b"vector-motion")
+                return {"regions": [{"id": "planet", "dyPixels": 64}], "backgroundInpainted": True}
+
+            plan = bible_workflow._sanitize_motion_plan({
+                "summary": "Move the planet down.",
+                "regions": [{
+                    "id": "planet", "label": "Existing planet", "method": "object-vector",
+                    "direction": "down", "strength": 1,
+                    "box": {"x": 0.04, "y": 0.03, "width": 0.42, "height": 0.52},
+                }],
+            })
+            with mock.patch.object(
+                motion_provider, "_prepare_source_image", side_effect=prepare_source
+            ), mock.patch.object(
+                motion_provider, "_generate_object_vector_clip", side_effect=render_vector
+            ) as render, mock.patch.object(
+                motion_provider, "_measure_source_frame_fidelity", return_value=0.98
+            ), mock.patch.object(
+                motion_provider, "_measure_sequence_integrity", return_value={"meanLumaFrameDifference": 1.8}
+            ), mock.patch.object(motion_provider, "_verify_video"):
+                quality = motion_provider.generate_motion_clip(
+                    still,
+                    destination,
+                    prompt="The planet moves downward.",
+                    negative_prompt="duplicate planet",
+                    motion_plan=plan,
+                    session=session,
+                )
+
+        render.assert_called_once()
+        session.get.assert_not_called()
+        session.post.assert_not_called()
+        self.assertEqual(quality["modelProvider"], motion_provider.OBJECT_VECTOR_PROVIDER)
+        self.assertEqual(quality["controlMode"], "segmented-object-vector-tween")
+        self.assertEqual(quality["modelDenoise"], 0.0)
+        self.assertTrue(quality["semanticIdentityPreserved"])
+        self.assertFalse(quality["fullFrameGeneration"])
+
+    def test_hybrid_route_falls_back_to_exact_object_motion_without_full_frame_generation(self):
+        session = mock.Mock()
+        session.get.return_value = _Response({"system": {"os": "posix"}})
+        session.post.return_value = _Response({})
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"png-data")
+            destination = Path(tmp) / "scene.mp4"
+
+            def prepare_source(_source, prepared):
+                prepared.write_bytes(b"prepared-png")
+
+            def render_vector(_source, _plan, rendered):
+                rendered.write_bytes(b"vector-motion")
+                return {"regions": [{"id": "planet", "dyPixels": 64}], "backgroundInpainted": True}
+
+            plan = bible_workflow._sanitize_motion_plan({
+                "summary": "Move the planet and animate the fire.",
+                "regions": [
+                    {
+                        "id": "planet", "label": "Existing planet", "method": "object-vector",
+                        "direction": "down", "strength": 1,
+                        "box": {"x": 0.04, "y": 0.03, "width": 0.42, "height": 0.52},
+                    },
+                    {
+                        "id": "fire", "label": "Existing fire", "method": "generative-region",
+                        "direction": "right", "strength": 0.4,
+                        "box": {"x": 0.7, "y": 0.1, "width": 0.2, "height": 0.6},
+                    },
+                ],
+            })
+            with mock.patch.object(
+                motion_provider, "_prepare_source_image", side_effect=prepare_source
+            ), mock.patch.object(
+                motion_provider, "_generate_object_vector_clip", side_effect=render_vector
+            ), mock.patch.object(
+                motion_provider, "_generate_region_control_assets",
+                side_effect=motion_provider.MotionProviderError("regional model unavailable"),
+            ), mock.patch.object(
+                motion_provider, "_measure_source_frame_fidelity", return_value=0.98
+            ), mock.patch.object(
+                motion_provider, "_measure_sequence_integrity", return_value={"meanLumaFrameDifference": 1.8}
+            ), mock.patch.object(motion_provider, "_verify_video"), mock.patch.object(
+                motion_provider, "_queue_and_download_workflow"
+            ) as queue:
+                quality = motion_provider.generate_motion_clip(
+                    still,
+                    destination,
+                    prompt="The planet moves downward while fire advances.",
+                    negative_prompt="duplicate planet",
+                    motion_plan=plan,
+                    session=session,
+                )
+            rendered_bytes = destination.read_bytes()
+
+        queue.assert_not_called()
+        self.assertEqual(rendered_bytes, b"vector-motion")
+        self.assertEqual(quality["modelProvider"], motion_provider.OBJECT_VECTOR_PROVIDER)
+        self.assertEqual(quality["fallbackFrom"], "wan2.1-vace-region-control")
+        self.assertEqual(quality["suppressedGenerativeRegionCount"], 1)
+
+    @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
+    def test_object_vector_renderer_moves_one_segmented_object_without_duplication(self):
+        import cv2
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "planet.png"
+            destination = Path(tmp) / "planet.mp4"
+            image = np.zeros((320, 576, 3), dtype=np.uint8)
+            image[:, :, :] = (18, 9, 8)
+            cv2.circle(image, (175, 82), 54, (190, 145, 85), -1, cv2.LINE_AA)
+            cv2.circle(image, (158, 64), 16, (232, 205, 156), -1, cv2.LINE_AA)
+            self.assertTrue(cv2.imwrite(str(source), image))
+            route = motion_provider._generate_object_vector_clip(
+                source,
+                {
+                    "regions": [{
+                        "id": "planet", "label": "Existing planet", "method": "object-vector",
+                        "vector": {"dx": 0.0, "dy": 0.2}, "easing": "ease-in-out",
+                        "box": {"x": 0.18, "y": 0.07, "width": 0.26, "height": 0.34},
+                        "enabled": True,
+                    }],
+                },
+                destination,
+            )
+
+            motion_provider._verify_video(destination)
+
+        self.assertEqual(route["regions"][0]["dyPixels"], 64.0)
+        self.assertTrue(route["backgroundInpainted"])
 
     def test_locked_motion_falls_back_to_svd_after_wan_quality_rejection(self):
         session = mock.Mock()

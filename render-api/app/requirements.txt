@@ -5,6 +5,8 @@ sqlalchemy==2.0.32
 aiofiles==23.2.1
 python-multipart==0.0.9
 requests==2.32.3
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
 azure-cognitiveservices-speech==1.37.0
 google-api-python-client==2.165.0
 google-auth==2.38.0
