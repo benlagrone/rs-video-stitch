@@ -375,7 +375,7 @@ async def scene_motion_plan(
 ) -> SceneMotionPlanResponse:
     try:
         if req.regenerate or not req.motionPlan:
-            plan = await run_in_threadpool(generate_scene_motion_plan, pid, scene_index)
+            plan = await run_in_threadpool(generate_scene_motion_plan, pid, scene_index, req.prompt.strip())
         else:
             plan = await run_in_threadpool(save_scene_motion_plan, pid, scene_index, req.motionPlan)
     except (FileNotFoundError, IndexError, ValueError) as exc:

@@ -611,6 +611,18 @@ def generate_scene_animation_prompt(
 
 MOTION_REGION_EFFECTS = {"drift", "rise", "surge", "roll", "fracture", "radiate", "pulse"}
 MOTION_REGION_DIRECTIONS = {"left", "right", "up", "down", "outward", "clockwise", "counterclockwise", "pulse"}
+MOTION_REGION_METHODS = {"object-vector", "generative-region"}
+MOTION_VECTOR_EASINGS = {"linear", "ease-in", "ease-out", "ease-in-out"}
+
+
+def _default_vector(direction: str, strength: float) -> dict[str, float]:
+    distance = round(0.05 + (strength * 0.15), 3)
+    return {
+        "left": {"dx": -distance, "dy": 0.0},
+        "right": {"dx": distance, "dy": 0.0},
+        "up": {"dx": 0.0, "dy": -distance},
+        "down": {"dx": 0.0, "dy": distance},
+    }.get(direction, {"dx": 0.0, "dy": 0.0})
 
 
 def _sanitize_motion_plan(plan: dict[str, Any], *, source: str = "edited") -> dict[str, Any]:
@@ -629,6 +641,17 @@ def _sanitize_motion_plan(plan: dict[str, Any], *, source: str = "edited") -> di
             continue
         effect = str(item.get("effect") or "drift").lower()
         direction = str(item.get("direction") or "right").lower()
+        method = str(item.get("method") or item.get("renderMode") or "generative-region").lower()
+        vector = item.get("vector") if isinstance(item.get("vector"), dict) else {}
+        try:
+            dx = min(0.5, max(-0.5, float(vector.get("dx", 0.0))))
+            dy = min(0.5, max(-0.5, float(vector.get("dy", 0.0))))
+        except (TypeError, ValueError):
+            dx, dy = 0.0, 0.0
+        if method == "object-vector" and dx == 0.0 and dy == 0.0:
+            default_vector = _default_vector(direction, strength)
+            dx, dy = default_vector["dx"], default_vector["dy"]
+        easing = str(item.get("easing") or "ease-in-out").lower()
         regions.append({
             "id": re.sub(r"[^a-z0-9-]+", "-", str(item.get("id") or f"region-{position + 1}").lower()).strip("-")[:40],
             "label": re.sub(r"\s+", " ", str(item.get("label") or f"Region {position + 1}")).strip()[:80],
@@ -636,29 +659,65 @@ def _sanitize_motion_plan(plan: dict[str, Any], *, source: str = "edited") -> di
             "effect": effect if effect in MOTION_REGION_EFFECTS else "drift",
             "direction": direction if direction in MOTION_REGION_DIRECTIONS else "right",
             "strength": round(strength, 2),
+            "method": method if method in MOTION_REGION_METHODS else "generative-region",
+            "vector": {"dx": round(dx, 3), "dy": round(dy, 3)},
+            "easing": easing if easing in MOTION_VECTOR_EASINGS else "ease-in-out",
             "box": {"x": round(x, 3), "y": round(y, 3), "width": round(width, 3), "height": round(height, 3)},
             "enabled": item.get("enabled") is not False,
         })
     if not regions:
         raise ValueError("A motion plan must contain at least one usable region")
     return {
-        "version": 1,
+        "version": 2,
         "source": source,
         "summary": re.sub(r"\s+", " ", str(plan.get("summary") or "Animate selected scene elements while holding the composition fixed.")).strip()[:320],
         "lockedBackground": plan.get("lockedBackground") is not False,
+        "allowFullFrameGeneration": plan.get("allowFullFrameGeneration") is True,
+        "fallbackMode": "still",
         "regions": regions,
         "updatedAt": time.time(),
     }
 
 
-def _fallback_motion_plan(scene: dict[str, Any], scene_index: int) -> dict[str, Any]:
+def _fallback_motion_plan(
+    scene: dict[str, Any],
+    scene_index: int,
+    motion_instruction: str = "",
+) -> dict[str, Any]:
     timeline = (scene.get("timeline") or [{}])[0]
     image_generation = timeline.get("imageGeneration") or {}
     context = " ".join([
         str(scene.get("title") or ""), str(scene.get("VO") or ""), str(scene.get("action") or ""),
         str(image_generation.get("prompt") or timeline.get("prompt") or ""),
+        motion_instruction,
     ]).lower()
-    if any(word in context for word in ("cataclysm", "planet", "cosmos", "collision", "fractur", "fire", "molten")):
+    explicit_direction = next(
+        (direction for direction in ("down", "up", "left", "right") if direction in motion_instruction.lower()),
+        "",
+    )
+    explicit_subject = next(
+        (subject for subject in ("planet", "moon", "sun", "boat", "bird", "animal", "figure", "person") if subject in motion_instruction.lower()),
+        "",
+    )
+    if explicit_subject and explicit_direction:
+        raw = {
+            "summary": f"Move the existing {explicit_subject} {explicit_direction} along one exact vector while the rest of the frame remains fixed.",
+            "lockedBackground": True,
+            "allowFullFrameGeneration": False,
+            "regions": [{
+                "id": explicit_subject,
+                "label": f"Existing {explicit_subject}",
+                "action": motion_instruction,
+                "effect": "drift",
+                "direction": explicit_direction,
+                "strength": 1.0,
+                "method": "object-vector",
+                "vector": _default_vector(explicit_direction, 1.0),
+                "easing": "ease-in-out",
+                "box": {"x": 0.04, "y": 0.03, "width": 0.42, "height": 0.52},
+            }],
+        }
+    elif any(word in context for word in ("cataclysm", "planet", "cosmos", "collision", "fractur", "fire", "molten")):
         raw = {
             "summary": "Continue the existing cosmic cataclysm through distinct environmental actions while the planet and frame remain stable.",
             "lockedBackground": True,
@@ -689,24 +748,34 @@ def _fallback_motion_plan(scene: dict[str, Any], scene_index: int) -> dict[str, 
     return _sanitize_motion_plan(raw, source="source-prompt+scripture-fallback")
 
 
-def generate_scene_motion_plan(project_id: str, scene_index: int, *, session=requests) -> dict[str, Any]:
+def generate_scene_motion_plan(
+    project_id: str,
+    scene_index: int,
+    motion_instruction: str = "",
+    *,
+    session=requests,
+) -> dict[str, Any]:
     document, scene, _, _ = scene_animation_context(project_id, scene_index)
     state = read_project_state(project_id) or {}
     timeline = (scene.get("timeline") or [{}])[0]
     source_prompt = str((timeline.get("imageGeneration") or {}).get("prompt") or timeline.get("prompt") or "")
     instruction = (
         "Return only valid JSON for an image-to-video motion plan. Use the scripture event and the exact source-image "
-        "prompt to identify 2 to 5 DISTINCT EXISTING visual regions that should move. This is motion art direction, not "
-        "pixel segmentation: give normalized 0..1 bounding boxes. Prefer scenery and physical events over faces or whole "
+        "prompt and requested animation to identify 1 to 5 DISTINCT EXISTING visual regions that should move. Give "
+        "normalized 0..1 bounding boxes around the actual subjects. Prefer scenery and physical events over faces or whole "
         "people. Never invent an object absent from the source prompt. Keep the background, horizon, frame edges, scale, "
-        "and camera locked. Each region needs id, label, action, effect (drift|rise|surge|roll|fracture|radiate|pulse), "
+        "and camera locked. Choose method object-vector for an intact object that translates through the frame, and "
+        "generative-region only for deformable water, fire, smoke, light, terrain, or atmosphere. Each region needs id, "
+        "label, action, method, effect (drift|rise|surge|roll|fracture|radiate|pulse), "
         "direction (left|right|up|down|outward|clockwise|counterclockwise|pulse), strength 0.1..1, enabled true, and "
-        "box {x,y,width,height}. Add a concise summary and lockedBackground true. For a cataclysm, separate fire, terrain, "
-        "dust/debris, and atmosphere rather than moving the whole image. JSON shape: "
-        "{\"summary\":\"...\",\"lockedBackground\":true,\"regions\":[{...}]}.\n\n"
+        "box {x,y,width,height}. Object-vector regions also need vector {dx,dy} as normalized frame displacement and "
+        "easing linear|ease-in|ease-out|ease-in-out. Add a concise summary, lockedBackground true, "
+        "allowFullFrameGeneration false, and fallbackMode still. Never choose full-frame generation merely because a "
+        "regional method is difficult. JSON shape: "
+        "{\"summary\":\"...\",\"lockedBackground\":true,\"allowFullFrameGeneration\":false,\"regions\":[{...}]}.\n\n"
         f"Reference: {scene.get('title')}\nScripture event: {scene.get('VO') or scene.get('description')}\n"
         f"Source-image prompt: {source_prompt}\nTheme: {_theme_instruction(state.get('themeInterpretation'))}\n"
-        f"Existing scene action: {scene.get('action') or ''}"
+        f"Existing scene action: {scene.get('action') or ''}\nRequested animation: {motion_instruction}"
     )
     try:
         response = session.post(
@@ -719,7 +788,7 @@ def generate_scene_motion_plan(project_id: str, scene_index: int, *, session=req
         content = str(payload.get("response") or ((payload.get("message") or {}).get("content") if isinstance(payload.get("message"), dict) else "")).strip()
         plan = _sanitize_motion_plan(json.loads(content), source="source-image-prompt+scripture")
     except (requests.RequestException, json.JSONDecodeError, TypeError, ValueError):
-        plan = _fallback_motion_plan(scene, scene_index)
+        plan = _fallback_motion_plan(scene, scene_index, motion_instruction)
     scene["motionPlan"] = plan
     save_scenes(project_id, json.dumps(document, indent=2), project_name=str((document.get("info") or {}).get("name") or project_id))
     return plan
@@ -821,22 +890,22 @@ def animate_bible_scene(
     log: Log,
 ) -> Path:
     document, scene, still_path, clip_path = scene_animation_context(project_id, scene_index)
-    if motion_plan:
-        scene["motionPlan"] = _sanitize_motion_plan(motion_plan, source="edited")
-    elif not scene.get("motionPlan"):
-        progress("PLANNING_MOTION_REGIONS", 0.08)
-        log(f"Planning controlled motion regions for scene {scene_index}")
-        scene["motionPlan"] = generate_scene_motion_plan(project_id, scene_index)
-        document, scene, still_path, clip_path = scene_animation_context(project_id, scene_index)
     resolved_prompt = re.sub(r"\s+", " ", prompt).strip()
     if not resolved_prompt:
-        progress("WRITING_MOTION_PROMPT", 0.12)
+        progress("WRITING_MOTION_PROMPT", 0.08)
         log(f"Generating a continuity-safe animation prompt for scene {scene_index}")
         resolved_prompt = generate_scene_animation_prompt(
             project_id,
             scene_index,
             camera_behavior=camera_behavior,
         )
+    if motion_plan:
+        scene["motionPlan"] = _sanitize_motion_plan(motion_plan, source="edited")
+    elif not scene.get("motionPlan"):
+        progress("PLANNING_MOTION_REGIONS", 0.12)
+        log(f"Planning controlled motion regions for scene {scene_index}")
+        scene["motionPlan"] = generate_scene_motion_plan(project_id, scene_index, resolved_prompt)
+        document, scene, still_path, clip_path = scene_animation_context(project_id, scene_index)
     resolved_prompt = _enforce_camera_behavior_prompt(resolved_prompt, scene, camera_behavior)
     scene["motionPrompt"] = resolved_prompt
     prior_generation = ((scene.get("timeline") or [{}])[0].get("motionGeneration") or {})

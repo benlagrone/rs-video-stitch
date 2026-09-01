@@ -5,6 +5,7 @@ import json
 import os
 import random
 import re
+import shutil
 import statistics
 import subprocess
 import tempfile
@@ -19,6 +20,7 @@ COMFYUI_MODEL_API_URL = os.getenv("COMFYUI_MODEL_API_URL", "http://100.100.97.30
 COMFYUI_TIMEOUT_SECONDS = float(os.getenv("COMFYUI_TIMEOUT_SECONDS", "7200"))
 COMFYUI_POLL_SECONDS = float(os.getenv("COMFYUI_POLL_SECONDS", "5"))
 WORKFLOW_PATH = Path(__file__).resolve().parent / "workflows" / "wan2_2_ti2v_5b_api.json"
+OBJECT_VECTOR_PROVIDER = "sextant-object-vector-v1"
 FRAME_PROTECTION_WIDTH = 576
 FRAME_PROTECTION_HEIGHT = 320
 FRAME_PROTECTION_X = 69
@@ -256,8 +258,10 @@ def _generate_region_control_assets(
     motion_plan: dict[str, Any],
     control_destination: Path,
     mask_destination: Path,
+    *,
+    control_source: Path | None = None,
 ) -> int:
-    """Create VACE inpaint tracks; planned regions regenerate while the source stays fixed."""
+    """Create VACE inpaint tracks over a fixed still or deterministic object-vector control track."""
     regions = [region for region in motion_plan.get("regions") or [] if region.get("enabled") is not False][:5]
     if not regions:
         raise MotionProviderError("Motion plan has no enabled regions")
@@ -293,9 +297,12 @@ def _generate_region_control_assets(
         "[2:v]format=yuv420p[neutral];"
         "[source][neutral][mask]maskedmerge,format=yuv420p[control]"
     )
+    control_input = ["-i", str(control_source)] if control_source else [
+        "-loop", "1", "-framerate", "16", "-i", str(image_path)
+    ]
     control_command = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-loop", "1", "-framerate", "16",
-        "-i", str(image_path), "-i", str(mask_destination), "-f", "lavfi", "-i",
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *control_input,
+        "-i", str(mask_destination), "-f", "lavfi", "-i",
         f"color=gray:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d=5.0625",
         "-filter_complex", control_graph, "-map", "[control]", "-t", "5.0625", "-r", "16",
         "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", str(control_destination),
@@ -308,7 +315,8 @@ def _generate_region_control_assets(
         raise MotionProviderError(f"Unable to build region-control tracks: {detail[-600:]}") from exc
     if not control_destination.exists() or not mask_destination.exists():
         raise MotionProviderError("Region-control track generation produced no video")
-    _verify_static_control_track(control_destination, "control")
+    if control_source is None:
+        _verify_static_control_track(control_destination, "control")
     _verify_static_control_track(mask_destination, "mask")
     return len(regions)
 
@@ -857,6 +865,183 @@ def _generate_region_environmental_fallback(
     return len(regions)
 
 
+def _object_vector_regions(motion_plan: dict[str, Any] | None) -> list[dict[str, Any]]:
+    return [
+        region
+        for region in (motion_plan or {}).get("regions") or []
+        if region.get("enabled") is not False and region.get("method") == "object-vector"
+    ][:5]
+
+
+def _generative_regions(motion_plan: dict[str, Any] | None) -> list[dict[str, Any]]:
+    return [
+        region
+        for region in (motion_plan or {}).get("regions") or []
+        if region.get("enabled") is not False and region.get("method") != "object-vector"
+    ][:5]
+
+
+def _vector_easing_expression(easing: str, duration: float) -> str:
+    unit = f"(t/{duration})"
+    return {
+        "linear": unit,
+        "ease-in": f"({unit}*{unit})",
+        "ease-out": f"(1-(1-{unit})*(1-{unit}))",
+        "ease-in-out": f"(3*{unit}*{unit}-2*{unit}*{unit}*{unit})",
+    }.get(easing, f"(3*{unit}*{unit}-2*{unit}*{unit}*{unit})")
+
+
+def _generate_object_vector_clip(
+    image_path: Path,
+    motion_plan: dict[str, Any],
+    destination: Path,
+) -> dict[str, Any]:
+    """Segment existing objects, inpaint their old locations, and tween exact vectors.
+
+    This runs deterministic classical vision on Sextant. It does not invoke a
+    generative model, cannot invent subjects, and keeps every unselected pixel
+    fixed. GrabCut turns the planner's bounding boxes into soft object mattes;
+    a scene fails closed when a box cannot produce a credible isolated object.
+    """
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except ImportError as exc:
+        raise MotionProviderError("Object-vector rendering requires the bundled OpenCV runtime") from exc
+
+    regions = _object_vector_regions(motion_plan)
+    if not regions:
+        raise MotionProviderError("Motion plan has no enabled object-vector regions")
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise MotionProviderError("Unable to read the prepared source image for object-vector motion")
+    height, width = image.shape[:2]
+    if (width, height) != (FRAME_PROTECTION_WIDTH, FRAME_PROTECTION_HEIGHT):
+        raise MotionProviderError(
+            f"Object-vector source must be {FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}"
+        )
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp_root = destination.parent / f".{destination.stem}-object-vector-{uuid.uuid4().hex[:8]}"
+    temp_root.mkdir(parents=True, exist_ok=False)
+    union_mask = np.zeros((height, width), dtype=np.uint8)
+    sprite_paths: list[Path] = []
+    route_regions: list[dict[str, Any]] = []
+    try:
+        for index, region in enumerate(regions, start=1):
+            box = region.get("box") or {}
+            x = max(1, min(width - 3, round(float(box.get("x", 0.1)) * width)))
+            y = max(1, min(height - 3, round(float(box.get("y", 0.1)) * height)))
+            box_width = max(12, min(width - x - 1, round(float(box.get("width", 0.35)) * width)))
+            box_height = max(12, min(height - y - 1, round(float(box.get("height", 0.35)) * height)))
+            if box_width < 12 or box_height < 12:
+                raise MotionProviderError(f"Object-vector region {region.get('label') or index} is too small")
+
+            grab_mask = np.zeros((height, width), dtype=np.uint8)
+            background_model = np.zeros((1, 65), np.float64)
+            foreground_model = np.zeros((1, 65), np.float64)
+            try:
+                cv2.grabCut(
+                    image,
+                    grab_mask,
+                    (x, y, box_width, box_height),
+                    background_model,
+                    foreground_model,
+                    5,
+                    cv2.GC_INIT_WITH_RECT,
+                )
+            except cv2.error as exc:
+                raise MotionProviderError(
+                    f"Unable to segment object-vector region {region.get('label') or index}"
+                ) from exc
+            binary = np.where(
+                (grab_mask == cv2.GC_FGD) | (grab_mask == cv2.GC_PR_FGD), 255, 0
+            ).astype(np.uint8)
+            bounded = np.zeros_like(binary)
+            bounded[y:y + box_height, x:x + box_width] = binary[y:y + box_height, x:x + box_width]
+            component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+                (bounded > 0).astype(np.uint8), 8
+            )
+            if component_count <= 1:
+                raise MotionProviderError(
+                    f"Object-vector region {region.get('label') or index} did not isolate an existing object"
+                )
+            largest_label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+            hard_mask = np.where(labels == largest_label, 255, 0).astype(np.uint8)
+            area_ratio = float(np.count_nonzero(hard_mask)) / float(box_width * box_height)
+            if area_ratio < 0.025 or area_ratio > 0.92:
+                raise MotionProviderError(
+                    f"Object-vector region {region.get('label') or index} produced an unsafe matte "
+                    f"({area_ratio:.3f} of its box)"
+                )
+            hard_mask = cv2.morphologyEx(
+                hard_mask, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8), iterations=2
+            )
+            soft_mask = cv2.GaussianBlur(hard_mask, (0, 0), sigmaX=2.4, sigmaY=2.4)
+            union_mask = cv2.max(union_mask, hard_mask)
+            sprite = cv2.cvtColor(image, cv2.COLOR_BGR2BGRA)
+            sprite[:, :, 3] = soft_mask
+            sprite_path = temp_root / f"sprite-{index}.png"
+            if not cv2.imwrite(str(sprite_path), sprite):
+                raise MotionProviderError("Unable to save an object-vector sprite")
+            sprite_paths.append(sprite_path)
+
+            vector = region.get("vector") or {}
+            dx = round(float(vector.get("dx", 0.0)) * width, 3)
+            dy = round(float(vector.get("dy", 0.0)) * height, 3)
+            if abs(dx) < 1.0 and abs(dy) < 1.0:
+                raise MotionProviderError(
+                    f"Object-vector region {region.get('label') or index} has no visible displacement"
+                )
+            route_regions.append({
+                "id": str(region.get("id") or f"region-{index}"),
+                "label": str(region.get("label") or f"Region {index}"),
+                "dxPixels": dx,
+                "dyPixels": dy,
+                "easing": str(region.get("easing") or "ease-in-out"),
+                "matteAreaRatio": round(area_ratio, 4),
+            })
+
+        inpaint_mask = cv2.dilate(union_mask, np.ones((7, 7), dtype=np.uint8), iterations=2)
+        background = cv2.inpaint(image, inpaint_mask, 5, cv2.INPAINT_TELEA)
+        background_path = temp_root / "background.png"
+        if not cv2.imwrite(str(background_path), background):
+            raise MotionProviderError("Unable to save the object-vector background")
+
+        duration = 5.0625
+        command = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+        for source in [background_path, *sprite_paths]:
+            command.extend(["-framerate", "16", "-loop", "1", "-i", str(source)])
+        graph = ["[0:v]format=rgba[base0]"]
+        current = "base0"
+        for index, route in enumerate(route_regions, start=1):
+            easing = _vector_easing_expression(str(route["easing"]), duration)
+            output = f"base{index}"
+            graph.append(
+                f"[{index}:v]format=rgba[sprite{index}];"
+                f"[{current}][sprite{index}]overlay="
+                f"x='{route['dxPixels']}*{easing}':y='{route['dyPixels']}*{easing}':"
+                f"shortest=1:format=auto[{output}]"
+            )
+            current = output
+        graph.append(f"[{current}]format=yuv420p[v]")
+        command.extend([
+            "-filter_complex", ";".join(graph), "-map", "[v]", "-t", str(duration), "-r", "16",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart", str(destination),
+        ])
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            detail = getattr(exc, "stderr", "") or str(exc)
+            raise MotionProviderError(f"Unable to render object-vector motion: {detail[-600:]}") from exc
+        if not destination.exists() or destination.stat().st_size == 0:
+            raise MotionProviderError("Object-vector rendering produced no video")
+        return {"regions": route_regions, "backgroundInpainted": True}
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def generate_motion_clip(
     image_path: Path,
     destination: Path,
@@ -869,11 +1054,51 @@ def generate_motion_clip(
     motion_plan: dict[str, Any] | None = None,
     session=requests,
 ) -> dict[str, Any]:
-    model_health = session.get(f"{COMFYUI_MODEL_API_URL.rstrip('/')}/system_stats", timeout=10)
-    model_health.raise_for_status()
     with tempfile.TemporaryDirectory(prefix="mediastudio-motion-") as temp_dir:
         prepared_source = Path(temp_dir) / f"prepared-{image_path.stem}.png"
         _prepare_source_image(image_path, prepared_source)
+        object_regions = _object_vector_regions(motion_plan)
+        generative_regions = _generative_regions(motion_plan)
+        vector_path: Path | None = None
+        vector_route: dict[str, Any] | None = None
+
+        def validate_object_vector() -> dict[str, Any]:
+            quality: dict[str, Any] = {
+                "status": "accepted",
+                "cameraBehavior": "locked",
+                "sourceSizing": "fit-and-pad-no-crop",
+                "modelProvider": OBJECT_VECTOR_PROVIDER,
+                "providerPolicy": "sextant-deterministic-local",
+                "controlMode": "segmented-object-vector-tween",
+                "modelDenoise": 0.0,
+                "lockedBackground": True,
+                "semanticIdentityPreserved": True,
+                "fullFrameGeneration": False,
+                "motionRegionCount": len(object_regions),
+                "motionPlanSummary": str((motion_plan or {}).get("summary") or "")[:320],
+                "route": vector_route or {},
+                "stabilization": {
+                    "sampleCount": 0,
+                    "p95TranslationPixels": 0.0,
+                    "maxTranslationPixels": 0.0,
+                    "largeCorrectionRatio": 0.0,
+                },
+                "lockedEdgesProtected": True,
+            }
+            quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
+            quality["sequenceIntegrity"] = _measure_sequence_integrity(destination)
+            _verify_video(destination)
+            return quality
+
+        if object_regions:
+            vector_path = Path(temp_dir) / f"vector-{image_path.stem}.mp4"
+            vector_route = _generate_object_vector_clip(prepared_source, motion_plan or {}, vector_path)
+            if not generative_regions:
+                shutil.copy2(vector_path, destination)
+                return validate_object_vector()
+
+        model_health = session.get(f"{COMFYUI_MODEL_API_URL.rstrip('/')}/system_stats", timeout=10)
+        model_health.raise_for_status()
         uploaded_name = _upload_image(session, prepared_source)
         prefix = f"mediastudio/{uuid.uuid4().hex}"
         model_denoise = LOCKED_CAMERA_DENOISE if camera_behavior == "locked" else 1.0
@@ -911,11 +1136,35 @@ def generate_motion_clip(
             _verify_video(destination)
             return quality
 
-        if motion_plan and any(region.get("enabled") is not False for region in motion_plan.get("regions") or []):
+        def add_fallback(
+            quality: dict[str, Any],
+            provider: str | None = None,
+            reason: str | None = None,
+        ) -> dict[str, Any]:
+            providers: list[str] = []
+            reasons: list[str] = []
+            if provider:
+                providers.append(provider)
+            if reason:
+                reasons.append(reason)
+            if providers:
+                quality["fallbackFrom"] = ",".join(providers)
+                quality["fallbackReason"] = "; ".join(reasons)[:500]
+            return quality
+
+        allow_full_frame = not motion_plan or bool((motion_plan or {}).get("allowFullFrameGeneration"))
+        if generative_regions:
+            regional_plan = {**(motion_plan or {}), "regions": generative_regions}
             control_path = Path(temp_dir) / f"control-{image_path.stem}.mp4"
             mask_path = Path(temp_dir) / f"mask-{image_path.stem}.mp4"
             try:
-                region_count = _generate_region_control_assets(prepared_source, motion_plan, control_path, mask_path)
+                region_count = _generate_region_control_assets(
+                    prepared_source,
+                    regional_plan,
+                    control_path,
+                    mask_path,
+                    control_source=vector_path,
+                )
                 control_name = _upload_asset(session, control_path, "video/mp4")
                 mask_name = _upload_asset(session, mask_path, "video/mp4")
                 region_workflow = _vace_region_workflow(
@@ -929,7 +1178,12 @@ def generate_motion_clip(
                 quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
                 quality["controlMode"] = "masked-generative-inpaint"
                 quality["semanticMotionGate"] = "static-control-and-visible-generation"
-                return quality
+                if vector_path:
+                    quality["modelProvider"] = f"{OBJECT_VECTOR_PROVIDER}+wan2.1-vace-region-control"
+                    quality["controlMode"] = "hybrid-object-vector+masked-generative-inpaint"
+                    quality["objectVectorRoute"] = vector_route
+                    quality["fullFrameGeneration"] = False
+                return add_fallback(quality)
             except Exception as exc:  # noqa: BLE001 - provider failures must preserve the existing fallback chain
                 region_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
                 try:
@@ -945,20 +1199,42 @@ def generate_motion_clip(
                     quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
                     quality["controlMode"] = "masked-generative-inpaint"
                     quality["semanticMotionGate"] = "static-control-and-visible-generation"
-                    quality["fallbackFrom"] = "wan2.1-vace-region-control"
-                    quality["fallbackReason"] = str(region_error)[:500]
-                    return quality
+                    if vector_path:
+                        quality["modelProvider"] = f"{OBJECT_VECTOR_PROVIDER}+wan2.1-vace-region-control-restrained"
+                        quality["controlMode"] = "hybrid-object-vector+masked-generative-inpaint"
+                        quality["objectVectorRoute"] = vector_route
+                        quality["fullFrameGeneration"] = False
+                    return add_fallback(
+                        quality,
+                        "wan2.1-vace-region-control",
+                        str(region_error),
+                    )
                 except Exception as restrained_error:  # noqa: BLE001 - retain the existing model fallback ladder
                     region_error = MotionProviderError(
                         f"VACE: {region_error}; restrained VACE: {restrained_error}"
                     )
+        if region_error and vector_path:
+            shutil.copy2(vector_path, destination)
+            quality = validate_object_vector()
+            quality["fallbackFrom"] = "wan2.1-vace-region-control"
+            quality["fallbackReason"] = str(region_error)[:500]
+            quality["suppressedGenerativeRegionCount"] = len(generative_regions)
+            return quality
+        if region_error and not allow_full_frame:
+            raise MotionProviderError(
+                f"Regional animation rejected: {region_error}. Full-frame generation is disabled; "
+                "the approved still was preserved."
+            ) from region_error
         try:
             _queue_and_download_workflow(session, workflow, destination)
             quality = validate_candidate("wan2.2-ti2v-5b", model_denoise)
             if region_error:
-                quality["fallbackFrom"] = "wan2.1-vace-region-control"
-                quality["fallbackReason"] = str(region_error)[:500]
-            return quality
+                return add_fallback(
+                    quality,
+                    "wan2.1-vace-region-control",
+                    str(region_error),
+                )
+            return add_fallback(quality)
         except MotionProviderError as wan_error:
             if camera_behavior != "locked":
                 raise
@@ -975,14 +1251,9 @@ def generate_motion_clip(
                     f"Wan animation rejected: {wan_error}; SVD fallback rejected: {fallback_error}; "
                     "procedural motion is disabled because it is not generative scene animation"
                 ) from fallback_error
-                providers = "wan2.2-ti2v-5b,stable-video-diffusion"
-                reasons = f"Wan: {wan_error}; SVD: {fallback_error}"
-                if region_error:
-                    providers = f"wan2.1-vace-region-control,{providers}"
-                    reasons = f"Region control: {region_error}; {reasons}"
-                quality["fallbackFrom"] = providers
-                quality["fallbackReason"] = reasons[:500]
-                return quality
-            quality["fallbackFrom"] = "wan2.2-ti2v-5b" if not region_error else "wan2.1-vace-region-control,wan2.2-ti2v-5b"
-            quality["fallbackReason"] = (str(wan_error) if not region_error else f"Region control: {region_error}; Wan: {wan_error}")[:500]
-            return quality
+            providers = "wan2.2-ti2v-5b"
+            reasons = f"Wan: {wan_error}"
+            if region_error:
+                providers = f"wan2.1-vace-region-control,{providers}"
+                reasons = f"Region control: {region_error}; {reasons}"
+            return add_fallback(quality, providers, reasons)

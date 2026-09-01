@@ -141,13 +141,15 @@ button { font: inherit; }
 .motion-plan-heading > div:last-child { display: flex; flex-shrink: 0; gap: 6px; }
 .motion-plan-heading small { font-size: 10px; margin: 0; }
 .motion-region-list { display: grid; gap: 6px; }
-.motion-region { align-items: center; border-top: 1px solid var(--line); display: grid; gap: 7px; grid-template-columns: 150px minmax(220px, 1fr) 112px 120px; padding-top: 7px; }
+.motion-region { align-items: end; border-top: 1px solid var(--line); display: grid; gap: 7px; grid-template-columns: 150px minmax(220px, 1fr) repeat(4, minmax(112px, 140px)); padding-top: 7px; }
 .motion-region > input { min-width: 0; text-transform: none; width: 100%; }
 .motion-region select { margin: 0; }
 .motion-region label { align-items: center; display: flex; gap: 6px; margin: 0; text-transform: none; }
 .motion-region-toggle { color: var(--text) !important; }
 .motion-region input[type="checkbox"] { width: auto; }
 .motion-region input[type="range"] { padding: 0; }
+.motion-region input[type="number"] { min-width: 0; width: 100%; }
+.motion-route-policy { color: var(--muted); }
 .scene-animation-error { color: var(--danger) !important; margin-top: 0 !important; }
 .scene-animation-quality { color: #74d3a3 !important; margin-top: 0 !important; }
 .storyboard-empty { color: var(--muted); margin: 14vh auto; max-width: 460px; text-align: center; }
