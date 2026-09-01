@@ -918,12 +918,23 @@ def _generate_background_plate(
     if not ok_image or not ok_mask:
         raise MotionProviderError("Unable to encode the source and mask for background reconstruction")
     object_names = ", ".join(label for label in labels if label) or "masked foreground object"
+    label_text = object_names.lower()
+    if any(token in label_text for token in ("planet", "moon", "sun", "orb", "sphere")):
+        background_subject = (
+            "unobstructed continuation of the existing sky, atmosphere, stars, haze, and distant "
+            "landscape visible immediately around the mask; no celestial body, circle, sphere, orb, moon, or planet"
+        )
+        object_negatives = "planet, moon, sun, orb, sphere, circle, circular silhouette, celestial body"
+    else:
+        background_subject = (
+            "unobstructed continuation of the existing background textures and scenery visible immediately around the mask"
+        )
+        object_negatives = object_names
     prompt = (
-        "Create an empty background plate for this exact image. Reconstruct only the scenery hidden "
-        f"behind the masked {object_names}; remove that object completely. Continue the existing sky, "
-        "terrain, atmosphere, palette, texture, lighting, and art style across the masked area. "
-        "Do not add a subject, planet, person, structure, symbol, text, border, or new focal object. "
-        f"Scene context: {scene_prompt[:900]}"
+        "Create an empty background plate for this exact image. Fill the white mask with "
+        f"{background_subject}. Match the nearest boundary colors, texture, depth, lighting, and art style. "
+        f"Remove the masked {object_names} completely. The filled area must contain background only. "
+        "Do not add any subject, focal object, figure, structure, symbol, text, or border."
     )
     response = session.post(
         BACKGROUND_PLATE_API_URL,
@@ -932,7 +943,7 @@ def _generate_background_plate(
             "mask": base64.b64encode(encoded_mask.tobytes()).decode("ascii"),
             "prompt": prompt,
             "negative_prompt": (
-                f"{negative_prompt}, {object_names}, duplicate object, foreground subject, hard mask edge, "
+                f"{negative_prompt}, {object_negatives}, duplicate object, foreground subject, hard mask edge, "
                 "black hole, circular cutout, seam, text, watermark"
             )[:1800],
             "width": FRAME_PROTECTION_WIDTH,
@@ -940,9 +951,9 @@ def _generate_background_plate(
             "steps": 24,
             "cfg_scale": 6.0,
             "sampler_name": "DPM++ 2M Karras",
-            "denoising_strength": 0.82,
-            "mask_blur": 20,
-            "inpainting_fill": 1,
+            "denoising_strength": 0.92,
+            "mask_blur": 24,
+            "inpainting_fill": 2,
             "inpaint_full_res": False,
             "inpaint_full_res_padding": 48,
         },
