@@ -942,6 +942,29 @@ class BibleWorkflowTest(TestCase):
         )
         self.assertEqual(session.post.return_value.raise_for_status.call_count, 2)
 
+    def test_generated_object_motion_is_confined_to_exact_moving_matte(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vector = Path(tmp) / "vector.mp4"
+            generated = Path(tmp) / "generated.mp4"
+            mask = Path(tmp) / "mask.mp4"
+            destination = Path(tmp) / "result.mp4"
+            for path in (vector, generated, mask):
+                path.write_bytes(b"video")
+
+            def create_result(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"composite")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_result) as run:
+                motion_provider._composite_generated_object_motion(
+                    vector, generated, mask, destination
+                )
+
+        command = run.call_args.args[0]
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("[vector][generated][mask]maskedmerge", graph)
+        self.assertNotIn("crop=", graph)
+
     def test_vace_region_assets_use_static_masked_inpaint_not_moving_crops(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "source.png"
@@ -1140,6 +1163,9 @@ class BibleWorkflowTest(TestCase):
             def extract_keyframe(_video, rendered):
                 rendered.write_bytes(b"end-frame")
 
+            def composite(_vector, generated, _mask, rendered):
+                rendered.write_bytes(generated.read_bytes())
+
             plan = bible_workflow._sanitize_motion_plan({
                 "summary": "Move the planet down.",
                 "regions": [{
@@ -1154,6 +1180,8 @@ class BibleWorkflowTest(TestCase):
                 motion_provider, "_generate_object_vector_clip", side_effect=render_vector
             ) as render, mock.patch.object(
                 motion_provider, "_extract_motion_keyframe", side_effect=extract_keyframe
+            ), mock.patch.object(
+                motion_provider, "_composite_generated_object_motion", side_effect=composite
             ), mock.patch.object(
                 motion_provider, "_generate_region_control_assets", return_value=1
             ) as controls, mock.patch.object(
