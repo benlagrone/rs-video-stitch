@@ -933,6 +933,38 @@ class BibleWorkflowTest(TestCase):
         self.assertNotIn("crop=", control_graph)
         self.assertNotIn("overlay", control_graph)
 
+    def test_vace_object_vector_assets_encode_a_temporal_mask_trajectory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.png"
+            vector = Path(tmp) / "vector.mp4"
+            control = Path(tmp) / "control.mp4"
+            mask = Path(tmp) / "mask.mp4"
+            source.write_bytes(b"source")
+            vector.write_bytes(b"vector")
+
+            def create_asset(command, **_kwargs):
+                if command[-1] != "-":
+                    Path(command[-1]).write_bytes(b"video")
+                return mock.Mock(stdout="lavfi.signalstats.YDIF=0.0\nlavfi.signalstats.YDIF=1.2\n")
+
+            plan = {"regions": [{
+                "label": "Existing planet",
+                "method": "object-vector",
+                "vector": {"dx": 0.0, "dy": 0.34},
+                "easing": "ease-in-out",
+                "box": {"x": 0.13, "y": 0.001, "width": 0.52, "height": 0.5},
+            }]}
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_asset) as run:
+                count = motion_provider._generate_region_control_assets(
+                    source, plan, control, mask, control_source=vector
+                )
+
+        self.assertEqual(count, 1)
+        mask_command = run.call_args_list[0].args[0]
+        mask_filter = mask_command[mask_command.index("-vf") + 1]
+        self.assertIn("T/5.0625", mask_filter)
+        self.assertIn("108.8", mask_filter)
+
     def test_static_control_gate_rejects_temporal_source_patch_motion(self):
         completed = mock.Mock(stdout="\n".join([
             "lavfi.signalstats.YDIF=0.0",
@@ -1011,8 +1043,9 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual([region["id"] for region in plan["regions"]], ["fire-arc", "forming-terrain", "dust-front"])
         self.assertTrue(plan["lockedBackground"])
 
-    def test_object_vector_route_never_calls_the_model_service(self):
+    def test_object_vector_route_uses_tween_as_generative_video_control(self):
         session = mock.Mock()
+        session.get.return_value = _Response({"system": {"os": "posix"}})
         with tempfile.TemporaryDirectory() as tmp:
             still = Path(tmp) / "scene.png"
             still.write_bytes(b"png-data")
@@ -1024,6 +1057,9 @@ class BibleWorkflowTest(TestCase):
             def render_vector(_source, _plan, rendered, **_kwargs):
                 rendered.write_bytes(b"vector-motion")
                 return {"regions": [{"id": "planet", "dyPixels": 64}], "backgroundInpainted": True}
+
+            def render_model(_session, _workflow, rendered):
+                rendered.write_bytes(b"model-motion")
 
             plan = bible_workflow._sanitize_motion_plan({
                 "summary": "Move the planet down.",
@@ -1038,6 +1074,18 @@ class BibleWorkflowTest(TestCase):
             ), mock.patch.object(
                 motion_provider, "_generate_object_vector_clip", side_effect=render_vector
             ) as render, mock.patch.object(
+                motion_provider, "_generate_region_control_assets", return_value=1
+            ) as controls, mock.patch.object(
+                motion_provider, "_upload_image", return_value="source.png"
+            ), mock.patch.object(
+                motion_provider, "_upload_asset", side_effect=["control.mp4", "mask.mp4"]
+            ), mock.patch.object(
+                motion_provider, "_queue_and_download_workflow", side_effect=render_model
+            ) as queue, mock.patch.object(
+                motion_provider, "_stabilize_locked_camera", return_value={"sampleCount": 3}
+            ), mock.patch.object(
+                motion_provider, "_protect_locked_frame_edges"
+            ), mock.patch.object(
                 motion_provider, "_measure_source_frame_fidelity", return_value=0.98
             ), mock.patch.object(
                 motion_provider, "_measure_sequence_integrity", return_value={"meanLumaFrameDifference": 1.8}
@@ -1050,14 +1098,19 @@ class BibleWorkflowTest(TestCase):
                     motion_plan=plan,
                     session=session,
                 )
+            rendered_bytes = destination.read_bytes()
 
         render.assert_called_once()
-        session.get.assert_not_called()
-        session.post.assert_not_called()
-        self.assertEqual(quality["modelProvider"], motion_provider.OBJECT_VECTOR_PROVIDER)
-        self.assertEqual(quality["controlMode"], "segmented-object-vector-tween")
-        self.assertEqual(quality["modelDenoise"], 0.0)
-        self.assertTrue(quality["semanticIdentityPreserved"])
+        controls.assert_called_once()
+        queue.assert_called_once()
+        self.assertEqual(rendered_bytes, b"model-motion")
+        self.assertEqual(
+            quality["modelProvider"],
+            f"{motion_provider.OBJECT_VECTOR_PROVIDER}+wan2.1-vace-tween-control",
+        )
+        self.assertEqual(quality["controlMode"], "tween-guided-generative-video")
+        self.assertEqual(quality["modelDenoise"], 1.0)
+        self.assertEqual(quality["semanticMotionGate"], "dynamic-vector-mask-and-visible-generation")
         self.assertFalse(quality["fullFrameGeneration"])
 
     def test_hybrid_route_falls_back_to_exact_object_motion_without_full_frame_generation(self):
@@ -1118,8 +1171,8 @@ class BibleWorkflowTest(TestCase):
         queue.assert_not_called()
         self.assertEqual(rendered_bytes, b"vector-motion")
         self.assertEqual(quality["modelProvider"], motion_provider.OBJECT_VECTOR_PROVIDER)
-        self.assertEqual(quality["fallbackFrom"], "wan2.1-vace-region-control")
-        self.assertEqual(quality["suppressedGenerativeRegionCount"], 1)
+        self.assertEqual(quality["fallbackFrom"], "wan2.1-vace-tween-control")
+        self.assertEqual(quality["suppressedGenerativeRegionCount"], 2)
 
     @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
     def test_large_background_plate_rejects_regenerated_planets(self):
