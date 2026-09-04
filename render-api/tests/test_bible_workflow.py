@@ -1137,7 +1137,7 @@ class BibleWorkflowTest(TestCase):
         session.post.side_effect = [
             _Response({"images": [generated]}),
             _Response({"caption": "a planet with a moon in the background"}),
-        ] * 6
+        ] * 3
 
         with self.assertRaisesRegex(
             motion_provider.MotionProviderError,
@@ -1152,7 +1152,11 @@ class BibleWorkflowTest(TestCase):
                 session=session,
             )
 
-        self.assertEqual(session.post.call_count, 12)
+        self.assertEqual(session.post.call_count, 6)
+        self.assertTrue(all(
+            call.args[0] == motion_provider.STABLE_DIFFUSION_API_URL
+            for call in session.post.call_args_list[::2]
+        ))
 
     @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
     def test_large_background_plate_falls_back_to_clean_empty_canvas(self):
@@ -1170,9 +1174,6 @@ class BibleWorkflowTest(TestCase):
         empty_encoded = cv2.imencode(".png", empty)[1]
         session = mock.Mock()
         session.post.side_effect = [
-            _Response({"images": [base64.b64encode(planet_encoded.tobytes()).decode("ascii")]}),
-            _Response({"caption": "a planet in a dark sky"}),
-        ] * 3 + [
             _Response({"images": [base64.b64encode(empty_encoded.tobytes()).decode("ascii")]}),
             _Response({"caption": "an empty dark starfield and distant horizon"}),
         ]
@@ -1186,7 +1187,11 @@ class BibleWorkflowTest(TestCase):
             session=session,
         )
 
-        self.assertEqual(session.post.call_count, 8)
+        self.assertEqual(session.post.call_count, 2)
+        self.assertEqual(
+            session.post.call_args_list[0].args[0],
+            motion_provider.STABLE_DIFFUSION_API_URL,
+        )
         self.assertLess(int(plate[82, 175, 0]), 40)
         self.assertGreater(int(plate[250, 500, 0]), 10)
 

@@ -920,7 +920,10 @@ def _generate_background_plate(
         raise MotionProviderError("Unable to encode the source and mask for background reconstruction")
     object_names = ", ".join(label for label in labels if label) or "masked foreground object"
     label_text = object_names.lower()
-    if any(token in label_text for token in ("planet", "moon", "sun", "orb", "sphere")):
+    celestial_object = any(
+        token in label_text for token in ("planet", "moon", "sun", "orb", "sphere")
+    )
+    if celestial_object:
         background_subject = (
             "unobstructed continuation of the existing sky, atmosphere, stars, haze, and distant "
             "landscape visible immediately around the mask; no celestial body, circle, sphere, orb, moon, or planet"
@@ -1024,7 +1027,11 @@ def _generate_background_plate(
         return generated
 
     rejected_captions: list[str] = []
-    for _attempt in range(3):
+    # Image-conditioned inpainting persistently reconstructs round celestial
+    # subjects from their surrounding rim and silhouette. For those subjects,
+    # skip directly to an independently generated empty plate so the removed
+    # body cannot leak through the conditioning image.
+    for _attempt in range(0 if celestial_object else 3):
         payload["seed"] = random.randint(1, 2**31 - 1)
         response = session.post(BACKGROUND_PLATE_API_URL, json=payload, timeout=600)
         response.raise_for_status()
@@ -1053,7 +1060,7 @@ def _generate_background_plate(
         if term:
             style_context = re.sub(rf"\b{re.escape(term)}s?\b", "", style_context, flags=re.IGNORECASE)
     style_context = re.sub(r"\s+", " ", style_context).strip()
-    if any(token in label_text for token in ("planet", "moon", "sun", "orb", "sphere")):
+    if celestial_object:
         empty_background = (
             "empty primordial cosmic background plate, deep starfield, subtle atmospheric haze, "
             "distant barren rocky horizon along the lower edge, background only, no focal subject"
