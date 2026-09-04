@@ -75,6 +75,24 @@ def extract_last_frame(video_path: Path, destination: Path) -> None:
         raise MotionProviderError("Previous scene did not yield a usable final frame")
 
 
+def _extract_motion_keyframe(video_path: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-sseof", "-0.08",
+        "-i", str(video_path), "-frames:v", "1", "-vf",
+        f"scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black",
+        str(destination),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise MotionProviderError(f"Unable to extract the object-vector ending keyframe: {exc}") from exc
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise MotionProviderError("Object-vector tween did not yield an ending keyframe")
+
+
 def _set_path(document: dict[str, Any], dotted_path: str, value: Any) -> None:
     target: Any = document
     parts = dotted_path.split(".")
@@ -238,6 +256,63 @@ def _vace_region_workflow(
         "15": {"class_type": "VAEDecode", "inputs": {"samples": ["14", 0], "vae": ["3", 0]}},
         "16": {"class_type": "CreateVideo", "inputs": {"images": ["15", 0], "fps": 16}},
         "17": {"class_type": "SaveVideo", "inputs": {"video": ["16", 0], "filename_prefix": prefix, "format": "mp4", "codec": "h264"}},
+    }
+
+
+def _ltx_keyframe_workflow(
+    start_image_name: str,
+    end_image_name: str,
+    prompt: str,
+    negative_prompt: str,
+    prefix: str,
+    seed: int,
+) -> dict[str, Any]:
+    """Generate real motion between the deterministic tween's exact endpoint frames."""
+    return {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {
+            "ckpt_name": "ltxv-2b-0.9.8-distilled-fp8.safetensors",
+        }},
+        "2": {"class_type": "LoadImage", "inputs": {"image": start_image_name}},
+        "3": {"class_type": "LoadImage", "inputs": {"image": end_image_name}},
+        "4": {"class_type": "CLIPLoader", "inputs": {
+            "clip_name": "t5xxl_fp16.safetensors", "type": "ltxv", "device": "cpu",
+        }},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["4", 0]}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {
+            "text": negative_prompt, "clip": ["4", 0],
+        }},
+        "7": {"class_type": "LTXVConditioning", "inputs": {
+            "positive": ["5", 0], "negative": ["6", 0], "frame_rate": 16,
+        }},
+        "8": {"class_type": "EmptyLTXVLatentVideo", "inputs": {
+            "width": FRAME_PROTECTION_WIDTH, "height": FRAME_PROTECTION_HEIGHT,
+            # This checkpoint decodes 16 more frames than its latent length.
+            # A 65-frame latent therefore yields the required 81-frame, 5.0625s clip.
+            "length": 65, "batch_size": 1,
+        }},
+        "9": {"class_type": "LTXVAddGuide", "inputs": {
+            "positive": ["7", 0], "negative": ["7", 1], "vae": ["1", 2],
+            "latent": ["8", 0], "image": ["2", 0], "frame_idx": 0, "strength": 1.0,
+        }},
+        "10": {"class_type": "LTXVAddGuide", "inputs": {
+            "positive": ["9", 0], "negative": ["9", 1], "vae": ["1", 2],
+            "latent": ["9", 2], "image": ["3", 0], "frame_idx": 64, "strength": 1.0,
+        }},
+        "11": {"class_type": "ModelSamplingLTXV", "inputs": {
+            "model": ["1", 0], "max_shift": 2.05, "base_shift": 0.95, "latent": ["10", 2],
+        }},
+        "12": {"class_type": "KSampler", "inputs": {
+            "model": ["11", 0], "seed": seed, "steps": 20, "cfg": 3.0,
+            "sampler_name": "euler", "scheduler": "normal", "positive": ["10", 0],
+            "negative": ["10", 1], "latent_image": ["10", 2], "denoise": 1.0,
+        }},
+        "13": {"class_type": "VAEDecode", "inputs": {
+            "samples": ["12", 0], "vae": ["1", 2],
+        }},
+        "14": {"class_type": "CreateVideo", "inputs": {"images": ["13", 0], "fps": 16}},
+        "15": {"class_type": "SaveVideo", "inputs": {
+            "video": ["14", 0], "filename_prefix": prefix, "format": "mp4", "codec": "h264",
+        }},
     }
 
 
@@ -579,7 +654,43 @@ def _measure_source_frame_fidelity(image_path: Path, video_path: Path) -> float:
         stats_path.unlink(missing_ok=True)
 
 
-def _measure_sequence_integrity(video_path: Path) -> dict[str, float | int]:
+def _measure_end_frame_fidelity(image_path: Path, video_path: Path) -> float:
+    stats_path = video_path.with_name(f"{video_path.stem}.end-ssim.log")
+    filter_graph = (
+        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black[s];"
+        f"[1:v]select='eq(n,0)',setpts=N/FRAME_RATE/TB[v];[s][v]ssim=stats_file={stats_path}"
+    )
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-loop", "1", "-i", str(image_path),
+        "-sseof", "-0.08", "-i", str(video_path), "-filter_complex", filter_graph,
+        "-frames:v", "1", "-f", "null", "-",
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        content = stats_path.read_text(encoding="utf-8", errors="replace")
+        match = re.search(r"All:([0-9.]+)", content)
+        if not match:
+            raise MotionProviderError("Unable to measure final-keyframe fidelity")
+        score = float(match.group(1))
+        if score < SOURCE_FRAME_MIN_SSIM:
+            raise MotionProviderError(
+                f"Animation rejected for final-keyframe drift: ending SSIM {score:.3f} "
+                f"is below {SOURCE_FRAME_MIN_SSIM:.3f}"
+            )
+        return round(score, 4)
+    except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
+        raise MotionProviderError(f"Unable to validate final-keyframe fidelity: {exc}") from exc
+    finally:
+        stats_path.unlink(missing_ok=True)
+
+
+def _measure_sequence_integrity(
+    video_path: Path,
+    *,
+    ignored_tile_boxes: list[dict[str, float]] | None = None,
+) -> dict[str, float | int]:
     stats_path = video_path.with_name(f"{video_path.stem}.signalstats.log")
     command = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(video_path),
@@ -639,7 +750,7 @@ def _measure_sequence_integrity(video_path: Path) -> dict[str, float | int]:
                 f"mean luma-frame difference {metrics['meanLumaFrameDifference']:.2f} is below "
                 f"{SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE:.2f}"
             )
-        metrics.update(_measure_edge_tile_integrity(video_path))
+        metrics.update(_measure_edge_tile_integrity(video_path, ignored_tile_boxes=ignored_tile_boxes))
         return metrics
     except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
         raise MotionProviderError(f"Unable to validate animation sequence integrity: {exc}") from exc
@@ -657,10 +768,32 @@ def _verify_visible_generative_motion(metrics: dict[str, float | int]) -> None:
         )
 
 
-def _measure_edge_tile_integrity(video_path: Path) -> dict[str, float | int]:
+def _measure_edge_tile_integrity(
+    video_path: Path,
+    *,
+    ignored_tile_boxes: list[dict[str, float]] | None = None,
+) -> dict[str, float | int]:
     # Localized model corruption can hide inside healthy whole-frame averages. Sample every
     # 4x4 tile so central generation failures are caught as well as edge artifacts.
-    tiles = [(row, column) for row in range(4) for column in range(4)]
+    def intersects_ignored_box(row: int, column: int) -> bool:
+        tile_left, tile_top = column / 4, row / 4
+        tile_right, tile_bottom = (column + 1) / 4, (row + 1) / 4
+        return any(
+            tile_left < float(box.get("x", 0.0)) + float(box.get("width", 0.0))
+            and tile_right > float(box.get("x", 0.0))
+            and tile_top < float(box.get("y", 0.0)) + float(box.get("height", 0.0))
+            and tile_bottom > float(box.get("y", 0.0))
+            for box in ignored_tile_boxes or []
+        )
+
+    tiles = [
+        (row, column)
+        for row in range(4)
+        for column in range(4)
+        if not intersects_ignored_box(row, column)
+    ]
+    if not tiles:
+        raise MotionProviderError("Motion corridor leaves no fixed-background tiles for validation")
     worst_saturation_jump = 0.0
     worst_luma_difference = 0.0
     worst_tile = ""
@@ -927,6 +1060,31 @@ def _generative_regions(motion_plan: dict[str, Any] | None) -> list[dict[str, An
         for region in (motion_plan or {}).get("regions") or []
         if region.get("enabled") is not False and region.get("method") != "object-vector"
     ][:5]
+
+
+def _object_vector_motion_corridors(motion_plan: dict[str, Any] | None) -> list[dict[str, float]]:
+    """Return swept object bounds so fixed-background QA does not flag intended motion."""
+    corridors: list[dict[str, float]] = []
+    for region in _object_vector_regions(motion_plan):
+        box = region.get("box") or {}
+        vector = region.get("vector") or {}
+        x = float(box.get("x", 0.0))
+        y = float(box.get("y", 0.0))
+        width = float(box.get("width", 0.0))
+        height = float(box.get("height", 0.0))
+        dx = float(vector.get("dx", 0.0))
+        dy = float(vector.get("dy", 0.0))
+        left = max(0.0, min(x, x + dx))
+        top = max(0.0, min(y, y + dy))
+        right = min(1.0, max(x + width, x + dx + width))
+        bottom = min(1.0, max(y + height, y + dy + height))
+        corridors.append({
+            "x": left,
+            "y": top,
+            "width": max(0.0, right - left),
+            "height": max(0.0, bottom - top),
+        })
+    return corridors
 
 
 def _vector_easing_expression(easing: str, duration: float, variable: str = "t") -> str:
@@ -1494,6 +1652,76 @@ def generate_motion_clip(
             for region in (motion_plan or {}).get("regions") or []
             if region.get("enabled") is not False
         ] if vector_path else generative_regions
+        keyframe_error: MotionProviderError | None = None
+        if vector_path and not generative_regions:
+            end_keyframe = Path(temp_dir) / f"end-{image_path.stem}.png"
+            try:
+                _extract_motion_keyframe(vector_path, end_keyframe)
+                end_image_name = _upload_image(session, end_keyframe)
+                actions = " ".join(
+                    str(region.get("action") or "").strip()
+                    for region in object_regions
+                    if str(region.get("action") or "").strip()
+                )
+                keyframe_prompt = (
+                    f"{prompt} The supplied first and final frames are mandatory trajectory keyframes. "
+                    "Generate coherent physical motion between them: preserve the same subject identity and "
+                    "shape while its visible surface, atmosphere, light, and material move naturally. "
+                    f"Keep the camera and all background scenery fixed. {actions}"
+                )[:2800]
+                keyframe_negative_prompt = (
+                    f"{negative_prompt}, cutout, collage, sprite, duplicate subject, trailing copy, "
+                    "moving crop, rectangular patch, matte seam, dissolve, transparency, ghost image, "
+                    "camera movement, zoom, shake, black splotch, color corruption"
+                )[:2200]
+                keyframe_workflow = _ltx_keyframe_workflow(
+                    uploaded_name,
+                    end_image_name,
+                    keyframe_prompt,
+                    keyframe_negative_prompt,
+                    f"{prefix}-ltx-keyframe",
+                    effective_seed ^ 0x4C5458,
+                )
+                _queue_and_download_workflow(session, keyframe_workflow, destination)
+                stabilization: dict[str, Any] = {
+                    "sampleCount": 0,
+                    "p95TranslationPixels": 0.0,
+                    "maxTranslationPixels": 0.0,
+                    "largeCorrectionRatio": 0.0,
+                }
+                if camera_behavior == "locked":
+                    stabilization = _stabilize_locked_camera(destination)
+                    _protect_locked_frame_edges(prepared_source, destination)
+                sequence_integrity = _measure_sequence_integrity(
+                    destination,
+                    ignored_tile_boxes=_object_vector_motion_corridors(motion_plan),
+                )
+                _verify_visible_generative_motion(sequence_integrity)
+                quality = {
+                    "status": "accepted",
+                    "cameraBehavior": camera_behavior,
+                    "sourceSizing": "fit-and-pad-no-crop",
+                    "modelProvider": f"{OBJECT_VECTOR_PROVIDER}+ltxv-2b-keyframe",
+                    "providerPolicy": "phronesis-local-model-via-sextant-orchestration",
+                    "controlMode": "tween-endpoint-guided-generative-video",
+                    "modelDenoise": 1.0,
+                    "lockedBackground": bool((motion_plan or {}).get("lockedBackground", True)),
+                    "semanticIdentityPreserved": True,
+                    "fullFrameGeneration": False,
+                    "motionRegionCount": len(object_regions),
+                    "motionPlanSummary": str((motion_plan or {}).get("summary") or "")[:320],
+                    "objectVectorRoute": vector_route,
+                    "semanticMotionGate": "start-end-keyframes-and-fixed-background-tiles",
+                    "stabilization": stabilization,
+                    "lockedEdgesProtected": camera_behavior == "locked",
+                    "sourceFrameSsim": _measure_source_frame_fidelity(prepared_source, destination),
+                    "endFrameSsim": _measure_end_frame_fidelity(end_keyframe, destination),
+                    "sequenceIntegrity": sequence_integrity,
+                }
+                _verify_video(destination)
+                return quality
+            except Exception as exc:  # noqa: BLE001 - continue through the controlled fallback ladder
+                keyframe_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
         if guided_regions:
             regional_plan = {**(motion_plan or {}), "regions": guided_regions}
             control_path = Path(temp_dir) / f"control-{image_path.stem}.mp4"
@@ -1582,8 +1810,13 @@ def generate_motion_clip(
         if region_error and vector_path:
             shutil.copy2(vector_path, destination)
             quality = validate_object_vector()
-            quality["fallbackFrom"] = "wan2.1-vace-tween-control"
-            quality["fallbackReason"] = str(region_error)[:500]
+            providers = ["wan2.1-vace-tween-control"]
+            reasons = [str(region_error)]
+            if keyframe_error:
+                providers.insert(0, "ltxv-2b-keyframe")
+                reasons.insert(0, f"LTX keyframe: {keyframe_error}")
+            quality["fallbackFrom"] = ",".join(providers)
+            quality["fallbackReason"] = "; ".join(reasons)[:500]
             quality["suppressedGenerativeRegionCount"] = len(guided_regions)
             return quality
         if region_error and not allow_full_frame:

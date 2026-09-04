@@ -904,6 +904,19 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["12"]["inputs"]["strength"], 1.0)
         self.assertEqual(workflow["14"]["inputs"]["seed"], 42)
 
+    def test_ltx_keyframe_workflow_uses_tween_start_and_end_guides(self):
+        workflow = motion_provider._ltx_keyframe_workflow(
+            "start.png", "end.png", "planet descends", "no duplicate", "test/ltx", 42
+        )
+
+        self.assertEqual(workflow["1"]["inputs"]["ckpt_name"], "ltxv-2b-0.9.8-distilled-fp8.safetensors")
+        self.assertEqual(workflow["2"]["inputs"]["image"], "start.png")
+        self.assertEqual(workflow["3"]["inputs"]["image"], "end.png")
+        self.assertEqual(workflow["8"]["inputs"]["length"], 65)
+        self.assertEqual(workflow["9"]["inputs"]["frame_idx"], 0)
+        self.assertEqual(workflow["10"]["inputs"]["frame_idx"], 64)
+        self.assertEqual(workflow["12"]["inputs"]["seed"], 42)
+
     def test_shared_gpu_handoff_unloads_each_model_service_between_phases(self):
         session = mock.Mock()
 
@@ -1106,7 +1119,7 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual([region["id"] for region in plan["regions"]], ["fire-arc", "forming-terrain", "dust-front"])
         self.assertTrue(plan["lockedBackground"])
 
-    def test_object_vector_route_uses_tween_as_generative_video_control(self):
+    def test_object_vector_route_uses_tween_endpoints_as_generative_video_control(self):
         session = mock.Mock()
         session.get.return_value = _Response({"system": {"os": "posix"}})
         with tempfile.TemporaryDirectory() as tmp:
@@ -1124,6 +1137,9 @@ class BibleWorkflowTest(TestCase):
             def render_model(_session, _workflow, rendered):
                 rendered.write_bytes(b"model-motion")
 
+            def extract_keyframe(_video, rendered):
+                rendered.write_bytes(b"end-frame")
+
             plan = bible_workflow._sanitize_motion_plan({
                 "summary": "Move the planet down.",
                 "regions": [{
@@ -1137,6 +1153,8 @@ class BibleWorkflowTest(TestCase):
             ), mock.patch.object(
                 motion_provider, "_generate_object_vector_clip", side_effect=render_vector
             ) as render, mock.patch.object(
+                motion_provider, "_extract_motion_keyframe", side_effect=extract_keyframe
+            ), mock.patch.object(
                 motion_provider, "_generate_region_control_assets", return_value=1
             ) as controls, mock.patch.object(
                 motion_provider, "_upload_image", return_value="source.png"
@@ -1151,6 +1169,8 @@ class BibleWorkflowTest(TestCase):
             ), mock.patch.object(
                 motion_provider, "_measure_source_frame_fidelity", return_value=0.98
             ), mock.patch.object(
+                motion_provider, "_measure_end_frame_fidelity", return_value=0.97
+            ), mock.patch.object(
                 motion_provider, "_measure_sequence_integrity", return_value={"meanLumaFrameDifference": 1.8}
             ), mock.patch.object(motion_provider, "_verify_video"):
                 quality = motion_provider.generate_motion_clip(
@@ -1164,19 +1184,17 @@ class BibleWorkflowTest(TestCase):
             rendered_bytes = destination.read_bytes()
 
         render.assert_called_once()
-        controls.assert_called_once()
-        guidance_mask = render.call_args.kwargs["guidance_mask_destination"]
-        self.assertIsNotNone(guidance_mask)
-        self.assertEqual(controls.call_args.kwargs["mask_source"], guidance_mask)
+        controls.assert_not_called()
         queue.assert_called_once()
         self.assertEqual(rendered_bytes, b"model-motion")
         self.assertEqual(
             quality["modelProvider"],
-            f"{motion_provider.OBJECT_VECTOR_PROVIDER}+wan2.1-vace-tween-control",
+            f"{motion_provider.OBJECT_VECTOR_PROVIDER}+ltxv-2b-keyframe",
         )
-        self.assertEqual(quality["controlMode"], "tween-guided-generative-video")
+        self.assertEqual(quality["controlMode"], "tween-endpoint-guided-generative-video")
         self.assertEqual(quality["modelDenoise"], 1.0)
-        self.assertEqual(quality["semanticMotionGate"], "dynamic-vector-mask-and-visible-generation")
+        self.assertEqual(quality["semanticMotionGate"], "start-end-keyframes-and-fixed-background-tiles")
+        self.assertEqual(quality["endFrameSsim"], 0.97)
         self.assertFalse(quality["fullFrameGeneration"])
 
     def test_hybrid_route_falls_back_to_exact_object_motion_without_full_frame_generation(self):
@@ -1253,10 +1271,14 @@ class BibleWorkflowTest(TestCase):
         self.assertTrue(ok)
         generated = base64.b64encode(encoded.tobytes()).decode("ascii")
         session = mock.Mock()
-        session.post.side_effect = [
-            _Response({"images": [generated]}),
-            _Response({"caption": "a planet with a moon in the background"}),
-        ] * 3
+        session.post.side_effect = [_Response({})] + [
+            item
+            for _attempt in range(3)
+            for item in (
+                _Response({"images": [generated]}),
+                _Response({"caption": "a planet with a moon in the background"}),
+            )
+        ]
 
         with self.assertRaisesRegex(
             motion_provider.MotionProviderError,
@@ -1271,10 +1293,11 @@ class BibleWorkflowTest(TestCase):
                 session=session,
             )
 
-        self.assertEqual(session.post.call_count, 6)
+        self.assertEqual(session.post.call_count, 7)
+        self.assertTrue(session.post.call_args_list[0].args[0].endswith("/free"))
         self.assertTrue(all(
             call.args[0] == motion_provider.STABLE_DIFFUSION_API_URL
-            for call in session.post.call_args_list[::2]
+            for call in session.post.call_args_list[1::2]
         ))
 
     @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
@@ -1293,6 +1316,7 @@ class BibleWorkflowTest(TestCase):
         empty_encoded = cv2.imencode(".png", empty)[1]
         session = mock.Mock()
         session.post.side_effect = [
+            _Response({}),
             _Response({"images": [base64.b64encode(empty_encoded.tobytes()).decode("ascii")]}),
             _Response({"caption": "an empty dark starfield and distant horizon"}),
         ]
