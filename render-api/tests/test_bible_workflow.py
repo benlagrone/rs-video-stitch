@@ -904,6 +904,31 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["12"]["inputs"]["strength"], 1.0)
         self.assertEqual(workflow["14"]["inputs"]["seed"], 42)
 
+    def test_shared_gpu_handoff_unloads_each_model_service_between_phases(self):
+        session = mock.Mock()
+
+        motion_provider._release_comfyui_gpu_memory(session)
+        motion_provider._release_stable_diffusion_gpu_memory(session)
+
+        self.assertEqual(
+            session.post.call_args_list[0],
+            mock.call(
+                f"{motion_provider.COMFYUI_MODEL_API_URL.rstrip('/')}/free",
+                json={"unload_models": True, "free_memory": True},
+                timeout=60,
+            ),
+        )
+        self.assertEqual(
+            session.post.call_args_list[1],
+            mock.call(
+                motion_provider.STABLE_DIFFUSION_API_URL.replace(
+                    "/txt2img", "/unload-checkpoint"
+                ),
+                timeout=60,
+            ),
+        )
+        self.assertEqual(session.post.return_value.raise_for_status.call_count, 2)
+
     def test_vace_region_assets_use_static_masked_inpaint_not_moving_crops(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "source.png"

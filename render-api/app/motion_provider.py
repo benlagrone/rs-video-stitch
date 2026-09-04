@@ -939,6 +939,25 @@ def _vector_easing_expression(easing: str, duration: float, variable: str = "t")
     }.get(easing, f"(3*{unit}*{unit}-2*{unit}*{unit}*{unit})")
 
 
+def _release_comfyui_gpu_memory(session=requests) -> None:
+    """Unload retained video models before Stable Diffusion uses the shared Phronesis GPU."""
+    response = session.post(
+        f"{COMFYUI_MODEL_API_URL.rstrip('/')}/free",
+        json={"unload_models": True, "free_memory": True},
+        timeout=60,
+    )
+    response.raise_for_status()
+
+
+def _release_stable_diffusion_gpu_memory(session=requests) -> None:
+    """Unload the image checkpoint before ComfyUI begins the video synthesis phase."""
+    response = session.post(
+        STABLE_DIFFUSION_API_URL.replace("/txt2img", "/unload-checkpoint"),
+        timeout=60,
+    )
+    response.raise_for_status()
+
+
 def _generate_background_plate(
     image,
     object_mask,
@@ -955,6 +974,7 @@ def _generate_background_plate(
     except ImportError as exc:
         raise MotionProviderError("Background-plate generation requires the bundled OpenCV runtime") from exc
 
+    _release_comfyui_gpu_memory(session)
     expanded_mask = cv2.dilate(object_mask, np.ones((11, 11), dtype=np.uint8), iterations=2)
     ok_image, encoded_image = cv2.imencode(".png", image)
     ok_mask, encoded_mask = cv2.imencode(".png", expanded_mask)
@@ -1411,6 +1431,7 @@ def generate_motion_clip(
                 guidance_mask_destination=vector_mask_path,
                 session=session,
             )
+            _release_stable_diffusion_gpu_memory(session)
 
         model_health = session.get(f"{COMFYUI_MODEL_API_URL.rstrip('/')}/system_stats", timeout=10)
         model_health.raise_for_status()
