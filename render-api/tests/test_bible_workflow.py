@@ -1137,7 +1137,7 @@ class BibleWorkflowTest(TestCase):
         session.post.side_effect = [
             _Response({"images": [generated]}),
             _Response({"caption": "a planet with a moon in the background"}),
-        ] * 3
+        ] * 6
 
         with self.assertRaisesRegex(
             motion_provider.MotionProviderError,
@@ -1152,7 +1152,43 @@ class BibleWorkflowTest(TestCase):
                 session=session,
             )
 
-        self.assertEqual(session.post.call_count, 6)
+        self.assertEqual(session.post.call_count, 12)
+
+    @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
+    def test_large_background_plate_falls_back_to_clean_empty_canvas(self):
+        import cv2
+        import numpy as np
+
+        image = np.zeros((320, 576, 3), dtype=np.uint8)
+        image[:, :, :] = (18, 9, 8)
+        cv2.circle(image, (175, 82), 70, (190, 145, 85), -1, cv2.LINE_AA)
+        mask = np.zeros((320, 576), dtype=np.uint8)
+        cv2.circle(mask, (175, 82), 72, 255, -1, cv2.LINE_AA)
+        planet_encoded = cv2.imencode(".png", image)[1]
+        empty = np.zeros_like(image)
+        empty[:, :, :] = (24, 12, 10)
+        empty_encoded = cv2.imencode(".png", empty)[1]
+        session = mock.Mock()
+        session.post.side_effect = [
+            _Response({"images": [base64.b64encode(planet_encoded.tobytes()).decode("ascii")]}),
+            _Response({"caption": "a planet in a dark sky"}),
+        ] * 3 + [
+            _Response({"images": [base64.b64encode(empty_encoded.tobytes()).decode("ascii")]}),
+            _Response({"caption": "an empty dark starfield and distant horizon"}),
+        ]
+
+        plate = motion_provider._generate_background_plate(
+            image,
+            mask,
+            labels=["Existing planet"],
+            scene_prompt="Byzantine inspired visual treatment with a gold-leaf palette.",
+            negative_prompt="duplicate planet",
+            session=session,
+        )
+
+        self.assertEqual(session.post.call_count, 8)
+        self.assertLess(int(plate[82, 175, 0]), 40)
+        self.assertGreater(int(plate[250, 500, 0]), 10)
 
     @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
     def test_object_vector_renderer_moves_one_segmented_object_without_duplication(self):

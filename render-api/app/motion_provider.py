@@ -976,37 +976,26 @@ def _generate_background_plate(
 
     blend_mask = cv2.GaussianBlur(expanded_mask, (0, 0), sigmaX=10.0, sigmaY=10.0)
     alpha = (blend_mask.astype(np.float32) / 255.0)[:, :, None]
-    rejected_captions: list[str] = []
-    for _attempt in range(3):
-        payload["seed"] = random.randint(1, 2**31 - 1)
-        response = session.post(BACKGROUND_PLATE_API_URL, json=payload, timeout=600)
-        response.raise_for_status()
-        images = response.json().get("images") or []
-        if not images:
-            raise MotionProviderError("Background reconstruction returned no image")
-        try:
-            decoded = base64.b64decode(str(images[0]).split(",")[-1])
-            generated = cv2.imdecode(np.frombuffer(decoded, dtype=np.uint8), cv2.IMREAD_COLOR)
-        except (ValueError, TypeError) as exc:
-            raise MotionProviderError("Background reconstruction returned an invalid image") from exc
-        if generated is None:
-            raise MotionProviderError("Background reconstruction returned an unreadable image")
-        if generated.shape[:2] != image.shape[:2]:
-            generated = cv2.resize(
-                generated, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LANCZOS4
-            )
-        candidate = np.clip(
-            (generated.astype(np.float32) * alpha) + (image.astype(np.float32) * (1.0 - alpha)),
-            0,
-            255,
-        ).astype(np.uint8)
-        ok_candidate, encoded_candidate = cv2.imencode(".png", candidate)
-        if not ok_candidate:
-            raise MotionProviderError("Unable to validate the reconstructed background plate")
+
+    def validate_generated_fill(generated) -> str:
+        """Describe only the pixels replacing the object, not the preserved scene."""
+        x, y, width, height = cv2.boundingRect(expanded_mask)
+        crop = generated[y:y + height, x:x + width].copy()
+        crop_mask = expanded_mask[y:y + height, x:x + width]
+        inside = crop_mask > 0
+        if not np.any(inside):
+            raise MotionProviderError("Background validation mask was empty")
+        outside = ~inside
+        if np.any(outside):
+            neutral = np.median(crop[inside], axis=0).astype(np.uint8)
+            crop[outside] = neutral
+        ok_crop, encoded_crop = cv2.imencode(".png", crop)
+        if not ok_crop:
+            raise MotionProviderError("Unable to encode the reconstructed background region")
         interrogation = session.post(
             IMAGE_INTERROGATE_API_URL,
             json={
-                "image": base64.b64encode(encoded_candidate.tobytes()).decode("ascii"),
+                "image": base64.b64encode(encoded_crop.tobytes()).decode("ascii"),
                 "model": "clip",
             },
             timeout=300,
@@ -1015,9 +1004,88 @@ def _generate_background_plate(
         caption = str(interrogation.json().get("caption") or "").strip().lower()
         if not caption:
             raise MotionProviderError("Background semantic validation returned no caption")
+        return caption
+
+    def decode_generated(response, failure_prefix: str):
+        images = response.json().get("images") or []
+        if not images:
+            raise MotionProviderError(f"{failure_prefix} returned no image")
+        try:
+            decoded = base64.b64decode(str(images[0]).split(",")[-1])
+            generated = cv2.imdecode(np.frombuffer(decoded, dtype=np.uint8), cv2.IMREAD_COLOR)
+        except (ValueError, TypeError) as exc:
+            raise MotionProviderError(f"{failure_prefix} returned an invalid image") from exc
+        if generated is None:
+            raise MotionProviderError(f"{failure_prefix} returned an unreadable image")
+        if generated.shape[:2] != image.shape[:2]:
+            generated = cv2.resize(
+                generated, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LANCZOS4
+            )
+        return generated
+
+    rejected_captions: list[str] = []
+    for _attempt in range(3):
+        payload["seed"] = random.randint(1, 2**31 - 1)
+        response = session.post(BACKGROUND_PLATE_API_URL, json=payload, timeout=600)
+        response.raise_for_status()
+        generated = decode_generated(response, "Background reconstruction")
+        candidate = np.clip(
+            (generated.astype(np.float32) * alpha) + (image.astype(np.float32) * (1.0 - alpha)),
+            0,
+            255,
+        ).astype(np.uint8)
+        caption = validate_generated_fill(generated)
         matches = sorted(term for term in forbidden if term in caption)
         if not matches:
             return candidate
+        rejected_captions.append(caption[:240])
+
+    style_sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", scene_prompt)
+        if any(
+            cue in sentence.lower()
+            for cue in ("art treatment", "visual treatment", "art style", "palette", "texture", "lighting")
+        )
+    ]
+    style_context = " ".join(style_sentences)[:600]
+    for term in sorted(forbidden | {label_text}, key=len, reverse=True):
+        if term:
+            style_context = re.sub(rf"\b{re.escape(term)}s?\b", "", style_context, flags=re.IGNORECASE)
+    style_context = re.sub(r"\s+", " ", style_context).strip()
+    if any(token in label_text for token in ("planet", "moon", "sun", "orb", "sphere")):
+        empty_background = (
+            "empty primordial cosmic background plate, deep starfield, subtle atmospheric haze, "
+            "distant barren rocky horizon along the lower edge, background only, no focal subject"
+        )
+    else:
+        empty_background = (
+            "empty unobstructed background plate matching the surrounding setting, depth, palette, "
+            "texture, and light direction, background only, no focal subject"
+        )
+    canvas_payload = {
+        "prompt": f"{empty_background}. {style_context}"[:1800],
+        "negative_prompt": payload["negative_prompt"],
+        "width": FRAME_PROTECTION_WIDTH,
+        "height": FRAME_PROTECTION_HEIGHT,
+        "steps": 24,
+        "cfg_scale": 7.0,
+        "sampler_name": "DPM++ 2M Karras",
+    }
+    for _attempt in range(3):
+        canvas_payload["seed"] = random.randint(1, 2**31 - 1)
+        response = session.post(STABLE_DIFFUSION_API_URL, json=canvas_payload, timeout=600)
+        response.raise_for_status()
+        generated = decode_generated(response, "Empty background generation")
+        caption = validate_generated_fill(generated)
+        matches = sorted(term for term in forbidden if term in caption)
+        if not matches:
+            return np.clip(
+                (generated.astype(np.float32) * alpha)
+                + (image.astype(np.float32) * (1.0 - alpha)),
+                0,
+                255,
+            ).astype(np.uint8)
         rejected_captions.append(caption[:240])
     raise MotionProviderError(
         "Background plate rejected because the removed object remained or was regenerated: "
