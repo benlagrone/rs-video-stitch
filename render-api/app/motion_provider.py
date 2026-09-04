@@ -272,6 +272,7 @@ def _generate_region_control_assets(
     if not regions:
         raise MotionProviderError("Motion plan has no enabled regions")
     mask_terms = []
+    has_temporal_mask = False
     for region in regions:
         box = region.get("box") or {}
         x = max(0, min(FRAME_PROTECTION_WIDTH - 24, round(float(box.get("x", 0.1)) * FRAME_PROTECTION_WIDTH)))
@@ -279,6 +280,16 @@ def _generate_region_control_assets(
         width = max(24, min(FRAME_PROTECTION_WIDTH - x, round(float(box.get("width", 0.35)) * FRAME_PROTECTION_WIDTH)))
         height = max(24, min(FRAME_PROTECTION_HEIGHT - y, round(float(box.get("height", 0.35)) * FRAME_PROTECTION_HEIGHT)))
         center_x, center_y = x + (width / 2), y + (height / 2)
+        if control_source and region.get("method") == "object-vector":
+            vector = region.get("vector") or {}
+            dx = round(float(vector.get("dx", 0.0)) * FRAME_PROTECTION_WIDTH, 3)
+            dy = round(float(vector.get("dy", 0.0)) * FRAME_PROTECTION_HEIGHT, 3)
+            easing = _vector_easing_expression(
+                str(region.get("easing") or "ease-in-out"), 5.0625, "T"
+            )
+            center_x = f"({center_x}+({dx})*({easing}))"
+            center_y = f"({center_y}+({dy})*({easing}))"
+            has_temporal_mask = has_temporal_mask or abs(dx) >= 1.0 or abs(dy) >= 1.0
         spread_x, spread_y = max(18, width / 2.8), max(18, height / 2.8)
         mask_terms.append(
             f"255*exp(-(((X-{center_x})*(X-{center_x})/(2*{spread_x}*{spread_x}))"
@@ -323,7 +334,10 @@ def _generate_region_control_assets(
         raise MotionProviderError("Region-control track generation produced no video")
     if control_source is None:
         _verify_static_control_track(control_destination, "control")
-    _verify_static_control_track(mask_destination, "mask")
+    if has_temporal_mask:
+        _verify_temporal_control_track(mask_destination, "mask")
+    else:
+        _verify_static_control_track(mask_destination, "mask")
     return len(regions)
 
 
@@ -348,6 +362,25 @@ def _verify_static_control_track(path: Path, label: str) -> None:
         raise MotionProviderError(
             f"VACE {label} track contains temporal image movement; translated source patches are prohibited"
         )
+
+
+def _verify_temporal_control_track(path: Path, label: str) -> None:
+    """Require an object-vector mask to carry a measurable trajectory."""
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+        "-vf", "signalstats,metadata=print:file=-", "-f", "null", "-",
+    ]
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise MotionProviderError(f"Unable to validate the VACE {label} trajectory: {exc}") from exc
+    frame_differences = [
+        float(line.split("=", 1)[1])
+        for line in completed.stdout.splitlines()
+        if line.startswith("lavfi.signalstats.YDIF=")
+    ]
+    if not frame_differences or max(frame_differences) <= 0.05:
+        raise MotionProviderError(f"VACE {label} trajectory contains no measurable movement")
 
 
 def _wait_for_output(session, prompt_id: str) -> dict:
@@ -887,8 +920,8 @@ def _generative_regions(motion_plan: dict[str, Any] | None) -> list[dict[str, An
     ][:5]
 
 
-def _vector_easing_expression(easing: str, duration: float) -> str:
-    unit = f"(t/{duration})"
+def _vector_easing_expression(easing: str, duration: float, variable: str = "t") -> str:
+    unit = f"({variable}/{duration})"
     return {
         "linear": unit,
         "ease-in": f"({unit}*{unit})",
@@ -1333,9 +1366,6 @@ def generate_motion_clip(
                 negative_prompt=negative_prompt,
                 session=session,
             )
-            if not generative_regions:
-                shutil.copy2(vector_path, destination)
-                return validate_object_vector()
 
         model_health = session.get(f"{COMFYUI_MODEL_API_URL.rstrip('/')}/system_stats", timeout=10)
         model_health.raise_for_status()
@@ -1371,7 +1401,7 @@ def generate_motion_clip(
                 quality["decorativeFrameProtected"] = True
             quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
             quality["sequenceIntegrity"] = _measure_sequence_integrity(destination)
-            if provider.startswith("wan2.1-vace-region-control"):
+            if provider.startswith("wan2.1-vace-"):
                 _verify_visible_generative_motion(quality["sequenceIntegrity"])
             _verify_video(destination)
             return quality
@@ -1393,8 +1423,13 @@ def generate_motion_clip(
             return quality
 
         allow_full_frame = not motion_plan or bool((motion_plan or {}).get("allowFullFrameGeneration"))
-        if generative_regions:
-            regional_plan = {**(motion_plan or {}), "regions": generative_regions}
+        guided_regions = [
+            region
+            for region in (motion_plan or {}).get("regions") or []
+            if region.get("enabled") is not False
+        ] if vector_path else generative_regions
+        if guided_regions:
+            regional_plan = {**(motion_plan or {}), "regions": guided_regions}
             control_path = Path(temp_dir) / f"control-{image_path.stem}.mp4"
             mask_path = Path(temp_dir) / f"mask-{image_path.stem}.mp4"
             try:
@@ -1407,20 +1442,39 @@ def generate_motion_clip(
                 )
                 control_name = _upload_asset(session, control_path, "video/mp4")
                 mask_name = _upload_asset(session, mask_path, "video/mp4")
+                region_prompt = prompt
+                region_negative_prompt = negative_prompt
+                if vector_path:
+                    actions = " ".join(
+                        str(region.get("action") or "").strip()
+                        for region in object_regions
+                        if str(region.get("action") or "").strip()
+                    )
+                    region_prompt = (
+                        f"{prompt} Motion trajectory control: follow the supplied moving mask exactly. "
+                        f"Resynthesize the moving subject as coherent natural footage at every frame; "
+                        f"the tween supplies position only and must not look like a pasted or cropped layer. {actions}"
+                    )[:2800]
+                    region_negative_prompt = (
+                        f"{negative_prompt}, pasted cutout, collage edge, moving crop, rectangular patch, "
+                        "sprite, paper cutout, doubled subject, duplicate object, trailing copy, matte seam"
+                    )[:2200]
                 region_workflow = _vace_region_workflow(
-                    uploaded_name, control_name, mask_name, prompt, negative_prompt,
+                    uploaded_name, control_name, mask_name, region_prompt, region_negative_prompt,
                     f"{prefix}-region-control", effective_seed,
                 )
                 _queue_and_download_workflow(session, region_workflow, destination)
-                quality = validate_candidate("wan2.1-vace-region-control", 1.0)
+                provider = "wan2.1-vace-tween-control" if vector_path else "wan2.1-vace-region-control"
+                quality = validate_candidate(provider, 1.0)
                 quality["motionRegionCount"] = region_count
                 quality["motionPlanSummary"] = str(motion_plan.get("summary") or "")[:320]
                 quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
                 quality["controlMode"] = "masked-generative-inpaint"
                 quality["semanticMotionGate"] = "static-control-and-visible-generation"
                 if vector_path:
-                    quality["modelProvider"] = f"{OBJECT_VECTOR_PROVIDER}+wan2.1-vace-region-control"
-                    quality["controlMode"] = "hybrid-object-vector+masked-generative-inpaint"
+                    quality["modelProvider"] = f"{OBJECT_VECTOR_PROVIDER}+wan2.1-vace-tween-control"
+                    quality["controlMode"] = "tween-guided-generative-video"
+                    quality["semanticMotionGate"] = "dynamic-vector-mask-and-visible-generation"
                     quality["objectVectorRoute"] = vector_route
                     quality["fullFrameGeneration"] = False
                 return add_fallback(quality)
@@ -1428,20 +1482,25 @@ def generate_motion_clip(
                 region_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
                 try:
                     restrained_workflow = _vace_region_workflow(
-                        uploaded_name, control_name, mask_name, prompt, negative_prompt,
+                        uploaded_name, control_name, mask_name, region_prompt, region_negative_prompt,
                         f"{prefix}-region-control-restrained", effective_seed ^ 0x13A7,
                         strength=0.72,
                     )
                     _queue_and_download_workflow(session, restrained_workflow, destination)
-                    quality = validate_candidate("wan2.1-vace-region-control-restrained", 1.0)
+                    provider = (
+                        "wan2.1-vace-tween-control-restrained"
+                        if vector_path else "wan2.1-vace-region-control-restrained"
+                    )
+                    quality = validate_candidate(provider, 1.0)
                     quality["motionRegionCount"] = region_count
                     quality["motionPlanSummary"] = str(motion_plan.get("summary") or "")[:320]
                     quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
                     quality["controlMode"] = "masked-generative-inpaint"
                     quality["semanticMotionGate"] = "static-control-and-visible-generation"
                     if vector_path:
-                        quality["modelProvider"] = f"{OBJECT_VECTOR_PROVIDER}+wan2.1-vace-region-control-restrained"
-                        quality["controlMode"] = "hybrid-object-vector+masked-generative-inpaint"
+                        quality["modelProvider"] = f"{OBJECT_VECTOR_PROVIDER}+wan2.1-vace-tween-control-restrained"
+                        quality["controlMode"] = "tween-guided-generative-video"
+                        quality["semanticMotionGate"] = "dynamic-vector-mask-and-visible-generation"
                         quality["objectVectorRoute"] = vector_route
                         quality["fullFrameGeneration"] = False
                     return add_fallback(
@@ -1456,9 +1515,9 @@ def generate_motion_clip(
         if region_error and vector_path:
             shutil.copy2(vector_path, destination)
             quality = validate_object_vector()
-            quality["fallbackFrom"] = "wan2.1-vace-region-control"
+            quality["fallbackFrom"] = "wan2.1-vace-tween-control"
             quality["fallbackReason"] = str(region_error)[:500]
-            quality["suppressedGenerativeRegionCount"] = len(generative_regions)
+            quality["suppressedGenerativeRegionCount"] = len(guided_regions)
             return quality
         if region_error and not allow_full_frame:
             raise MotionProviderError(
