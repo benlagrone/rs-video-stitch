@@ -1525,6 +1525,35 @@ def _generate_object_vector_clip(
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def _composite_generated_object_motion(
+    vector_path: Path,
+    generated_path: Path,
+    moving_mask_path: Path,
+    destination: Path,
+) -> None:
+    """Keep generated motion only inside the exact tweened object silhouette."""
+    filter_graph = (
+        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[vector];"
+        f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[generated];"
+        f"[2:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gray,boxblur=2:1[mask];"
+        "[vector][generated][mask]maskedmerge,format=yuv420p[v]"
+    )
+    command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(vector_path), "-i", str(generated_path), "-i", str(moving_mask_path),
+        "-filter_complex", filter_graph, "-map", "[v]", "-t", "5.0625", "-r", "16",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart", str(destination),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        raise MotionProviderError(f"Unable to composite generated object motion: {detail[-600:]}") from exc
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise MotionProviderError("Generated object-motion composite produced no video")
+
+
 def generate_motion_clip(
     image_path: Path,
     destination: Path,
@@ -1655,6 +1684,7 @@ def generate_motion_clip(
         keyframe_error: MotionProviderError | None = None
         if vector_path and not generative_regions:
             end_keyframe = Path(temp_dir) / f"end-{image_path.stem}.png"
+            generated_keyframe_video = Path(temp_dir) / f"generated-{image_path.stem}.mp4"
             try:
                 _extract_motion_keyframe(vector_path, end_keyframe)
                 end_image_name = _upload_image(session, end_keyframe)
@@ -1682,7 +1712,15 @@ def generate_motion_clip(
                     f"{prefix}-ltx-keyframe",
                     effective_seed ^ 0x4C5458,
                 )
-                _queue_and_download_workflow(session, keyframe_workflow, destination)
+                _queue_and_download_workflow(session, keyframe_workflow, generated_keyframe_video)
+                if not vector_mask_path:
+                    raise MotionProviderError("Object-vector keyframe generation requires an exact moving matte")
+                _composite_generated_object_motion(
+                    vector_path,
+                    generated_keyframe_video,
+                    vector_mask_path,
+                    destination,
+                )
                 stabilization: dict[str, Any] = {
                     "sampleCount": 0,
                     "p95TranslationPixels": 0.0,
