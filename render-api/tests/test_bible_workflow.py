@@ -965,6 +965,44 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("T/5.0625", mask_filter)
         self.assertIn("108.8", mask_filter)
 
+    def test_vace_object_vector_assets_use_supplied_exact_matte(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.png"
+            vector = Path(tmp) / "vector.mp4"
+            exact_matte = Path(tmp) / "exact-matte.mp4"
+            control = Path(tmp) / "control.mp4"
+            mask = Path(tmp) / "mask.mp4"
+            source.write_bytes(b"source")
+            vector.write_bytes(b"vector")
+            exact_matte.write_bytes(b"matte")
+
+            def create_asset(command, **_kwargs):
+                if command[-1] != "-":
+                    Path(command[-1]).write_bytes(b"video")
+                return mock.Mock(stdout="lavfi.signalstats.YDIF=0.0\nlavfi.signalstats.YDIF=1.2\n")
+
+            plan = {"regions": [{
+                "label": "Existing planet",
+                "method": "object-vector",
+                "vector": {"dx": 0.0, "dy": 0.34},
+                "easing": "ease-in-out",
+                "box": {"x": 0.13, "y": 0.001, "width": 0.52, "height": 0.5},
+            }]}
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_asset) as run:
+                count = motion_provider._generate_region_control_assets(
+                    source,
+                    plan,
+                    control,
+                    mask,
+                    control_source=vector,
+                    mask_source=exact_matte,
+                )
+
+        self.assertEqual(count, 1)
+        mask_command = run.call_args_list[0].args[0]
+        self.assertEqual(mask_command[mask_command.index("-i") + 1], str(exact_matte))
+        self.assertNotIn("-vf", mask_command)
+
     def test_static_control_gate_rejects_temporal_source_patch_motion(self):
         completed = mock.Mock(stdout="\n".join([
             "lavfi.signalstats.YDIF=0.0",
@@ -1102,6 +1140,9 @@ class BibleWorkflowTest(TestCase):
 
         render.assert_called_once()
         controls.assert_called_once()
+        guidance_mask = render.call_args.kwargs["guidance_mask_destination"]
+        self.assertIsNotNone(guidance_mask)
+        self.assertEqual(controls.call_args.kwargs["mask_source"], guidance_mask)
         queue.assert_called_once()
         self.assertEqual(rendered_bytes, b"model-motion")
         self.assertEqual(
@@ -1256,6 +1297,7 @@ class BibleWorkflowTest(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "planet.png"
             destination = Path(tmp) / "planet.mp4"
+            guidance_mask = Path(tmp) / "planet-mask.mp4"
             image = np.zeros((320, 576, 3), dtype=np.uint8)
             image[:, :, :] = (18, 9, 8)
             cv2.circle(image, (175, 82), 54, (190, 145, 85), -1, cv2.LINE_AA)
@@ -1272,12 +1314,15 @@ class BibleWorkflowTest(TestCase):
                     }],
                 },
                 destination,
+                guidance_mask_destination=guidance_mask,
             )
 
             motion_provider._verify_video(destination)
+            motion_provider._verify_video(guidance_mask)
 
         self.assertEqual(route["regions"][0]["dyPixels"], 64.0)
         self.assertTrue(route["backgroundInpainted"])
+        self.assertTrue(guidance_mask.exists())
 
     def test_locked_motion_falls_back_to_svd_after_wan_quality_rejection(self):
         session = mock.Mock()

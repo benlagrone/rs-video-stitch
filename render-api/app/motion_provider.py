@@ -266,6 +266,7 @@ def _generate_region_control_assets(
     mask_destination: Path,
     *,
     control_source: Path | None = None,
+    mask_source: Path | None = None,
 ) -> int:
     """Create VACE inpaint tracks over a fixed still or deterministic object-vector control track."""
     regions = [region for region in motion_plan.get("regions") or [] if region.get("enabled") is not False][:5]
@@ -299,12 +300,20 @@ def _generate_region_control_assets(
     for term in mask_terms[1:]:
         mask_expression = f"max({mask_expression},{term})"
     mask_filter = f"format=gray,geq=lum='{mask_expression}',boxblur=8:1,format=yuv420p"
-    mask_command = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-        f"color=black:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d=5.0625",
-        "-vf", mask_filter, "-t", "5.0625", "-r", "16", "-c:v", "libx264", "-preset", "fast",
-        "-crf", "12", "-pix_fmt", "yuv420p", str(mask_destination),
-    ]
+    if mask_source:
+        mask_command = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(mask_source),
+            "-t", "5.0625", "-r", "16", "-c:v", "libx264", "-preset", "fast",
+            "-crf", "12", "-pix_fmt", "yuv420p", str(mask_destination),
+        ]
+        has_temporal_mask = True
+    else:
+        mask_command = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+            f"color=black:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d=5.0625",
+            "-vf", mask_filter, "-t", "5.0625", "-r", "16", "-c:v", "libx264", "-preset", "fast",
+            "-crf", "12", "-pix_fmt", "yuv420p", str(mask_destination),
+        ]
     control_graph = (
         f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
         "force_original_aspect_ratio=decrease:force_divisible_by=2,"
@@ -1140,6 +1149,7 @@ def _generate_object_vector_clip(
     *,
     scene_prompt: str = "",
     negative_prompt: str = "",
+    guidance_mask_destination: Path | None = None,
     session=requests,
 ) -> dict[str, Any]:
     """Segment existing objects, inpaint their old locations, and tween exact vectors.
@@ -1172,6 +1182,7 @@ def _generate_object_vector_clip(
     temp_root.mkdir(parents=True, exist_ok=False)
     union_mask = np.zeros((height, width), dtype=np.uint8)
     sprite_paths: list[Path] = []
+    mask_paths: list[Path] = []
     route_regions: list[dict[str, Any]] = []
     region_labels: list[str] = []
     try:
@@ -1232,6 +1243,10 @@ def _generate_object_vector_clip(
             if not cv2.imwrite(str(sprite_path), sprite):
                 raise MotionProviderError("Unable to save an object-vector sprite")
             sprite_paths.append(sprite_path)
+            mask_path = temp_root / f"mask-{index}.png"
+            if not cv2.imwrite(str(mask_path), soft_mask):
+                raise MotionProviderError("Unable to save an object-vector guidance matte")
+            mask_paths.append(mask_path)
             region_labels.append(str(region.get("label") or f"Region {index}"))
 
             vector = region.get("vector") or {}
@@ -1298,6 +1313,30 @@ def _generate_object_vector_clip(
             raise MotionProviderError(f"Unable to render object-vector motion: {detail[-600:]}") from exc
         if not destination.exists() or destination.stat().st_size == 0:
             raise MotionProviderError("Object-vector rendering produced no video")
+        if guidance_mask_destination and len(mask_paths) == 1:
+            route = route_regions[0]
+            easing = _vector_easing_expression(str(route["easing"]), duration)
+            mask_command = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i",
+                f"color=black:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d={duration}",
+                "-framerate", "16", "-loop", "1", "-i", str(mask_paths[0]),
+                "-filter_complex",
+                f"[0:v]format=gray[base];[1:v]format=gray[matte];"
+                f"[base][matte]overlay=x='{route['dxPixels']}*{easing}':"
+                f"y='{route['dyPixels']}*{easing}':shortest=1,format=yuv420p[v]",
+                "-map", "[v]", "-t", str(duration), "-r", "16", "-c:v", "libx264",
+                "-preset", "fast", "-crf", "12", "-pix_fmt", "yuv420p",
+                str(guidance_mask_destination),
+            ]
+            try:
+                subprocess.run(mask_command, check=True, capture_output=True, text=True)
+            except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+                detail = getattr(exc, "stderr", "") or str(exc)
+                raise MotionProviderError(
+                    f"Unable to render object-vector guidance matte: {detail[-600:]}"
+                ) from exc
+            _verify_temporal_control_track(guidance_mask_destination, "object matte")
         return {
             "regions": route_regions,
             "backgroundInpainted": True,
@@ -1326,6 +1365,7 @@ def generate_motion_clip(
         object_regions = _object_vector_regions(motion_plan)
         generative_regions = _generative_regions(motion_plan)
         vector_path: Path | None = None
+        vector_mask_path: Path | None = None
         vector_route: dict[str, Any] | None = None
 
         def validate_object_vector() -> dict[str, Any]:
@@ -1358,12 +1398,17 @@ def generate_motion_clip(
 
         if object_regions:
             vector_path = Path(temp_dir) / f"vector-{image_path.stem}.mp4"
+            vector_mask_path = (
+                Path(temp_dir) / f"vector-mask-{image_path.stem}.mp4"
+                if len(object_regions) == 1 else None
+            )
             vector_route = _generate_object_vector_clip(
                 prepared_source,
                 motion_plan or {},
                 vector_path,
                 scene_prompt=prompt,
                 negative_prompt=negative_prompt,
+                guidance_mask_destination=vector_mask_path,
                 session=session,
             )
 
@@ -1439,6 +1484,7 @@ def generate_motion_clip(
                     control_path,
                     mask_path,
                     control_source=vector_path,
+                    mask_source=(vector_mask_path if vector_path and not generative_regions else None),
                 )
                 control_name = _upload_asset(session, control_path, "video/mp4")
                 mask_name = _upload_asset(session, mask_path, "video/mp4")
