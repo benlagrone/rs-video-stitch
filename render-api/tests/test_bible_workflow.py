@@ -962,7 +962,7 @@ class BibleWorkflowTest(TestCase):
 
         command = run.call_args.args[0]
         graph = command[command.index("-filter_complex") + 1]
-        self.assertIn("[generated][vector][mask]maskedmerge", graph)
+        self.assertIn("[vector][generated][mask]maskedmerge", graph)
         self.assertNotIn("boxblur", graph)
         self.assertNotIn("crop=", graph)
 
@@ -1462,7 +1462,7 @@ class BibleWorkflowTest(TestCase):
 
         self.assertEqual(
             route["backgroundMode"],
-            "deterministic-multiscale-celestial-inpaint",
+            "validated-local-empty-celestial-plate",
         )
 
     def test_locked_motion_falls_back_to_svd_after_wan_quality_rejection(self):
@@ -1833,7 +1833,7 @@ class BibleWorkflowTest(TestCase):
             self.assertEqual(video.read_bytes(), b"protected-motion")
             command = run.call_args.args[0]
             filter_graph = command[command.index("-filter_complex") + 1]
-            self.assertIn("[still][motion][mask]maskedmerge", filter_graph)
+            self.assertIn("[motion][still][mask]maskedmerge", filter_graph)
             self.assertNotIn("alphamerge", filter_graph)
             self.assertNotIn("overlay", filter_graph)
             self.assertIn("lutrgb=r=255:g=255:b=255", filter_graph)
@@ -1858,7 +1858,7 @@ class BibleWorkflowTest(TestCase):
             filter_graph = command[command.index("-filter_complex") + 1]
             self.assertIn("drawbox=x=24:y=24", filter_graph)
             self.assertIn("boxblur=6", filter_graph)
-            self.assertIn("[still][motion][mask]maskedmerge", filter_graph)
+            self.assertIn("[motion][still][mask]maskedmerge", filter_graph)
             self.assertNotIn("crop", filter_graph)
             self.assertNotIn("overlay", filter_graph)
             self.assertIn("-loop", command)

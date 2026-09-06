@@ -872,7 +872,7 @@ def _protect_decorative_frame(image_path: Path, video_path: Path) -> None:
         "[masksource]lutrgb=r=255:g=255:b=255,"
         f"drawbox=x={FRAME_PROTECTION_X}:y={FRAME_PROTECTION_Y}:w={inner_width}:h={inner_height}:"
         f"color=black:t=fill,boxblur={FRAME_PROTECTION_FEATHER}[mask];"
-        "[still][motion][mask]maskedmerge[merged];[merged]format=yuv420p[v]"
+        "[motion][still][mask]maskedmerge[merged];[merged]format=yuv420p[v]"
     )
     command = [
         "ffmpeg", "-y", "-i", str(video_path), "-i", str(image_path),
@@ -900,7 +900,7 @@ def _protect_locked_frame_edges(image_path: Path, video_path: Path) -> None:
         f"color=white:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT},format=gray,"
         f"drawbox=x={inset}:y={inset}:w={FRAME_PROTECTION_WIDTH - (inset * 2)}:"
         f"h={FRAME_PROTECTION_HEIGHT - (inset * 2)}:color=black:t=fill,boxblur={LOCKED_EDGE_FEATHER}[mask];"
-        "[still][motion][mask]maskedmerge,format=yuv420p[v]"
+        "[motion][still][mask]maskedmerge,format=yuv420p[v]"
     )
     command = [
         "ffmpeg", "-y", "-i", str(video_path), "-loop", "1", "-i", str(image_path),
@@ -1203,7 +1203,21 @@ def _generate_background_plate(
             if token not in {"existing", "foreground", "object", "region"}
         )
 
-    blend_mask = cv2.GaussianBlur(expanded_mask, (0, 0), sigmaX=10.0, sigmaY=10.0)
+    if celestial_object:
+        # A large independently generated empty plate needs a broad transition
+        # into the preserved scenery. Keep the complete removal mask opaque so
+        # no trace of the old celestial body can bleed back into the plate.
+        transition_mask = cv2.dilate(
+            expanded_mask,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (61, 61)),
+            iterations=1,
+        )
+        blend_mask = cv2.GaussianBlur(
+            transition_mask, (0, 0), sigmaX=24.0, sigmaY=24.0
+        )
+        blend_mask = cv2.max(blend_mask, expanded_mask)
+    else:
+        blend_mask = cv2.GaussianBlur(expanded_mask, (0, 0), sigmaX=10.0, sigmaY=10.0)
     alpha = (blend_mask.astype(np.float32) / 255.0)[:, :, None]
 
     def validate_generated_fill(generated) -> str:
@@ -1564,8 +1578,15 @@ def _generate_object_vector_clip(
             for token in ("planet", "moon", "sun", "orb", "sphere")
         )
         if occlusion_ratio >= 0.10 and celestial_object:
-            background = _deterministic_background_plate(image, background_removal_mask)
-            background_mode = "deterministic-multiscale-celestial-inpaint"
+            background = _generate_background_plate(
+                image,
+                background_removal_mask,
+                labels=region_labels,
+                scene_prompt=scene_prompt,
+                negative_prompt=negative_prompt,
+                session=session,
+            )
+            background_mode = "validated-local-empty-celestial-plate"
         elif occlusion_ratio >= 0.10:
             background = _generate_background_plate(
                 image,
@@ -1688,7 +1709,7 @@ def _composite_generated_object_motion(
         f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[vector];"
         f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[generated];"
         f"[2:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gray[mask];"
-        "[generated][vector][mask]maskedmerge,format=yuv420p[v]"
+        "[vector][generated][mask]maskedmerge,format=yuv420p[v]"
     )
     command = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
