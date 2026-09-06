@@ -1322,6 +1322,36 @@ def _generate_background_plate(
     )
 
 
+def _deterministic_background_plate(image, object_mask):
+    """Remove a large foreground object without allowing a model to invent a replacement."""
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except ImportError as exc:
+        raise MotionProviderError("Deterministic background reconstruction requires OpenCV") from exc
+
+    expanded_mask = cv2.dilate(object_mask, np.ones((11, 11), dtype=np.uint8), iterations=2)
+    full_resolution = cv2.inpaint(image, expanded_mask, 15, cv2.INPAINT_TELEA)
+    half_size = (max(2, image.shape[1] // 2), max(2, image.shape[0] // 2))
+    half_image = cv2.resize(image, half_size, interpolation=cv2.INTER_AREA)
+    half_mask = cv2.resize(expanded_mask, half_size, interpolation=cv2.INTER_NEAREST)
+    broad_fill = cv2.inpaint(half_image, half_mask, 11, cv2.INPAINT_NS)
+    broad_fill = cv2.resize(
+        broad_fill,
+        (image.shape[1], image.shape[0]),
+        interpolation=cv2.INTER_CUBIC,
+    )
+    reconstructed = cv2.addWeighted(full_resolution, 0.65, broad_fill, 0.35, 0.0)
+    blend_mask = cv2.GaussianBlur(expanded_mask, (0, 0), sigmaX=10.0, sigmaY=10.0)
+    alpha = (blend_mask.astype(np.float32) / 255.0)[:, :, None]
+    return np.clip(
+        (reconstructed.astype(np.float32) * alpha)
+        + (image.astype(np.float32) * (1.0 - alpha)),
+        0,
+        255,
+    ).astype(np.uint8)
+
+
 def _generate_object_vector_clip(
     image_path: Path,
     motion_plan: dict[str, Any],
@@ -1467,7 +1497,14 @@ def _generate_object_vector_clip(
             })
 
         occlusion_ratio = float(np.count_nonzero(union_mask)) / float(width * height)
-        if occlusion_ratio >= 0.10:
+        celestial_object = any(
+            token in " ".join(region_labels).lower()
+            for token in ("planet", "moon", "sun", "orb", "sphere")
+        )
+        if occlusion_ratio >= 0.10 and celestial_object:
+            background = _deterministic_background_plate(image, union_mask)
+            background_mode = "deterministic-multiscale-celestial-inpaint"
+        elif occlusion_ratio >= 0.10:
             background = _generate_background_plate(
                 image,
                 union_mask,

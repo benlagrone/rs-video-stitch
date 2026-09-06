@@ -1371,6 +1371,25 @@ class BibleWorkflowTest(TestCase):
         self.assertGreater(int(plate[250, 500, 0]), 10)
 
     @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
+    def test_deterministic_background_plate_cannot_regenerate_removed_planet(self):
+        import cv2
+        import numpy as np
+
+        image = np.zeros((320, 576, 3), dtype=np.uint8)
+        image[:, :, :] = (18, 9, 8)
+        cv2.circle(image, (175, 82), 70, (190, 145, 85), -1, cv2.LINE_AA)
+        mask = np.zeros((320, 576), dtype=np.uint8)
+        cv2.circle(mask, (175, 82), 70, 255, -1, cv2.LINE_AA)
+
+        plate = motion_provider._deterministic_background_plate(image, mask)
+
+        source_difference = np.mean(
+            np.abs(plate[mask > 0].astype(np.float32) - image[mask > 0].astype(np.float32))
+        )
+        self.assertGreater(source_difference, 40.0)
+        self.assertLess(float(np.mean(plate[mask > 0])), 45.0)
+
+    @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
     def test_object_vector_renderer_moves_one_segmented_object_without_duplication(self):
         import cv2
         import numpy as np
