@@ -1327,6 +1327,32 @@ def _generate_background_plate(
         caption = validate_generated_fill(generated)
         matches = sorted(term for term in forbidden if term in caption)
         if not matches:
+            if celestial_object:
+                # Use the independently generated plate across the whole area
+                # behind the moving body. Rectangular inpainting cannot invent
+                # a large hidden sky and horizon without exposing its bounds.
+                # Preserve only the far-right landmark/frame and near-bottom
+                # foreground through long directional transitions.
+                frame_height, frame_width = image.shape[:2]
+                yy, xx = np.mgrid[0:frame_height, 0:frame_width]
+
+                def smoothstep(values):
+                    values = np.clip(values, 0.0, 1.0)
+                    return values * values * (3.0 - (2.0 * values))
+
+                preserve_right = smoothstep(
+                    (xx - (frame_width * 0.68)) / max(1.0, frame_width * 0.20)
+                )
+                preserve_bottom = smoothstep(
+                    (yy - (frame_height * 0.70)) / max(1.0, frame_height * 0.30)
+                )
+                preserve_source = np.maximum(preserve_right, preserve_bottom)[:, :, None]
+                return np.clip(
+                    (generated.astype(np.float32) * (1.0 - preserve_source))
+                    + (image.astype(np.float32) * preserve_source),
+                    0,
+                    255,
+                ).astype(np.uint8)
             return np.clip(
                 (generated.astype(np.float32) * alpha)
                 + (image.astype(np.float32) * (1.0 - alpha)),
@@ -1586,7 +1612,7 @@ def _generate_object_vector_clip(
                 negative_prompt=negative_prompt,
                 session=session,
             )
-            background_mode = "validated-local-empty-celestial-plate"
+            background_mode = "validated-full-canvas-celestial-plate"
         elif occlusion_ratio >= 0.10:
             background = _generate_background_plate(
                 image,

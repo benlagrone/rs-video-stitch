@@ -1462,7 +1462,7 @@ class BibleWorkflowTest(TestCase):
 
         self.assertEqual(
             route["backgroundMode"],
-            "validated-local-empty-celestial-plate",
+            "validated-full-canvas-celestial-plate",
         )
 
     def test_locked_motion_falls_back_to_svd_after_wan_quality_rejection(self):
