@@ -942,7 +942,7 @@ class BibleWorkflowTest(TestCase):
         )
         self.assertEqual(session.post.return_value.raise_for_status.call_count, 2)
 
-    def test_generated_object_motion_uses_prebuilt_feathered_corridor(self):
+    def test_generated_object_motion_uses_prebuilt_tracked_object_matte(self):
         with tempfile.TemporaryDirectory() as tmp:
             vector = Path(tmp) / "vector.mp4"
             generated = Path(tmp) / "generated.mp4"
@@ -1164,7 +1164,7 @@ class BibleWorkflowTest(TestCase):
             def extract_keyframe(_video, rendered):
                 rendered.write_bytes(b"end-frame")
 
-            def composite(_vector, generated, _corridor, rendered):
+            def composite(_vector, generated, _moving_matte, rendered):
                 rendered.write_bytes(generated.read_bytes())
 
             plan = bible_workflow._sanitize_motion_plan({
@@ -1220,12 +1220,12 @@ class BibleWorkflowTest(TestCase):
             quality["modelProvider"],
             f"{motion_provider.OBJECT_VECTOR_PROVIDER}+ltxv-keyframe",
         )
-        self.assertEqual(quality["controlMode"], "feathered-generative-motion-corridor")
+        self.assertEqual(quality["controlMode"], "tracked-object-generative-texture")
         self.assertEqual(quality["modelCheckpoint"], motion_provider.LTX_KEYFRAME_CHECKPOINT)
         self.assertEqual(quality["modelDenoise"], 1.0)
         self.assertEqual(
             quality["semanticMotionGate"],
-            "start-end-keyframes-feathered-corridor-and-fixed-background-tiles",
+            "single-tracked-object-matte-and-fixed-background",
         )
         self.assertEqual(quality["endFrameSsim"], 0.97)
         self.assertFalse(quality["fullFrameGeneration"])

@@ -1348,10 +1348,15 @@ def _deterministic_background_plate(image, object_mask):
         right = cv2.GaussianBlur(
             right[:, None, :].astype(np.float32), (1, 0), sigmaX=0.0, sigmaY=5.0
         )[:, 0, :]
-        left_luma = np.mean(left, axis=1)
-        right_luma = np.mean(right, axis=1)
-        darker_boundary = np.where((left_luma <= right_luma)[:, None], left, right)
-        fill = np.repeat(darker_boundary[:, None, :], box_width, axis=1)
+        # Continue each background row through the removed object instead of
+        # repeating one edge across its full box.  The old constant fill left a
+        # visible rectangular band whenever the moving object uncovered it.
+        horizontal_mix = np.linspace(0.0, 1.0, box_width, dtype=np.float32)[None, :, None]
+        fill = (
+            (left[:, None, :] * (1.0 - horizontal_mix))
+            + (right[:, None, :] * horizontal_mix)
+        )
+        fill = cv2.GaussianBlur(fill, (0, 0), sigmaX=7.0, sigmaY=2.5)
         reconstructed = image.copy()
         reconstructed[y:y + box_height, x:x + box_width] = np.clip(fill, 0, 255).astype(np.uint8)
     else:
@@ -1672,7 +1677,13 @@ def _composite_generated_object_motion(
     moving_mask_path: Path,
     destination: Path,
 ) -> None:
-    """Blend model motion through a feathered corridor around the moving subject."""
+    """Apply generated texture only inside the tracked moving-object matte.
+
+    The deterministic vector render owns the subject count, trajectory, and
+    background.  The model contributes evolving surface detail inside the one
+    moving matte, so a model-retained copy at the original location cannot leak
+    into the accepted clip.
+    """
     filter_graph = (
         f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[vector];"
         f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[generated];"
@@ -1863,14 +1874,14 @@ def generate_motion_clip(
                     effective_seed ^ 0x4C5458,
                 )
                 _queue_and_download_workflow(session, keyframe_workflow, generated_keyframe_video)
-                if not vector_corridor_path:
+                if not vector_mask_path:
                     raise MotionProviderError(
-                        "Object-vector keyframe generation requires a feathered generative corridor"
+                        "Object-vector keyframe generation requires a tracked moving-object matte"
                     )
                 _composite_generated_object_motion(
                     vector_path,
                     generated_keyframe_video,
-                    vector_corridor_path,
+                    vector_mask_path,
                     destination,
                 )
                 stabilization: dict[str, Any] = {
@@ -1894,7 +1905,7 @@ def generate_motion_clip(
                     "modelProvider": f"{OBJECT_VECTOR_PROVIDER}+ltxv-keyframe",
                     "modelCheckpoint": LTX_KEYFRAME_CHECKPOINT,
                     "providerPolicy": "phronesis-local-model-via-sextant-orchestration",
-                    "controlMode": "feathered-generative-motion-corridor",
+                    "controlMode": "tracked-object-generative-texture",
                     "modelDenoise": 1.0,
                     "lockedBackground": bool((motion_plan or {}).get("lockedBackground", True)),
                     "semanticIdentityPreserved": True,
@@ -1902,7 +1913,7 @@ def generate_motion_clip(
                     "motionRegionCount": len(object_regions),
                     "motionPlanSummary": str((motion_plan or {}).get("summary") or "")[:320],
                     "objectVectorRoute": vector_route,
-                    "semanticMotionGate": "start-end-keyframes-feathered-corridor-and-fixed-background-tiles",
+                    "semanticMotionGate": "single-tracked-object-matte-and-fixed-background",
                     "stabilization": stabilization,
                     "lockedEdgesProtected": camera_behavior == "locked",
                     "sourceFrameSsim": _measure_source_frame_fidelity(prepared_source, destination),
