@@ -1027,6 +1027,19 @@ def build_storyboard(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]
 
 
 def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "", session=requests) -> dict[str, Any]:
+    # ComfyUI and Stable Diffusion share the Phronesis GPU. Release any staged
+    # video model before asking the still-image service to allocate its UNet.
+    # The cleanup is best-effort because an already-idle ComfyUI instance must
+    # not prevent still generation.
+    try:
+        cleanup = session.post(
+            f"{COMFYUI_MODEL_API_URL.rstrip('/')}/free",
+            json={"unload_models": True, "free_memory": True},
+            timeout=60,
+        )
+        cleanup.raise_for_status()
+    except requests.RequestException:
+        pass
     negative_prompt = (
         "text, watermark, logo, modern clothing, modern architecture, deformed anatomy, extra limbs, "
         f"duplicate people, face morph, blur, low detail, {GOD_CHARACTER_NEGATIVE}"
