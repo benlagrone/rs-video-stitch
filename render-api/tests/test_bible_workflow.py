@@ -37,11 +37,14 @@ class BibleWorkflowTest(TestCase):
 
         self.assertIn("at least 12 percent inside every frame edge", prompt)
         self.assertIn("never crop it", prompt)
-        self.assertIn("Exactly one newly forming planet", prompt)
+        self.assertIn("One solitary newly forming planet", prompt)
+        self.assertIn("diffuse formless gas", prompt)
+        self.assertIn("no rocky foreground", prompt)
         self.assertIn("never touching a frame edge", prompt)
         negative = bible_workflow._scene_negative_prompt("Genesis 1:1")
         self.assertIn("multiple planets", negative)
         self.assertIn("moon", negative)
+        self.assertIn("view from another planet", negative)
 
     def test_catalog_exposes_every_legacy_and_current_style(self):
         styles = art_styles.list_art_styles()
@@ -68,7 +71,7 @@ class BibleWorkflowTest(TestCase):
         prompt = scenes[0]["timeline"][0]["prompt"]
         self.assertIn("Art treatment: Baroque", prompt)
         self.assertIn("chiaroscuro", prompt)
-        self.assertIn("vast primordial cosmos", prompt)
+        self.assertIn("vast primordial void", prompt)
         self.assertNotIn("God", prompt)
         self.assertNotIn("human figure", prompt)
         self.assertNotIn("pair of men", prompt)
