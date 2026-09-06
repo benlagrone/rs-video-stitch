@@ -27,6 +27,17 @@ class _Response:
 
 
 class BibleWorkflowTest(TestCase):
+    def test_scene_prompt_requires_motion_safe_subject_margins(self):
+        prompt = bible_workflow._scene_prompt(
+            "Genesis 1:1",
+            "In the beginning God created the heaven and the earth.",
+            "Byzantine Iconography",
+            theme_interpretation="A cataclysmic creation event.",
+        )
+
+        self.assertIn("at least 12 percent inside every frame edge", prompt)
+        self.assertIn("never crop it", prompt)
+
     def test_catalog_exposes_every_legacy_and_current_style(self):
         styles = art_styles.list_art_styles()
 
