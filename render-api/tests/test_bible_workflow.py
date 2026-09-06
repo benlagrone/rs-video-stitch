@@ -1493,6 +1493,31 @@ class BibleWorkflowTest(TestCase):
             "validated-full-canvas-celestial-plate",
         )
 
+    @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
+    def test_object_vector_rejects_subject_clipped_opposite_inward_motion(self):
+        import cv2
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "clipped-planet.png"
+            image = np.zeros((320, 576, 3), dtype=np.uint8)
+            cv2.circle(image, (175, 45), 70, (190, 145, 85), -1, cv2.LINE_AA)
+            self.assertTrue(cv2.imwrite(str(source), image))
+
+            with self.assertRaisesRegex(motion_provider.MotionProviderError, "clipped by the source frame"):
+                motion_provider._generate_object_vector_clip(
+                    source,
+                    {
+                        "regions": [{
+                            "id": "planet", "label": "Planet", "method": "object-vector",
+                            "vector": {"dx": 0.0, "dy": 0.2}, "easing": "ease-in-out",
+                            "box": {"x": 0.14, "y": 0.0, "width": 0.34, "height": 0.42},
+                            "enabled": True,
+                        }],
+                    },
+                    Path(tmp) / "rejected.mp4",
+                )
+
     def test_locked_motion_falls_back_to_svd_after_wan_quality_rejection(self):
         session = mock.Mock()
         session.get.return_value = _Response({"system": {"os": "posix"}})

@@ -1556,6 +1556,18 @@ def _generate_object_vector_clip(
                 raise MotionProviderError(
                     f"Object-vector region {region.get('label') or index} has no visible displacement"
                 )
+            edge_guard = 4
+            clipped_against_motion = (
+                (dy > 1.0 and np.any(hard_mask[:edge_guard, :]))
+                or (dy < -1.0 and np.any(hard_mask[-edge_guard:, :]))
+                or (dx > 1.0 and np.any(hard_mask[:, :edge_guard]))
+                or (dx < -1.0 and np.any(hard_mask[:, -edge_guard:]))
+            )
+            if clipped_against_motion:
+                raise MotionProviderError(
+                    f"Object-vector region {region.get('label') or index} is clipped by the source frame; "
+                    "regenerate a motion-safe still with the complete subject inside the canvas"
+                )
             swept_corridor = np.zeros_like(hard_mask)
             for step in range(17):
                 progress = step / 16.0
