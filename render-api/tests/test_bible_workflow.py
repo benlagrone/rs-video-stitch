@@ -812,6 +812,8 @@ class BibleWorkflowTest(TestCase):
         ), mock.patch.object(
             bible_workflow, "regenerate_bible_scene_stills"
         ) as regenerate, mock.patch.object(
+            bible_workflow, "_validate_motion_safe_still_semantics", return_value={"status": "accepted"}
+        ), mock.patch.object(
             bible_workflow,
             "animate_bible_scene",
             side_effect=RuntimeError("Object-vector region Planet is clipped by the source frame"),
@@ -858,6 +860,8 @@ class BibleWorkflowTest(TestCase):
         ), mock.patch.object(
             bible_workflow, "regenerate_bible_scene_stills"
         ) as regenerate, mock.patch.object(
+            bible_workflow, "_validate_motion_safe_still_semantics", return_value={"status": "accepted"}
+        ), mock.patch.object(
             bible_workflow,
             "animate_bible_scene",
             side_effect=[
@@ -884,8 +888,43 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(result.name, "scene_001.mp4")
         self.assertEqual(regenerate.call_count, 2)
         self.assertEqual(animate.call_count, 2)
-        save_scenes.assert_not_called()
+        self.assertEqual(save_scenes.call_count, 2)
         save_state.assert_not_called()
+
+    def test_motion_safe_semantic_validation_rejects_multiple_planets(self):
+        response = mock.Mock()
+        response.json.return_value = {
+            "caption": "a view of the planets from the surface of the moon, with a ring in the sky"
+        }
+        session = mock.Mock()
+        session.post.return_value = response
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"generated-still")
+            with self.assertRaisesRegex(RuntimeError, "multiple planets"):
+                bible_workflow._validate_motion_safe_still_semantics(
+                    "Genesis 1:1", still, session=session
+                )
+
+        response.raise_for_status.assert_called_once_with()
+        self.assertIn("/sdapi/v1/interrogate", session.post.call_args.args[0])
+
+    def test_motion_safe_semantic_validation_accepts_one_planet(self):
+        response = mock.Mock()
+        response.json.return_value = {
+            "caption": "one planet suspended against an empty dark starfield"
+        }
+        session = mock.Mock()
+        session.post.return_value = response
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"generated-still")
+            result = bible_workflow._validate_motion_safe_still_semantics(
+                "Genesis 1:1", still, session=session
+            )
+
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(result["provider"], "phronesis-sd-clip")
 
     def test_generic_fill_the_frame_language_does_not_trigger_decorative_border_overlay(self):
         scene = {
