@@ -269,6 +269,12 @@ class BibleWorkflowTest(TestCase):
             session.post.call_args_list[0].kwargs["json"],
             {"unload_models": True, "free_memory": True},
         )
+        self.assertEqual(
+            session.post.call_args_list[1].args[0],
+            bible_workflow.STABLE_DIFFUSION_API_URL.replace(
+                "/txt2img", "/unload-checkpoint"
+            ),
+        )
         self.assertEqual((payload["width"], payload["height"]), (1024, 576))
         self.assertEqual(payload["override_settings"]["sd_model_checkpoint"], bible_workflow.STABLE_DIFFUSION_CHECKPOINT)
         self.assertTrue(payload["override_settings_restore_afterwards"])
