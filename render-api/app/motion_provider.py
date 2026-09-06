@@ -1474,6 +1474,7 @@ def _generate_object_vector_clip(
             celestial_region = any(
                 token in label_text for token in ("planet", "moon", "sun", "orb", "sphere")
             )
+            region_removal_mask = hard_mask.copy()
             if celestial_region:
                 horizontal_padding = round(box_width * 0.04)
                 vertical_padding = round(box_height * 0.20)
@@ -1481,12 +1482,12 @@ def _generate_object_vector_clip(
                 removal_top = max(0, y - vertical_padding)
                 removal_right = min(width, x + box_width + horizontal_padding)
                 removal_bottom = min(height, y + box_height + vertical_padding)
-                background_removal_mask[
+                region_removal_mask = np.zeros_like(hard_mask)
+                region_removal_mask[
                     removal_top:removal_bottom,
                     removal_left:removal_right,
                 ] = 255
-            else:
-                background_removal_mask = cv2.max(background_removal_mask, hard_mask)
+            background_removal_mask = cv2.max(background_removal_mask, region_removal_mask)
             sprite = cv2.cvtColor(image, cv2.COLOR_BGR2BGRA)
             sprite[:, :, 3] = soft_mask
             sprite_path = temp_root / f"sprite-{index}.png"
@@ -1497,25 +1498,6 @@ def _generate_object_vector_clip(
             if not cv2.imwrite(str(mask_path), soft_mask):
                 raise MotionProviderError("Unable to save an object-vector guidance matte")
             mask_paths.append(mask_path)
-            corridor_kernel_size = (OBJECT_MOTION_CORRIDOR_EXPANSION * 2) + 1
-            corridor_mask = cv2.dilate(
-                hard_mask,
-                cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE,
-                    (corridor_kernel_size, corridor_kernel_size),
-                ),
-                iterations=1,
-            )
-            corridor_mask = cv2.GaussianBlur(
-                corridor_mask,
-                (0, 0),
-                sigmaX=OBJECT_MOTION_CORRIDOR_FEATHER,
-                sigmaY=OBJECT_MOTION_CORRIDOR_FEATHER,
-            )
-            corridor_mask_path = temp_root / f"corridor-mask-{index}.png"
-            if not cv2.imwrite(str(corridor_mask_path), corridor_mask):
-                raise MotionProviderError("Unable to save an object-vector generative corridor")
-            corridor_mask_paths.append(corridor_mask_path)
             region_labels.append(str(region.get("label") or f"Region {index}"))
 
             vector = region.get("vector") or {}
@@ -1525,6 +1507,39 @@ def _generate_object_vector_clip(
                 raise MotionProviderError(
                     f"Object-vector region {region.get('label') or index} has no visible displacement"
                 )
+            swept_corridor = np.zeros_like(hard_mask)
+            for step in range(17):
+                progress = step / 16.0
+                eased = (3.0 * progress * progress) - (2.0 * progress * progress * progress)
+                transform = np.float32([[1.0, 0.0, dx * eased], [0.0, 1.0, dy * eased]])
+                translated = cv2.warpAffine(
+                    region_removal_mask,
+                    transform,
+                    (width, height),
+                    flags=cv2.INTER_NEAREST,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=0,
+                )
+                swept_corridor = cv2.max(swept_corridor, translated)
+            corridor_kernel_size = (OBJECT_MOTION_CORRIDOR_EXPANSION * 2) + 1
+            swept_corridor = cv2.dilate(
+                swept_corridor,
+                cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE,
+                    (corridor_kernel_size, corridor_kernel_size),
+                ),
+                iterations=1,
+            )
+            swept_corridor = cv2.GaussianBlur(
+                swept_corridor,
+                (0, 0),
+                sigmaX=OBJECT_MOTION_CORRIDOR_FEATHER,
+                sigmaY=OBJECT_MOTION_CORRIDOR_FEATHER,
+            )
+            corridor_mask_path = temp_root / f"corridor-mask-{index}.png"
+            if not cv2.imwrite(str(corridor_mask_path), swept_corridor):
+                raise MotionProviderError("Unable to save an object-vector generative corridor")
+            corridor_mask_paths.append(corridor_mask_path)
             route_regions.append({
                 "id": str(region.get("id") or f"region-{index}"),
                 "label": str(region.get("label") or f"Region {index}"),
@@ -1621,11 +1636,20 @@ def _generate_object_vector_clip(
         if guidance_mask_destination and len(mask_paths) == 1:
             render_moving_matte(mask_paths[0], guidance_mask_destination, "object matte")
         if guidance_corridor_destination and len(corridor_mask_paths) == 1:
-            render_moving_matte(
-                corridor_mask_paths[0],
-                guidance_corridor_destination,
-                "generative motion corridor",
-            )
+            corridor_command = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-framerate", "16", "-loop", "1", "-i", str(corridor_mask_paths[0]),
+                "-vf", "format=gray", "-t", str(duration), "-r", "16", "-c:v", "libx264",
+                "-preset", "fast", "-crf", "12", "-pix_fmt", "yuv420p",
+                str(guidance_corridor_destination),
+            ]
+            try:
+                subprocess.run(corridor_command, check=True, capture_output=True, text=True)
+            except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+                detail = getattr(exc, "stderr", "") or str(exc)
+                raise MotionProviderError(
+                    f"Unable to render object-vector generative motion corridor: {detail[-600:]}"
+                ) from exc
         return {
             "regions": route_regions,
             "backgroundInpainted": True,
