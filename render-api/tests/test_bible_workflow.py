@@ -1218,9 +1218,10 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(rendered_bytes, b"model-motion")
         self.assertEqual(
             quality["modelProvider"],
-            f"{motion_provider.OBJECT_VECTOR_PROVIDER}+ltxv-2b-keyframe",
+            f"{motion_provider.OBJECT_VECTOR_PROVIDER}+ltxv-keyframe",
         )
         self.assertEqual(quality["controlMode"], "feathered-generative-motion-corridor")
+        self.assertEqual(quality["modelCheckpoint"], motion_provider.LTX_KEYFRAME_CHECKPOINT)
         self.assertEqual(quality["modelDenoise"], 1.0)
         self.assertEqual(
             quality["semanticMotionGate"],

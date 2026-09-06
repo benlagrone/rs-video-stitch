@@ -27,6 +27,10 @@ COMFYUI_TIMEOUT_SECONDS = float(os.getenv("COMFYUI_TIMEOUT_SECONDS", "7200"))
 COMFYUI_POLL_SECONDS = float(os.getenv("COMFYUI_POLL_SECONDS", "5"))
 WORKFLOW_PATH = Path(__file__).resolve().parent / "workflows" / "wan2_2_ti2v_5b_api.json"
 OBJECT_VECTOR_PROVIDER = "sextant-object-vector-v1"
+LTX_KEYFRAME_CHECKPOINT = os.getenv(
+    "LTX_KEYFRAME_CHECKPOINT",
+    "ltxv-2b-0.9.8-distilled-fp8.safetensors",
+)
 OBJECT_MOTION_CORRIDOR_EXPANSION = 40
 OBJECT_MOTION_CORRIDOR_FEATHER = 14.0
 FRAME_PROTECTION_WIDTH = 576
@@ -272,7 +276,7 @@ def _ltx_keyframe_workflow(
     """Generate real motion between the deterministic tween's exact endpoint frames."""
     return {
         "1": {"class_type": "CheckpointLoaderSimple", "inputs": {
-            "ckpt_name": "ltxv-2b-0.9.8-distilled-fp8.safetensors",
+            "ckpt_name": LTX_KEYFRAME_CHECKPOINT,
         }},
         "2": {"class_type": "LoadImage", "inputs": {"image": start_image_name}},
         "3": {"class_type": "LoadImage", "inputs": {"image": end_image_name}},
@@ -1887,7 +1891,8 @@ def generate_motion_clip(
                     "status": "accepted",
                     "cameraBehavior": camera_behavior,
                     "sourceSizing": "fit-and-pad-no-crop",
-                    "modelProvider": f"{OBJECT_VECTOR_PROVIDER}+ltxv-2b-keyframe",
+                    "modelProvider": f"{OBJECT_VECTOR_PROVIDER}+ltxv-keyframe",
+                    "modelCheckpoint": LTX_KEYFRAME_CHECKPOINT,
                     "providerPolicy": "phronesis-local-model-via-sextant-orchestration",
                     "controlMode": "feathered-generative-motion-corridor",
                     "modelDenoise": 1.0,
