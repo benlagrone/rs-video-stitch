@@ -708,6 +708,8 @@ class BibleWorkflowTest(TestCase):
                 "VO": "And God said, Let there be light: and there was light.",
                 "images": ["scene_001.png"],
                 "timeline": [{"image": "scene_001.png", "video": "scene_001.mp4", "prompt": "two old men"}],
+                "animationQuality": {"status": "accepted"},
+                "animationRejected": {"reason": "stale"},
             }],
         }
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
@@ -745,6 +747,8 @@ class BibleWorkflowTest(TestCase):
         self.assertNotIn("video", saved_document["scenes"][0]["timeline"][0])
         self.assertEqual(saved_document["scenes"][0]["timeline"][0]["imageGeneration"]["seed"], 717)
         self.assertNotIn("motionGeneration", saved_document["scenes"][0]["timeline"][0])
+        self.assertNotIn("animationQuality", saved_document["scenes"][0])
+        self.assertNotIn("animationRejected", saved_document["scenes"][0])
         self.assertTrue(saved_document["scenes"][0]["imageHistory"][0].startswith("history/scene_001-"))
         self.assertEqual(save_state.call_args.args[1]["characterDesign"]["god"]["version"], 2)
 
