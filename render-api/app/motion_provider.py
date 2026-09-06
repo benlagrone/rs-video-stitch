@@ -1331,17 +1331,35 @@ def _deterministic_background_plate(image, object_mask):
         raise MotionProviderError("Deterministic background reconstruction requires OpenCV") from exc
 
     expanded_mask = cv2.dilate(object_mask, np.ones((11, 11), dtype=np.uint8), iterations=2)
-    full_resolution = cv2.inpaint(image, expanded_mask, 15, cv2.INPAINT_TELEA)
-    half_size = (max(2, image.shape[1] // 2), max(2, image.shape[0] // 2))
-    half_image = cv2.resize(image, half_size, interpolation=cv2.INTER_AREA)
-    half_mask = cv2.resize(expanded_mask, half_size, interpolation=cv2.INTER_NEAREST)
-    broad_fill = cv2.inpaint(half_image, half_mask, 11, cv2.INPAINT_NS)
-    broad_fill = cv2.resize(
-        broad_fill,
-        (image.shape[1], image.shape[0]),
-        interpolation=cv2.INTER_CUBIC,
-    )
-    reconstructed = cv2.addWeighted(full_resolution, 0.65, broad_fill, 0.35, 0.0)
+    x, y, box_width, box_height = cv2.boundingRect(expanded_mask)
+    box_area = max(1, box_width * box_height)
+    rectangularity = float(np.count_nonzero(expanded_mask)) / float(box_area)
+    if rectangularity >= 0.75 and x > 0 and x + box_width < image.shape[1]:
+        band = min(12, x, image.shape[1] - (x + box_width))
+        left = np.mean(image[y:y + box_height, x - band:x], axis=1)
+        right = np.mean(image[y:y + box_height, x + box_width:x + box_width + band], axis=1)
+        left = cv2.GaussianBlur(
+            left[:, None, :].astype(np.float32), (1, 0), sigmaX=0.0, sigmaY=5.0
+        )[:, 0, :]
+        right = cv2.GaussianBlur(
+            right[:, None, :].astype(np.float32), (1, 0), sigmaX=0.0, sigmaY=5.0
+        )[:, 0, :]
+        blend = np.linspace(0.0, 1.0, box_width, dtype=np.float32)[None, :, None]
+        fill = (left[:, None, :] * (1.0 - blend)) + (right[:, None, :] * blend)
+        reconstructed = image.copy()
+        reconstructed[y:y + box_height, x:x + box_width] = np.clip(fill, 0, 255).astype(np.uint8)
+    else:
+        full_resolution = cv2.inpaint(image, expanded_mask, 15, cv2.INPAINT_TELEA)
+        half_size = (max(2, image.shape[1] // 2), max(2, image.shape[0] // 2))
+        half_image = cv2.resize(image, half_size, interpolation=cv2.INTER_AREA)
+        half_mask = cv2.resize(expanded_mask, half_size, interpolation=cv2.INTER_NEAREST)
+        broad_fill = cv2.inpaint(half_image, half_mask, 11, cv2.INPAINT_NS)
+        broad_fill = cv2.resize(
+            broad_fill,
+            (image.shape[1], image.shape[0]),
+            interpolation=cv2.INTER_CUBIC,
+        )
+        reconstructed = cv2.addWeighted(full_resolution, 0.65, broad_fill, 0.35, 0.0)
     blend_mask = cv2.GaussianBlur(expanded_mask, (0, 0), sigmaX=10.0, sigmaY=10.0)
     alpha = (blend_mask.astype(np.float32) / 255.0)[:, :, None]
     return np.clip(
