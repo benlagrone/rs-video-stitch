@@ -1043,17 +1043,6 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
         cleanup.raise_for_status()
     except requests.RequestException:
         pass
-    def unload_still_checkpoint() -> None:
-        try:
-            cleanup = session.post(
-                STABLE_DIFFUSION_API_URL.replace("/txt2img", "/unload-checkpoint"),
-                timeout=60,
-            )
-            cleanup.raise_for_status()
-        except requests.RequestException:
-            pass
-
-    unload_still_checkpoint()
     negative_prompt = (
         "text, watermark, logo, modern clothing, modern architecture, deformed anatomy, extra limbs, "
         f"duplicate people, face morph, blur, low detail, {GOD_CHARACTER_NEGATIVE}"
@@ -1086,7 +1075,6 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
             raise
         # The 12 GB Phronesis GPU can render 16:9 reliably at this size after
         # a video model has run, even when 1024x576 cannot be allocated.
-        unload_still_checkpoint()
         payload = {**payload, "width": 640, "height": 360}
         response = session.post(
             STABLE_DIFFUSION_API_URL,
