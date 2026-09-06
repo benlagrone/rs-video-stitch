@@ -608,7 +608,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
             const stillBusy = stillRegenerationJob && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(stillRegenerationJob.status) && (stillRegenerationJob.sceneIndexes || []).includes(sceneIndex);
             const animationRejected = animationJob?.status === 'FAILED' || scene.animationQuality?.status === 'rejected';
             const rejectionReason = animationJob?.error || scene.animationQuality?.reason || animationJob?.stage;
-            const needsMotionSafeStill = /clipped by the source frame|unsafe matte|did not isolate an existing object|unable to segment object-vector region|motion-safe repair/i.test(rejectionReason || '');
+            const needsMotionSafeStill = /clipped by the source frame|unsafe matte|did not isolate an existing object|unable to segment object-vector region|motion-safe repair|semantic visual qa|semantic validation/i.test(rejectionReason || '');
             const motionPlan = motionPlans[sceneIndex] || scene.motionPlan;
             const motionPlanningBusy = planningMotionFor === sceneIndex;
             const legacyRegionControl = String(scene.animationQuality?.modelProvider || '').startsWith('wan2.1-vace-region-control') && scene.animationQuality?.controlMode !== 'masked-generative-inpaint';

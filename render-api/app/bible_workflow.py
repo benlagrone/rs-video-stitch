@@ -984,6 +984,57 @@ def animate_bible_scene(
     return clip_path
 
 
+def _validate_motion_safe_still_semantics(
+    reference: str,
+    still_path: Path,
+    *,
+    session=requests,
+) -> dict[str, Any]:
+    """Fail closed when a generated still contradicts exact scene constraints."""
+    if not re.match(r"^genesis\s+1:1\b", reference.strip(), flags=re.IGNORECASE):
+        return {"status": "not-required"}
+
+    interrogation_url = (
+        STABLE_DIFFUSION_API_URL.rsplit("/sdapi/", 1)[0].rstrip("/")
+        + "/sdapi/v1/interrogate"
+    )
+    response = session.post(
+        interrogation_url,
+        json={
+            "image": base64.b64encode(still_path.read_bytes()).decode("ascii"),
+            "model": "clip",
+        },
+        timeout=STABLE_DIFFUSION_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    caption = re.sub(r"\s+", " ", str(response.json().get("caption") or "")).strip().lower()
+    if not caption:
+        raise RuntimeError("Motion-safe still semantic validation returned no caption")
+
+    required_subject = re.search(r"\b(planet|earth|world)\b", caption)
+    forbidden = [
+        label
+        for label, pattern in (
+            ("multiple planets", r"\bplanets\b"),
+            ("moon", r"\bmoons?\b"),
+            ("galaxy", r"\bgalax(?:y|ies)\b"),
+            ("ring", r"\brings?\b"),
+        )
+        if re.search(pattern, caption)
+    ]
+    if not required_subject or forbidden:
+        problems = []
+        if not required_subject:
+            problems.append("no single planet was identified")
+        if forbidden:
+            problems.append(f"forbidden extra celestial content: {', '.join(forbidden)}")
+        raise RuntimeError(
+            "Motion-safe still semantic validation rejected the image: "
+            f"{'; '.join(problems)}. Phronesis caption: {caption[:300]}"
+        )
+    return {"status": "accepted", "provider": "phronesis-sd-clip", "caption": caption[:500]}
+
+
 def repair_and_animate_bible_scene(
     project_id: str,
     scene_index: int,
@@ -1015,6 +1066,7 @@ def repair_and_animate_bible_scene(
         "did not isolate an existing object",
         "unable to segment object-vector region",
         "object-vector region is too small",
+        "motion-safe still semantic validation",
     )
 
     for attempt in range(1, attempts + 1):
@@ -1028,6 +1080,24 @@ def repair_and_animate_bible_scene(
             log=log,
         )
         try:
+            repaired_document, repaired_scene, repaired_still_path, _ = scene_animation_context(
+                project_id, scene_index
+            )
+            semantic_validation = _validate_motion_safe_still_semantics(
+                str(repaired_scene.get("title") or f"Scene {scene_index}"),
+                repaired_still_path,
+            )
+            repaired_timeline = repaired_scene.setdefault("timeline", [{}])
+            if not repaired_timeline:
+                repaired_timeline.append({})
+            repaired_generation = repaired_timeline[0].setdefault("imageGeneration", {})
+            repaired_generation["semanticValidation"] = semantic_validation
+            repaired_name = str((repaired_document.get("info") or {}).get("name") or project_id)
+            save_scenes(
+                project_id,
+                json.dumps(repaired_document, indent=2),
+                project_name=repaired_name,
+            )
             return animate_bible_scene(
                 project_id,
                 scene_index,
