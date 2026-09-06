@@ -1009,6 +1009,13 @@ def repair_and_animate_bible_scene(
     attempts = max(1, min(int(max_still_attempts), 5))
     last_error: Exception | None = None
     attempts_used = 0
+    repairable_source_errors = (
+        "clipped by the source frame",
+        "produced an unsafe matte",
+        "did not isolate an existing object",
+        "unable to segment object-vector region",
+        "object-vector region is too small",
+    )
 
     for attempt in range(1, attempts + 1):
         attempts_used = attempt
@@ -1032,9 +1039,9 @@ def repair_and_animate_bible_scene(
             )
         except Exception as exc:  # noqa: BLE001
             last_error = exc
-            if "clipped by the source frame" not in str(exc).lower():
+            if not any(message in str(exc).lower() for message in repairable_source_errors):
                 break
-            log(f"Still candidate {attempt} failed the motion-safe edge check")
+            log(f"Still candidate {attempt} failed motion-safe subject isolation: {exc}")
 
     still_path.parent.mkdir(parents=True, exist_ok=True)
     still_path.write_bytes(original_still)
