@@ -1047,10 +1047,10 @@ def _validate_motion_safe_still_semantics(
 
 def _prepare_motion_safe_repair_candidate(
     reference: str,
-    still_path: Path,
+    _still_path: Path,
     motion_plan: dict[str, Any] | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    """Inset celestial subjects and align their vector box to the new composition."""
+    """Align celestial vector boxes to the deliberately regenerated composition."""
     plan = json.loads(json.dumps(motion_plan)) if motion_plan else None
     celestial_regions = [
         region
@@ -1067,50 +1067,13 @@ def _prepare_motion_safe_repair_candidate(
     ):
         return plan, {"status": "not-required"}
 
-    try:
-        import cv2  # type: ignore
-        import numpy as np  # type: ignore
-    except ImportError as exc:
-        raise RuntimeError("Motion-safe celestial reframing requires OpenCV") from exc
-
-    image = cv2.imread(str(still_path), cv2.IMREAD_COLOR)
-    if image is None:
-        raise RuntimeError("Motion-safe celestial reframing could not read the generated still")
-    height, width = image.shape[:2]
-    inset_scale = 0.78
-    inset_width = max(2, round(width * inset_scale))
-    inset_height = max(2, round(height * inset_scale))
-    inset = cv2.resize(image, (inset_width, inset_height), interpolation=cv2.INTER_AREA)
-    border_samples = np.concatenate(
-        [image[0, :, :], image[-1, :, :], image[:, 0, :], image[:, -1, :]], axis=0
-    )
-    background_color = np.percentile(border_samples, 20, axis=0)
-    canvas = np.full((height, width, 3), background_color, dtype=np.uint8)
-    left = (width - inset_width) // 2
-    top = (height - inset_height) // 2
-    alpha = np.ones((inset_height, inset_width), dtype=np.float32)
-    feather = max(8, round(min(width, height) * 0.035))
-    ramp = np.linspace(0.0, 1.0, feather, dtype=np.float32)
-    alpha[:feather, :] *= ramp[:, None]
-    alpha[-feather:, :] *= ramp[::-1, None]
-    alpha[:, :feather] *= ramp[None, :]
-    alpha[:, -feather:] *= ramp[None, ::-1]
-    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=max(1.0, feather / 4.0))[:, :, None]
-    target = canvas[top:top + inset_height, left:left + inset_width].astype(np.float32)
-    canvas[top:top + inset_height, left:left + inset_width] = np.clip(
-        inset.astype(np.float32) * alpha + target * (1.0 - alpha), 0, 255
-    ).astype(np.uint8)
-    if not cv2.imwrite(str(still_path), canvas):
-        raise RuntimeError("Motion-safe celestial reframing could not save the generated still")
-
     for region in celestial_regions:
         region["box"] = {"x": 0.16, "y": 0.04, "width": 0.68, "height": 0.84}
     plan = _sanitize_motion_plan(plan or {}, source="motion-safe-repair")
     return plan, {
         "status": "applied",
-        "method": "feathered-celestial-inset",
-        "scale": inset_scale,
-        "safeMargin": round((1.0 - inset_scale) / 2.0, 3),
+        "method": "celestial-subject-box-alignment",
+        "sourcePixelsChanged": False,
     }
 
 
@@ -1145,6 +1108,7 @@ def repair_and_animate_bible_scene(
         "did not isolate an existing object",
         "unable to segment object-vector region",
         "object-vector region is too small",
+        "rectangular scenery matte",
         "motion-safe still semantic validation",
     )
 
