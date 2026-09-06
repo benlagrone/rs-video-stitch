@@ -1344,8 +1344,10 @@ def _deterministic_background_plate(image, object_mask):
         right = cv2.GaussianBlur(
             right[:, None, :].astype(np.float32), (1, 0), sigmaX=0.0, sigmaY=5.0
         )[:, 0, :]
-        blend = np.linspace(0.0, 1.0, box_width, dtype=np.float32)[None, :, None]
-        fill = (left[:, None, :] * (1.0 - blend)) + (right[:, None, :] * blend)
+        left_luma = np.mean(left, axis=1)
+        right_luma = np.mean(right, axis=1)
+        darker_boundary = np.where((left_luma <= right_luma)[:, None], left, right)
+        fill = np.repeat(darker_boundary[:, None, :], box_width, axis=1)
         reconstructed = image.copy()
         reconstructed[y:y + box_height, x:x + box_width] = np.clip(fill, 0, 255).astype(np.uint8)
     else:
