@@ -1421,6 +1421,40 @@ def _deterministic_background_plate(image, object_mask):
     ).astype(np.uint8)
 
 
+def _celestial_circle_mask(image, bounds, *, cv2, np):
+    """Find one round celestial body without absorbing its rectangular scenery."""
+    x, y, box_width, box_height = bounds
+    crop = image[y:y + box_height, x:x + box_width]
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (9, 9), 2.0)
+    minimum_dimension = min(box_width, box_height)
+    circles = cv2.HoughCircles(
+        gray,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=max(24, minimum_dimension // 3),
+        param1=100,
+        param2=34,
+        minRadius=max(12, round(minimum_dimension * 0.12)),
+        maxRadius=max(18, round(minimum_dimension * 0.48)),
+    )
+    if circles is None or not len(circles[0]):
+        return None
+    center_x = box_width / 2.0
+    center_y = box_height / 2.0
+    circle = min(
+        circles[0],
+        key=lambda item: (
+            ((float(item[0]) - center_x) ** 2) + ((float(item[1]) - center_y) ** 2)
+        ) / max(1.0, float(item[2]) ** 2),
+    )
+    circle_x, circle_y, radius = (round(float(value)) for value in circle)
+    radius = max(10, round(radius * 1.06))
+    hard_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+    cv2.circle(hard_mask, (x + circle_x, y + circle_y), radius, 255, thickness=-1)
+    return hard_mask
+
+
 def _generate_object_vector_clip(
     image_path: Path,
     motion_plan: dict[str, Any],
@@ -1477,37 +1511,52 @@ def _generate_object_vector_clip(
             if box_width < 12 or box_height < 12:
                 raise MotionProviderError(f"Object-vector region {region.get('label') or index} is too small")
 
-            grab_mask = np.zeros((height, width), dtype=np.uint8)
-            background_model = np.zeros((1, 65), np.float64)
-            foreground_model = np.zeros((1, 65), np.float64)
-            try:
-                cv2.grabCut(
-                    image,
-                    grab_mask,
-                    (x, y, box_width, box_height),
-                    background_model,
-                    foreground_model,
-                    5,
-                    cv2.GC_INIT_WITH_RECT,
-                )
-            except cv2.error as exc:
-                raise MotionProviderError(
-                    f"Unable to segment object-vector region {region.get('label') or index}"
-                ) from exc
-            binary = np.where(
-                (grab_mask == cv2.GC_FGD) | (grab_mask == cv2.GC_PR_FGD), 255, 0
-            ).astype(np.uint8)
-            bounded = np.zeros_like(binary)
-            bounded[y:y + box_height, x:x + box_width] = binary[y:y + box_height, x:x + box_width]
-            component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
-                (bounded > 0).astype(np.uint8), 8
+            label_text = str(region.get("label") or "").lower()
+            celestial_region = any(
+                token in label_text for token in ("planet", "moon", "sun", "orb", "sphere")
             )
-            if component_count <= 1:
-                raise MotionProviderError(
-                    f"Object-vector region {region.get('label') or index} did not isolate an existing object"
+            hard_mask = (
+                _celestial_circle_mask(
+                    image,
+                    (x, y, box_width, box_height),
+                    cv2=cv2,
+                    np=np,
                 )
-            largest_label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-            hard_mask = np.where(labels == largest_label, 255, 0).astype(np.uint8)
+                if celestial_region
+                else None
+            )
+            if hard_mask is None:
+                grab_mask = np.zeros((height, width), dtype=np.uint8)
+                background_model = np.zeros((1, 65), np.float64)
+                foreground_model = np.zeros((1, 65), np.float64)
+                try:
+                    cv2.grabCut(
+                        image,
+                        grab_mask,
+                        (x, y, box_width, box_height),
+                        background_model,
+                        foreground_model,
+                        5,
+                        cv2.GC_INIT_WITH_RECT,
+                    )
+                except cv2.error as exc:
+                    raise MotionProviderError(
+                        f"Unable to segment object-vector region {region.get('label') or index}"
+                    ) from exc
+                binary = np.where(
+                    (grab_mask == cv2.GC_FGD) | (grab_mask == cv2.GC_PR_FGD), 255, 0
+                ).astype(np.uint8)
+                bounded = np.zeros_like(binary)
+                bounded[y:y + box_height, x:x + box_width] = binary[y:y + box_height, x:x + box_width]
+                component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+                    (bounded > 0).astype(np.uint8), 8
+                )
+                if component_count <= 1:
+                    raise MotionProviderError(
+                        f"Object-vector region {region.get('label') or index} did not isolate an existing object"
+                    )
+                largest_label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+                hard_mask = np.where(labels == largest_label, 255, 0).astype(np.uint8)
             area_ratio = float(np.count_nonzero(hard_mask)) / float(box_width * box_height)
             if area_ratio < 0.025 or area_ratio > 0.92:
                 raise MotionProviderError(
@@ -1519,10 +1568,14 @@ def _generate_object_vector_clip(
             )
             soft_mask = cv2.GaussianBlur(hard_mask, (0, 0), sigmaX=2.4, sigmaY=2.4)
             union_mask = cv2.max(union_mask, hard_mask)
-            label_text = str(region.get("label") or "").lower()
-            celestial_region = any(
-                token in label_text for token in ("planet", "moon", "sun", "orb", "sphere")
+            mask_x, mask_y, mask_width, mask_height = cv2.boundingRect(hard_mask)
+            matte_rectangularity = float(np.count_nonzero(hard_mask)) / float(
+                max(1, mask_width * mask_height)
             )
+            if celestial_region and matte_rectangularity > 0.9:
+                raise MotionProviderError(
+                    f"Object-vector region {region.get('label') or index} produced a rectangular scenery matte"
+                )
             region_removal_mask = hard_mask.copy()
             if celestial_region:
                 horizontal_padding = round(box_width * 0.04)
