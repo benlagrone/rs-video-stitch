@@ -872,7 +872,7 @@ def _protect_decorative_frame(image_path: Path, video_path: Path) -> None:
         "[masksource]lutrgb=r=255:g=255:b=255,"
         f"drawbox=x={FRAME_PROTECTION_X}:y={FRAME_PROTECTION_Y}:w={inner_width}:h={inner_height}:"
         f"color=black:t=fill,boxblur={FRAME_PROTECTION_FEATHER}[mask];"
-        "[motion][still][mask]maskedmerge[merged];[merged]format=yuv420p[v]"
+        "[still][motion][mask]maskedmerge[merged];[merged]format=yuv420p[v]"
     )
     command = [
         "ffmpeg", "-y", "-i", str(video_path), "-i", str(image_path),
@@ -900,7 +900,7 @@ def _protect_locked_frame_edges(image_path: Path, video_path: Path) -> None:
         f"color=white:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT},format=gray,"
         f"drawbox=x={inset}:y={inset}:w={FRAME_PROTECTION_WIDTH - (inset * 2)}:"
         f"h={FRAME_PROTECTION_HEIGHT - (inset * 2)}:color=black:t=fill,boxblur={LOCKED_EDGE_FEATHER}[mask];"
-        "[motion][still][mask]maskedmerge,format=yuv420p[v]"
+        "[still][motion][mask]maskedmerge,format=yuv420p[v]"
     )
     command = [
         "ffmpeg", "-y", "-i", str(video_path), "-loop", "1", "-i", str(image_path),
@@ -1688,7 +1688,7 @@ def _composite_generated_object_motion(
         f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[vector];"
         f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[generated];"
         f"[2:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gray[mask];"
-        "[vector][generated][mask]maskedmerge,format=yuv420p[v]"
+        "[generated][vector][mask]maskedmerge,format=yuv420p[v]"
     )
     command = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
