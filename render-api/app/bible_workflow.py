@@ -200,8 +200,9 @@ def _scene_negative_prompt(reference: str) -> str:
         )
         if verse_number == 1:
             negative += (
-                ", second planet, extra planet, multiple planets, moon, moons, satellite, extra orb, "
-                "small celestial spheres, solar system diagram"
+                ", (second planet:1.8), (extra planet:1.8), (multiple planets:1.8), (moon:1.7), (moons:1.7), "
+                "satellite, extra orb, small celestial spheres, ringed planet, planetary rings, galaxy disc, solar system, "
+                "solar system diagram, rocky foreground, crater foreground, view from moon, view from another planet"
             )
         if not verse_number or verse_number <= 25 or verse_number == 30:
             negative += (
@@ -217,9 +218,12 @@ def _genesis_one_visual_subject(reference: str) -> str:
     verse_number = int(match.group(1) or 0) if match else 0
     subjects = {
         1: (
-            "(Exactly one newly forming planet:1.5) suspended high in a vast primordial cosmos, the complete round "
-            "planet fully visible with (empty open starfield:1.3) above, below, and on both sides, never touching a "
-            "frame edge; no moons, satellites, secondary planets, or other round celestial bodies"
+            "(One solitary newly forming planet, one celestial body total:1.8), centered in the upper-middle of a vast "
+            "primordial void, the complete round planet fully visible and occupying about one third of the frame width, "
+            "with (empty black space:1.5) above, below, and on both sides, never touching a frame edge. Show the existing "
+            "materials of creation only as diffuse formless gas, dust, sparks, and energy flowing into that one planet; "
+            "no rocky foreground, viewpoint from another world, moons, satellites, rings, secondary planets, stars drawn "
+            "as round bodies, or other celestial spheres"
         ),
         2: "A formless dark ocean under a deep empty sky, with wind tracing broad ripples across the water",
         3: "The first radiant light breaking across primordial darkness and illuminating the ocean",
