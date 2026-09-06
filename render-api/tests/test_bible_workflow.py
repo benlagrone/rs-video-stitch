@@ -942,7 +942,7 @@ class BibleWorkflowTest(TestCase):
         )
         self.assertEqual(session.post.return_value.raise_for_status.call_count, 2)
 
-    def test_generated_object_motion_is_confined_to_exact_moving_matte(self):
+    def test_generated_object_motion_uses_prebuilt_feathered_corridor(self):
         with tempfile.TemporaryDirectory() as tmp:
             vector = Path(tmp) / "vector.mp4"
             generated = Path(tmp) / "generated.mp4"
@@ -963,6 +963,7 @@ class BibleWorkflowTest(TestCase):
         command = run.call_args.args[0]
         graph = command[command.index("-filter_complex") + 1]
         self.assertIn("[vector][generated][mask]maskedmerge", graph)
+        self.assertNotIn("boxblur", graph)
         self.assertNotIn("crop=", graph)
 
     def test_vace_region_assets_use_static_masked_inpaint_not_moving_crops(self):
@@ -1163,7 +1164,7 @@ class BibleWorkflowTest(TestCase):
             def extract_keyframe(_video, rendered):
                 rendered.write_bytes(b"end-frame")
 
-            def composite(_vector, generated, _mask, rendered):
+            def composite(_vector, generated, _corridor, rendered):
                 rendered.write_bytes(generated.read_bytes())
 
             plan = bible_workflow._sanitize_motion_plan({
@@ -1219,9 +1220,12 @@ class BibleWorkflowTest(TestCase):
             quality["modelProvider"],
             f"{motion_provider.OBJECT_VECTOR_PROVIDER}+ltxv-2b-keyframe",
         )
-        self.assertEqual(quality["controlMode"], "tween-endpoint-guided-generative-video")
+        self.assertEqual(quality["controlMode"], "feathered-generative-motion-corridor")
         self.assertEqual(quality["modelDenoise"], 1.0)
-        self.assertEqual(quality["semanticMotionGate"], "start-end-keyframes-and-fixed-background-tiles")
+        self.assertEqual(
+            quality["semanticMotionGate"],
+            "start-end-keyframes-feathered-corridor-and-fixed-background-tiles",
+        )
         self.assertEqual(quality["endFrameSsim"], 0.97)
         self.assertFalse(quality["fullFrameGeneration"])
 
@@ -1375,6 +1379,7 @@ class BibleWorkflowTest(TestCase):
             source = Path(tmp) / "planet.png"
             destination = Path(tmp) / "planet.mp4"
             guidance_mask = Path(tmp) / "planet-mask.mp4"
+            guidance_corridor = Path(tmp) / "planet-corridor.mp4"
             image = np.zeros((320, 576, 3), dtype=np.uint8)
             image[:, :, :] = (18, 9, 8)
             cv2.circle(image, (175, 82), 54, (190, 145, 85), -1, cv2.LINE_AA)
@@ -1392,14 +1397,21 @@ class BibleWorkflowTest(TestCase):
                 },
                 destination,
                 guidance_mask_destination=guidance_mask,
+                guidance_corridor_destination=guidance_corridor,
             )
 
             motion_provider._verify_video(destination)
             motion_provider._verify_video(guidance_mask)
+            motion_provider._verify_video(guidance_corridor)
 
         self.assertEqual(route["regions"][0]["dyPixels"], 64.0)
         self.assertTrue(route["backgroundInpainted"])
         self.assertTrue(guidance_mask.exists())
+        self.assertTrue(guidance_corridor.exists())
+        self.assertEqual(
+            route["generativeCorridorExpansionPixels"],
+            motion_provider.OBJECT_MOTION_CORRIDOR_EXPANSION,
+        )
 
     def test_locked_motion_falls_back_to_svd_after_wan_quality_rejection(self):
         session = mock.Mock()
