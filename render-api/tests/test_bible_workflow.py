@@ -1432,6 +1432,38 @@ class BibleWorkflowTest(TestCase):
             motion_provider.OBJECT_MOTION_CORRIDOR_EXPANSION,
         )
 
+    @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
+    def test_large_celestial_vector_removes_entire_planner_box_from_background(self):
+        import cv2
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "dark-planet.png"
+            destination = Path(tmp) / "dark-planet.mp4"
+            image = np.zeros((320, 576, 3), dtype=np.uint8)
+            image[:, :, :] = (18, 9, 8)
+            cv2.circle(image, (175, 92), 85, (120, 105, 90), -1, cv2.LINE_AA)
+            cv2.arc(image, (175, 92), (85, 85), 0, -80, 80, (230, 220, 180), 4)
+            self.assertTrue(cv2.imwrite(str(source), image))
+
+            route = motion_provider._generate_object_vector_clip(
+                source,
+                {
+                    "regions": [{
+                        "id": "planet", "label": "Planet", "method": "object-vector",
+                        "vector": {"dx": 0.0, "dy": 0.2}, "easing": "ease-in-out",
+                        "box": {"x": 0.14, "y": 0.01, "width": 0.34, "height": 0.58},
+                        "enabled": True,
+                    }],
+                },
+                destination,
+            )
+
+        self.assertEqual(
+            route["backgroundMode"],
+            "deterministic-multiscale-celestial-inpaint",
+        )
+
     def test_locked_motion_falls_back_to_svd_after_wan_quality_rejection(self):
         session = mock.Mock()
         session.get.return_value = _Response({"system": {"os": "posix"}})

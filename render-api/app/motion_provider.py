@@ -1392,6 +1392,7 @@ def _generate_object_vector_clip(
     temp_root = destination.parent / f".{destination.stem}-object-vector-{uuid.uuid4().hex[:8]}"
     temp_root.mkdir(parents=True, exist_ok=False)
     union_mask = np.zeros((height, width), dtype=np.uint8)
+    background_removal_mask = np.zeros((height, width), dtype=np.uint8)
     sprite_paths: list[Path] = []
     mask_paths: list[Path] = []
     corridor_mask_paths: list[Path] = []
@@ -1449,6 +1450,23 @@ def _generate_object_vector_clip(
             )
             soft_mask = cv2.GaussianBlur(hard_mask, (0, 0), sigmaX=2.4, sigmaY=2.4)
             union_mask = cv2.max(union_mask, hard_mask)
+            label_text = str(region.get("label") or "").lower()
+            celestial_region = any(
+                token in label_text for token in ("planet", "moon", "sun", "orb", "sphere")
+            )
+            if celestial_region:
+                horizontal_padding = round(box_width * 0.04)
+                vertical_padding = round(box_height * 0.20)
+                removal_left = max(0, x - horizontal_padding)
+                removal_top = max(0, y - vertical_padding)
+                removal_right = min(width, x + box_width + horizontal_padding)
+                removal_bottom = min(height, y + box_height + vertical_padding)
+                background_removal_mask[
+                    removal_top:removal_bottom,
+                    removal_left:removal_right,
+                ] = 255
+            else:
+                background_removal_mask = cv2.max(background_removal_mask, hard_mask)
             sprite = cv2.cvtColor(image, cv2.COLOR_BGR2BGRA)
             sprite[:, :, 3] = soft_mask
             sprite_path = temp_root / f"sprite-{index}.png"
@@ -1502,12 +1520,12 @@ def _generate_object_vector_clip(
             for token in ("planet", "moon", "sun", "orb", "sphere")
         )
         if occlusion_ratio >= 0.10 and celestial_object:
-            background = _deterministic_background_plate(image, union_mask)
+            background = _deterministic_background_plate(image, background_removal_mask)
             background_mode = "deterministic-multiscale-celestial-inpaint"
         elif occlusion_ratio >= 0.10:
             background = _generate_background_plate(
                 image,
-                union_mask,
+                background_removal_mask,
                 labels=region_labels,
                 scene_prompt=scene_prompt,
                 negative_prompt=negative_prompt,
@@ -1515,7 +1533,11 @@ def _generate_object_vector_clip(
             )
             background_mode = "protected-local-generative-plate"
         else:
-            inpaint_mask = cv2.dilate(union_mask, np.ones((7, 7), dtype=np.uint8), iterations=2)
+            inpaint_mask = cv2.dilate(
+                background_removal_mask,
+                np.ones((7, 7), dtype=np.uint8),
+                iterations=2,
+            )
             background = cv2.inpaint(image, inpaint_mask, 5, cv2.INPAINT_TELEA)
             background_mode = "deterministic-small-object-inpaint"
         background_path = temp_root / "background.png"
