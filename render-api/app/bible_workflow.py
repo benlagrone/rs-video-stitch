@@ -291,7 +291,10 @@ def _scene_prompt(
             f"Art treatment: {style_name}. {style_direction}. "
             f"{_theme_prompt(theme_interpretation)} "
             "Creation-era cosmic and natural setting with no civilization; make the physical transformation, scale, "
-            "atmosphere, and living world fill the frame. Modest composition, cinematic 16:9 framing, coherent "
+            "atmosphere, and living world fill the frame. Motion-safe composition: keep every principal movable "
+            "subject fully visible, cleanly separated from other forms, and at least 12 percent inside every frame "
+            "edge; never crop it, touch it to the canvas boundary, or fuse it into terrain. Modest composition, "
+            "cinematic 16:9 framing, coherent "
             "lighting, no text, no lettering, no watermark, no modern objects."
         )
     setting_policy = (
@@ -304,7 +307,9 @@ def _scene_prompt(
         f"{_theme_prompt(theme_interpretation)} "
         f"Composition policy: {_god_portrayal_instruction(reference, verse)} "
         f"{setting_policy} "
-        "modest composition, expressive but restrained emotion, cinematic 16:9 framing, coherent lighting, "
+        "Motion-safe composition: keep every principal movable subject fully visible, cleanly separated from other "
+        "forms, and at least 12 percent inside every frame edge; never crop it, touch it to the canvas boundary, or "
+        "fuse it into terrain. Modest composition, expressive but restrained emotion, cinematic 16:9 framing, coherent lighting, "
         "no text, no lettering, no watermark, no modern objects."
     )
 
