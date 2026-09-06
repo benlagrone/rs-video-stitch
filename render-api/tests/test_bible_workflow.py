@@ -302,6 +302,26 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("church", negative_prompt)
         self.assertIn("busy center", negative_prompt)
 
+    def test_generate_still_can_keep_a_dedicated_repair_checkpoint_loaded(self):
+        session = mock.Mock()
+        session.post.return_value = _Response({"images": [base64.b64encode(b"png-data").decode("ascii")]})
+        with tempfile.TemporaryDirectory() as tmp:
+            generation = bible_workflow._generate_still(
+                "a complete planet",
+                Path(tmp) / "scene.png",
+                checkpoint="Stable-diffusion/RealVisXL_V4.0.safetensors",
+                restore_checkpoint=False,
+                session=session,
+            )
+
+        payload = session.post.call_args.kwargs["json"]
+        self.assertEqual(
+            payload["override_settings"]["sd_model_checkpoint"],
+            "Stable-diffusion/RealVisXL_V4.0.safetensors",
+        )
+        self.assertFalse(payload["override_settings_restore_afterwards"])
+        self.assertEqual(generation["model"], "Stable-diffusion/RealVisXL_V4.0.safetensors")
+
     def test_motion_project_chains_each_clip_final_frame_into_next_scene(self):
         scenes = [
             {"title": "Genesis 1:1", "VO": "One", "images": ["scene_001.png"], "motionPrompt": "First action", "timeline": [{"image": "scene_001.png", "prompt": "First frame"}]},
@@ -818,6 +838,10 @@ class BibleWorkflowTest(TestCase):
             bible_workflow, "_validate_motion_safe_still_semantics", return_value={"status": "accepted"}
         ), mock.patch.object(
             bible_workflow,
+            "_prepare_motion_safe_repair_candidate",
+            side_effect=lambda _reference, _path, plan: (plan, {"status": "not-required"}),
+        ), mock.patch.object(
+            bible_workflow,
             "animate_bible_scene",
             side_effect=RuntimeError("Object-vector region Planet is clipped by the source frame"),
         ) as animate, mock.patch.object(
@@ -841,6 +865,11 @@ class BibleWorkflowTest(TestCase):
 
             self.assertEqual(still.read_bytes(), b"original-still")
             self.assertEqual(regenerate.call_count, 3)
+            self.assertEqual(
+                regenerate.call_args.kwargs["checkpoint"],
+                bible_workflow.STABLE_DIFFUSION_REPAIR_CHECKPOINT,
+            )
+            self.assertFalse(regenerate.call_args.kwargs["restore_checkpoint"])
             self.assertEqual(animate.call_count, 3)
             restored_document = json.loads(save_scenes.call_args.args[1])
             self.assertIn("original still was restored", restored_document["scenes"][0]["animationQuality"]["reason"])
@@ -864,6 +893,10 @@ class BibleWorkflowTest(TestCase):
             bible_workflow, "regenerate_bible_scene_stills"
         ) as regenerate, mock.patch.object(
             bible_workflow, "_validate_motion_safe_still_semantics", return_value={"status": "accepted"}
+        ), mock.patch.object(
+            bible_workflow,
+            "_prepare_motion_safe_repair_candidate",
+            side_effect=lambda _reference, _path, plan: (plan, {"status": "not-required"}),
         ), mock.patch.object(
             bible_workflow,
             "animate_bible_scene",
@@ -928,6 +961,22 @@ class BibleWorkflowTest(TestCase):
 
         self.assertEqual(result["status"], "accepted")
         self.assertEqual(result["provider"], "phronesis-sd-clip")
+
+    def test_motion_safe_semantic_validation_accepts_one_fireball(self):
+        response = mock.Mock()
+        response.json.return_value = {
+            "caption": "a fireball in the middle of a black background"
+        }
+        session = mock.Mock()
+        session.post.return_value = response
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"generated-still")
+            result = bible_workflow._validate_motion_safe_still_semantics(
+                "Genesis 1:1", still, session=session
+            )
+
+        self.assertEqual(result["status"], "accepted")
 
     def test_generic_fill_the_frame_language_does_not_trigger_decorative_border_overlay(self):
         scene = {

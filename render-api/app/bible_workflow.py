@@ -31,6 +31,10 @@ STABLE_DIFFUSION_CHECKPOINT = os.getenv(
     "STABLE_DIFFUSION_CHECKPOINT",
     "Stable-diffusion/absolutereality_v181.safetensors",
 )
+STABLE_DIFFUSION_REPAIR_CHECKPOINT = os.getenv(
+    "STABLE_DIFFUSION_REPAIR_CHECKPOINT",
+    "Stable-diffusion/RealVisXL_V4.0.safetensors",
+)
 MEDIASTUDIO_RUNTIME_HOST = os.getenv("MEDIASTUDIO_RUNTIME_HOST", "")
 SEXTANT_ORCHESTRATOR_URL = os.getenv("SEXTANT_ORCHESTRATOR_URL", "")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://fortress.lan:11434")
@@ -1015,7 +1019,9 @@ def _validate_motion_safe_still_semantics(
     if not caption:
         raise RuntimeError("Motion-safe still semantic validation returned no caption")
 
-    required_subject = re.search(r"\b(planet|earth|world)\b", caption)
+    required_subject = re.search(
+        r"\b(planet|earth|world|globe|sphere|fireball|celestial body)\b", caption
+    )
     forbidden = [
         label
         for label, pattern in (
@@ -1037,6 +1043,75 @@ def _validate_motion_safe_still_semantics(
             f"{'; '.join(problems)}. Phronesis caption: {caption[:300]}"
         )
     return {"status": "accepted", "provider": "phronesis-sd-clip", "caption": caption[:500]}
+
+
+def _prepare_motion_safe_repair_candidate(
+    reference: str,
+    still_path: Path,
+    motion_plan: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Inset celestial subjects and align their vector box to the new composition."""
+    plan = json.loads(json.dumps(motion_plan)) if motion_plan else None
+    celestial_regions = [
+        region
+        for region in ((plan or {}).get("regions") or [])
+        if str(region.get("method") or "").lower() == "object-vector"
+        and re.search(
+            r"\b(planet|earth|world|globe|sphere|moon|sun|orb)\b",
+            str(region.get("label") or ""),
+            flags=re.IGNORECASE,
+        )
+    ]
+    if not celestial_regions or not re.match(
+        r"^genesis\s+1:1\b", reference.strip(), flags=re.IGNORECASE
+    ):
+        return plan, {"status": "not-required"}
+
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("Motion-safe celestial reframing requires OpenCV") from exc
+
+    image = cv2.imread(str(still_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise RuntimeError("Motion-safe celestial reframing could not read the generated still")
+    height, width = image.shape[:2]
+    inset_scale = 0.78
+    inset_width = max(2, round(width * inset_scale))
+    inset_height = max(2, round(height * inset_scale))
+    inset = cv2.resize(image, (inset_width, inset_height), interpolation=cv2.INTER_AREA)
+    border_samples = np.concatenate(
+        [image[0, :, :], image[-1, :, :], image[:, 0, :], image[:, -1, :]], axis=0
+    )
+    background_color = np.percentile(border_samples, 20, axis=0)
+    canvas = np.full((height, width, 3), background_color, dtype=np.uint8)
+    left = (width - inset_width) // 2
+    top = (height - inset_height) // 2
+    alpha = np.ones((inset_height, inset_width), dtype=np.float32)
+    feather = max(8, round(min(width, height) * 0.035))
+    ramp = np.linspace(0.0, 1.0, feather, dtype=np.float32)
+    alpha[:feather, :] *= ramp[:, None]
+    alpha[-feather:, :] *= ramp[::-1, None]
+    alpha[:, :feather] *= ramp[None, :]
+    alpha[:, -feather:] *= ramp[None, ::-1]
+    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=max(1.0, feather / 4.0))[:, :, None]
+    target = canvas[top:top + inset_height, left:left + inset_width].astype(np.float32)
+    canvas[top:top + inset_height, left:left + inset_width] = np.clip(
+        inset.astype(np.float32) * alpha + target * (1.0 - alpha), 0, 255
+    ).astype(np.uint8)
+    if not cv2.imwrite(str(still_path), canvas):
+        raise RuntimeError("Motion-safe celestial reframing could not save the generated still")
+
+    for region in celestial_regions:
+        region["box"] = {"x": 0.16, "y": 0.04, "width": 0.68, "height": 0.84}
+    plan = _sanitize_motion_plan(plan or {}, source="motion-safe-repair")
+    return plan, {
+        "status": "applied",
+        "method": "feathered-celestial-inset",
+        "scale": inset_scale,
+        "safeMargin": round((1.0 - inset_scale) / 2.0, 3),
+    }
 
 
 def repair_and_animate_bible_scene(
@@ -1080,12 +1155,19 @@ def repair_and_animate_bible_scene(
         regenerate_bible_scene_stills(
             project_id,
             [scene_index],
+            checkpoint=STABLE_DIFFUSION_REPAIR_CHECKPOINT,
+            restore_checkpoint=False,
             progress=lambda _stage, _value: None,
             log=log,
         )
         try:
             repaired_document, repaired_scene, repaired_still_path, _ = scene_animation_context(
                 project_id, scene_index
+            )
+            candidate_plan, reframing = _prepare_motion_safe_repair_candidate(
+                str(repaired_scene.get("title") or f"Scene {scene_index}"),
+                repaired_still_path,
+                motion_plan or repaired_scene.get("motionPlan"),
             )
             semantic_validation = _validate_motion_safe_still_semantics(
                 str(repaired_scene.get("title") or f"Scene {scene_index}"),
@@ -1096,6 +1178,9 @@ def repair_and_animate_bible_scene(
                 repaired_timeline.append({})
             repaired_generation = repaired_timeline[0].setdefault("imageGeneration", {})
             repaired_generation["semanticValidation"] = semantic_validation
+            repaired_generation["motionSafeReframing"] = reframing
+            if candidate_plan:
+                repaired_scene["motionPlan"] = candidate_plan
             repaired_name = str((repaired_document.get("info") or {}).get("name") or project_id)
             save_scenes(
                 project_id,
@@ -1107,7 +1192,7 @@ def repair_and_animate_bible_scene(
                 scene_index,
                 prompt,
                 camera_behavior,
-                motion_plan,
+                candidate_plan,
                 progress=progress,
                 log=log,
             )
@@ -1193,7 +1278,15 @@ def build_storyboard(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]
     return canonical, scenes
 
 
-def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "", session=requests) -> dict[str, Any]:
+def _generate_still(
+    prompt: str,
+    destination: Path,
+    *,
+    negative_extra: str = "",
+    checkpoint: str | None = None,
+    restore_checkpoint: bool = True,
+    session=requests,
+) -> dict[str, Any]:
     # ComfyUI and Stable Diffusion share the Phronesis GPU. Release any staged
     # video model before asking the still-image service to allocate its UNet.
     # The cleanup is best-effort because an already-idle ComfyUI instance must
@@ -1214,6 +1307,7 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
     if negative_extra.strip():
         negative_prompt = f"{negative_prompt}, {negative_extra.strip()}"
     seed = random.randint(1, 2**63 - 1)
+    selected_checkpoint = checkpoint or STABLE_DIFFUSION_CHECKPOINT
     payload = {
         "prompt": prompt,
         "negative_prompt": negative_prompt,
@@ -1223,8 +1317,8 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
         "cfg_scale": 7,
         "sampler_name": "DPM++ 2M Karras",
         "seed": seed,
-        "override_settings": {"sd_model_checkpoint": STABLE_DIFFUSION_CHECKPOINT},
-        "override_settings_restore_afterwards": True,
+        "override_settings": {"sd_model_checkpoint": selected_checkpoint},
+        "override_settings_restore_afterwards": restore_checkpoint,
     }
     response = session.post(
         STABLE_DIFFUSION_API_URL,
@@ -1256,7 +1350,7 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
         "prompt": prompt,
         "negativePrompt": negative_prompt,
         "seed": seed,
-        "model": STABLE_DIFFUSION_CHECKPOINT,
+        "model": selected_checkpoint,
         "sampler": "DPM++ 2M Karras",
         "steps": 24,
         "cfgScale": 7,
@@ -1367,6 +1461,8 @@ def regenerate_bible_scene_stills(
     project_id: str,
     scene_indexes: list[int] | None = None,
     *,
+    checkpoint: str | None = None,
+    restore_checkpoint: bool = True,
     progress: Progress,
     log: Log,
 ) -> Path:
@@ -1410,7 +1506,13 @@ def regenerate_bible_scene_stills(
             shutil.copy2(destination, backup_dir / backup_name)
             scene.setdefault("imageHistory", []).append(f"history/{backup_name}")
         log(f"Regenerating scenery-first still {position}/{len(indexes)} for {reference}")
-        generation = _generate_still(prompt, destination, negative_extra=_scene_negative_prompt(reference))
+        generation = _generate_still(
+            prompt,
+            destination,
+            negative_extra=_scene_negative_prompt(reference),
+            checkpoint=checkpoint,
+            restore_checkpoint=restore_checkpoint,
+        )
         timeline[0]["image"] = destination.name
         timeline[0]["prompt"] = prompt
         timeline[0]["imageGeneration"] = generation
