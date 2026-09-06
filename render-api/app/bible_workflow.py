@@ -984,6 +984,83 @@ def animate_bible_scene(
     return clip_path
 
 
+def repair_and_animate_bible_scene(
+    project_id: str,
+    scene_index: int,
+    prompt: str = "",
+    camera_behavior: str = "locked",
+    motion_plan: dict[str, Any] | None = None,
+    *,
+    progress: Progress,
+    log: Log,
+    max_still_attempts: int = 3,
+) -> Path:
+    """Replace a clipped still and animate it as one recoverable operation.
+
+    Motion prompts cannot reconstruct source pixels that were already outside
+    the canvas.  This workflow generates fresh motion-safe compositions until
+    the object-vector preflight passes.  If every candidate fails, the exact
+    original still, scene document, and project state are restored.
+    """
+    document, _scene, still_path, _clip_path = scene_animation_context(project_id, scene_index)
+    original_document = json.loads(json.dumps(document))
+    original_still = still_path.read_bytes()
+    original_state = read_project_state(project_id) or {}
+    attempts = max(1, min(int(max_still_attempts), 5))
+    last_error: Exception | None = None
+    attempts_used = 0
+
+    for attempt in range(1, attempts + 1):
+        attempts_used = attempt
+        log(f"Generating motion-safe still candidate {attempt}/{attempts} for scene {scene_index}")
+        progress("REPAIRING_STILL", 0.03 + ((attempt - 1) / attempts) * 0.18)
+        regenerate_bible_scene_stills(
+            project_id,
+            [scene_index],
+            progress=lambda _stage, _value: None,
+            log=log,
+        )
+        try:
+            return animate_bible_scene(
+                project_id,
+                scene_index,
+                prompt,
+                camera_behavior,
+                motion_plan,
+                progress=progress,
+                log=log,
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if "clipped by the source frame" not in str(exc).lower():
+                break
+            log(f"Still candidate {attempt} failed the motion-safe edge check")
+
+    still_path.parent.mkdir(parents=True, exist_ok=True)
+    still_path.write_bytes(original_still)
+    restored_scene = (original_document.get("scenes") or [])[scene_index - 1]
+    restored_scene["animationQuality"] = {
+        "status": "rejected",
+        "cameraBehavior": camera_behavior,
+        "reason": (
+            f"Automatic motion-safe repair did not produce an accepted animation after {attempts_used} "
+            f"still candidate{'s' if attempts_used != 1 else ''}. The original still was restored. "
+            f"Last error: {str(last_error)[:500]}"
+        ),
+        "updatedAt": time.time(),
+    }
+    project_name = str((original_document.get("info") or {}).get("name") or project_id)
+    save_scenes(project_id, json.dumps(original_document, indent=2), project_name=project_name)
+    save_project_state(
+        project_id,
+        original_state,
+        project_name=str(original_state.get("title") or project_name),
+    )
+    if last_error is not None:
+        raise RuntimeError(restored_scene["animationQuality"]["reason"]) from last_error
+    raise RuntimeError(restored_scene["animationQuality"]["reason"])
+
+
 def build_storyboard(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     passage_data = fetch_passage(payload["passage"], payload.get("translation") or "kjv")
     canonical = str(passage_data.get("reference") or payload["passage"]).strip()

@@ -795,6 +795,52 @@ class BibleWorkflowTest(TestCase):
         self.assertNotIn("camera pans", rejected_scene["motionPrompt"].lower())
         self.assertIn("Keep the camera locked", rejected_scene["motionPrompt"])
 
+    def test_motion_safe_repair_restores_original_still_and_scene_after_exhaustion(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)"},
+            "scenes": [{
+                "title": "Genesis 1:1",
+                "VO": "In the beginning.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png"}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(
+            bible_workflow, "read_project_state", return_value={"title": "Genesis 1 (KJV)", "hasMotionScenes": False}
+        ), mock.patch.object(
+            bible_workflow, "regenerate_bible_scene_stills"
+        ) as regenerate, mock.patch.object(
+            bible_workflow,
+            "animate_bible_scene",
+            side_effect=RuntimeError("Object-vector region Planet is clipped by the source frame"),
+        ) as animate, mock.patch.object(
+            bible_workflow, "save_scenes"
+        ) as save_scenes, mock.patch.object(bible_workflow, "save_project_state") as save_state:
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            still = input_dir / "images" / "scene_001.png"
+            still.write_bytes(b"original-still")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "after 3 still candidates"):
+                bible_workflow.repair_and_animate_bible_scene(
+                    "bible-test",
+                    1,
+                    "The planet moves downward.",
+                    motion_plan={"regions": [{"label": "Planet"}]},
+                    progress=mock.Mock(),
+                    log=mock.Mock(),
+                )
+
+            self.assertEqual(still.read_bytes(), b"original-still")
+            self.assertEqual(regenerate.call_count, 3)
+            self.assertEqual(animate.call_count, 3)
+            restored_document = json.loads(save_scenes.call_args.args[1])
+            self.assertIn("original still was restored", restored_document["scenes"][0]["animationQuality"]["reason"])
+            self.assertEqual(save_state.call_args.args[1]["hasMotionScenes"], False)
+
     def test_generic_fill_the_frame_language_does_not_trigger_decorative_border_overlay(self):
         scene = {
             "title": "Genesis 1:1",
