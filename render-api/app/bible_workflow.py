@@ -211,7 +211,10 @@ def _genesis_one_visual_subject(reference: str) -> str:
     match = re.match(r"^genesis\s+1(?::(\d+))?\b", reference.strip(), flags=re.IGNORECASE)
     verse_number = int(match.group(1) or 0) if match else 0
     subjects = {
-        1: "A vast primordial cosmos and newly forming earth beneath immense heavens",
+        1: (
+            "Exactly one newly forming planet suspended high in a vast primordial cosmos, the complete round planet "
+            "fully visible with open starfield above, below, and on both sides, never touching a frame edge"
+        ),
         2: "A formless dark ocean under a deep empty sky, with wind tracing broad ripples across the water",
         3: "The first radiant light breaking across primordial darkness and illuminating the ocean",
         4: "A sharp boundary forming between luminous day and deep darkness across the same horizon",

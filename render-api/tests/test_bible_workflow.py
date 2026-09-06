@@ -37,6 +37,8 @@ class BibleWorkflowTest(TestCase):
 
         self.assertIn("at least 12 percent inside every frame edge", prompt)
         self.assertIn("never crop it", prompt)
+        self.assertIn("Exactly one newly forming planet", prompt)
+        self.assertIn("never touching a frame edge", prompt)
 
     def test_catalog_exposes_every_legacy_and_current_style(self):
         styles = art_styles.list_art_styles()
