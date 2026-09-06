@@ -1040,6 +1040,17 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
         cleanup.raise_for_status()
     except requests.RequestException:
         pass
+    def unload_still_checkpoint() -> None:
+        try:
+            cleanup = session.post(
+                STABLE_DIFFUSION_API_URL.replace("/txt2img", "/unload-checkpoint"),
+                timeout=60,
+            )
+            cleanup.raise_for_status()
+        except requests.RequestException:
+            pass
+
+    unload_still_checkpoint()
     negative_prompt = (
         "text, watermark, logo, modern clothing, modern architecture, deformed anatomy, extra limbs, "
         f"duplicate people, face morph, blur, low detail, {GOD_CHARACTER_NEGATIVE}"
@@ -1047,23 +1058,40 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
     if negative_extra.strip():
         negative_prompt = f"{negative_prompt}, {negative_extra.strip()}"
     seed = random.randint(1, 2**63 - 1)
+    payload = {
+        "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "width": 1024,
+        "height": 576,
+        "steps": 24,
+        "cfg_scale": 7,
+        "sampler_name": "DPM++ 2M Karras",
+        "seed": seed,
+        "override_settings": {"sd_model_checkpoint": STABLE_DIFFUSION_CHECKPOINT},
+        "override_settings_restore_afterwards": True,
+    }
     response = session.post(
         STABLE_DIFFUSION_API_URL,
-        json={
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "width": 1024,
-            "height": 576,
-            "steps": 24,
-            "cfg_scale": 7,
-            "sampler_name": "DPM++ 2M Karras",
-            "seed": seed,
-            "override_settings": {"sd_model_checkpoint": STABLE_DIFFUSION_CHECKPOINT},
-            "override_settings_restore_afterwards": True,
-        },
+        json=payload,
         timeout=STABLE_DIFFUSION_TIMEOUT_SECONDS,
     )
-    response.raise_for_status()
+    resolution_fallback = False
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        if getattr(exc.response, "status_code", None) != 500:
+            raise
+        # The 12 GB Phronesis GPU can render 16:9 reliably at this size after
+        # a video model has run, even when 1024x576 cannot be allocated.
+        unload_still_checkpoint()
+        payload = {**payload, "width": 640, "height": 360}
+        response = session.post(
+            STABLE_DIFFUSION_API_URL,
+            json=payload,
+            timeout=STABLE_DIFFUSION_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        resolution_fallback = True
     images = response.json().get("images") or []
     if not images:
         raise RuntimeError("Stable Diffusion returned no image")
@@ -1077,8 +1105,9 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
         "sampler": "DPM++ 2M Karras",
         "steps": 24,
         "cfgScale": 7,
-        "width": 1024,
-        "height": 576,
+        "width": payload["width"],
+        "height": payload["height"],
+        "resolutionFallback": resolution_fallback,
     }
 
 
