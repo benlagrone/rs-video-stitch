@@ -39,6 +39,9 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("never crop it", prompt)
         self.assertIn("Exactly one newly forming planet", prompt)
         self.assertIn("never touching a frame edge", prompt)
+        negative = bible_workflow._scene_negative_prompt("Genesis 1:1")
+        self.assertIn("multiple planets", negative)
+        self.assertIn("moon", negative)
 
     def test_catalog_exposes_every_legacy_and_current_style(self):
         styles = art_styles.list_art_styles()

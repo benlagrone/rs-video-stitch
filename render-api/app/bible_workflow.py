@@ -198,6 +198,11 @@ def _scene_negative_prompt(reference: str) -> str:
             ", anthropomorphic God, human deity, portrait of God, elderly deity, two elderly men, architecture, "
             "building, house, palace, church, temple, arches, columns, city, village, road, paved path"
         )
+        if verse_number == 1:
+            negative += (
+                ", second planet, extra planet, multiple planets, moon, moons, satellite, extra orb, "
+                "small celestial spheres, solar system diagram"
+            )
         if not verse_number or verse_number <= 25 or verse_number == 30:
             negative += (
                 ", person, people, man, woman, male figure, female figure, human, humanoid, face, portrait, "
@@ -212,8 +217,9 @@ def _genesis_one_visual_subject(reference: str) -> str:
     verse_number = int(match.group(1) or 0) if match else 0
     subjects = {
         1: (
-            "Exactly one newly forming planet suspended high in a vast primordial cosmos, the complete round planet "
-            "fully visible with open starfield above, below, and on both sides, never touching a frame edge"
+            "(Exactly one newly forming planet:1.5) suspended high in a vast primordial cosmos, the complete round "
+            "planet fully visible with (empty open starfield:1.3) above, below, and on both sides, never touching a "
+            "frame edge; no moons, satellites, secondary planets, or other round celestial bodies"
         ),
         2: "A formless dark ocean under a deep empty sky, with wind tracing broad ripples across the water",
         3: "The first radiant light breaking across primordial darkness and illuminating the ocean",
