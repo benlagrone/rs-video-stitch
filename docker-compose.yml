@@ -25,6 +25,7 @@ services:
       - ROOM_RENAMER_REQUIRED=${ROOM_RENAMER_REQUIRED:-1}
       - STABLE_DIFFUSION_API_URL=${STABLE_DIFFUSION_API_URL:-http://100.100.97.30:7861/sdapi/v1/txt2img}
       - COMFYUI_MODEL_API_URL=${COMFYUI_MODEL_API_URL:-http://100.100.97.30:8188}
+      - LTX_KEYFRAME_CHECKPOINT=${LTX_KEYFRAME_CHECKPOINT:-ltxv-13b-0.9.8-distilled-fp8.safetensors}
       - BIBLE_TEXT_API_URL=${BIBLE_TEXT_API_URL:-https://bible-api.com}
       - YOUTUBE_CLIENT_ID=${YOUTUBE_CLIENT_ID:-}
       - YOUTUBE_CLIENT_SECRET=${YOUTUBE_CLIENT_SECRET:-}
@@ -64,6 +65,7 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://100.100.97.30:11434}
       - STABLE_DIFFUSION_API_URL=${STABLE_DIFFUSION_API_URL:-http://100.100.97.30:7861/sdapi/v1/txt2img}
       - COMFYUI_MODEL_API_URL=${COMFYUI_MODEL_API_URL:-http://100.100.97.30:8188}
+      - LTX_KEYFRAME_CHECKPOINT=${LTX_KEYFRAME_CHECKPOINT:-ltxv-13b-0.9.8-distilled-fp8.safetensors}
       - BIBLE_TEXT_API_URL=${BIBLE_TEXT_API_URL:-https://bible-api.com}
     volumes:
       - ${MEDIASTUDIO_RENDER_STORAGE:-/Users/benjaminlagrone/Videos/MediaStudio}:/videos

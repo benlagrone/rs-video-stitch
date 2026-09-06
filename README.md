@@ -95,6 +95,7 @@ mkdir -p ~/Videos/MediaStudio/{logs,projects}
 | `DEFAULT_XFADE` | `0.5` | Default cross-fade length in seconds. |
 | `DEFAULT_CRF` | `18` | Default H.264 CRF quality. |
 | `DEFAULT_PRESET` | `medium` | Default encoder preset. |
+| `LTX_KEYFRAME_CHECKPOINT` | `ltxv-2b-0.9.8-distilled-fp8.safetensors` | ComfyUI checkpoint used for start/end-keyframe motion. The locked Sextant deployment selects the stronger local 13B FP8 checkpoint hosted on Phronesis. |
 | `TITLE_FONT_FILE` | — | Override the TTF used for scene title overlays (defaults to `media/EB_Garamond/EBGaramond-VariableFont_wght.ttf`). |
 | `XTTS_API_URL` | — | Base URL for xTTS HTTP endpoint (e.g. `http://xtts:5002`). |
 | `XTTS_API_KEY` | — | Optional bearer token for the xTTS service. |
