@@ -1258,6 +1258,8 @@ def regenerate_bible_scene_stills(
         timeline[0]["imageGeneration"] = generation
         timeline[0].pop("video", None)
         timeline[0].pop("motionGeneration", None)
+        scene.pop("animationQuality", None)
+        scene.pop("animationRejected", None)
         scene["imageUpdatedAt"] = time.time()
         last_path = destination
         progress("IMAGE_REGENERATION", 0.05 + (position / len(indexes)) * 0.9)
