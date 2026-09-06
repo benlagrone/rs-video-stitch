@@ -27,6 +27,8 @@ COMFYUI_TIMEOUT_SECONDS = float(os.getenv("COMFYUI_TIMEOUT_SECONDS", "7200"))
 COMFYUI_POLL_SECONDS = float(os.getenv("COMFYUI_POLL_SECONDS", "5"))
 WORKFLOW_PATH = Path(__file__).resolve().parent / "workflows" / "wan2_2_ti2v_5b_api.json"
 OBJECT_VECTOR_PROVIDER = "sextant-object-vector-v1"
+OBJECT_MOTION_CORRIDOR_EXPANSION = 40
+OBJECT_MOTION_CORRIDOR_FEATHER = 14.0
 FRAME_PROTECTION_WIDTH = 576
 FRAME_PROTECTION_HEIGHT = 320
 FRAME_PROTECTION_X = 69
@@ -1328,6 +1330,7 @@ def _generate_object_vector_clip(
     scene_prompt: str = "",
     negative_prompt: str = "",
     guidance_mask_destination: Path | None = None,
+    guidance_corridor_destination: Path | None = None,
     session=requests,
 ) -> dict[str, Any]:
     """Segment existing objects, inpaint their old locations, and tween exact vectors.
@@ -1361,6 +1364,7 @@ def _generate_object_vector_clip(
     union_mask = np.zeros((height, width), dtype=np.uint8)
     sprite_paths: list[Path] = []
     mask_paths: list[Path] = []
+    corridor_mask_paths: list[Path] = []
     route_regions: list[dict[str, Any]] = []
     region_labels: list[str] = []
     try:
@@ -1425,6 +1429,25 @@ def _generate_object_vector_clip(
             if not cv2.imwrite(str(mask_path), soft_mask):
                 raise MotionProviderError("Unable to save an object-vector guidance matte")
             mask_paths.append(mask_path)
+            corridor_kernel_size = (OBJECT_MOTION_CORRIDOR_EXPANSION * 2) + 1
+            corridor_mask = cv2.dilate(
+                hard_mask,
+                cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE,
+                    (corridor_kernel_size, corridor_kernel_size),
+                ),
+                iterations=1,
+            )
+            corridor_mask = cv2.GaussianBlur(
+                corridor_mask,
+                (0, 0),
+                sigmaX=OBJECT_MOTION_CORRIDOR_FEATHER,
+                sigmaY=OBJECT_MOTION_CORRIDOR_FEATHER,
+            )
+            corridor_mask_path = temp_root / f"corridor-mask-{index}.png"
+            if not cv2.imwrite(str(corridor_mask_path), corridor_mask):
+                raise MotionProviderError("Unable to save an object-vector generative corridor")
+            corridor_mask_paths.append(corridor_mask_path)
             region_labels.append(str(region.get("label") or f"Region {index}"))
 
             vector = region.get("vector") or {}
@@ -1491,35 +1514,46 @@ def _generate_object_vector_clip(
             raise MotionProviderError(f"Unable to render object-vector motion: {detail[-600:]}") from exc
         if not destination.exists() or destination.stat().st_size == 0:
             raise MotionProviderError("Object-vector rendering produced no video")
-        if guidance_mask_destination and len(mask_paths) == 1:
+        def render_moving_matte(source: Path, target: Path, label: str) -> None:
             route = route_regions[0]
             easing = _vector_easing_expression(str(route["easing"]), duration)
             mask_command = [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-f", "lavfi", "-i",
                 f"color=black:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d={duration}",
-                "-framerate", "16", "-loop", "1", "-i", str(mask_paths[0]),
+                "-framerate", "16", "-loop", "1", "-i", str(source),
                 "-filter_complex",
                 f"[0:v]format=gray[base];[1:v]format=gray[matte];"
                 f"[base][matte]overlay=x='{route['dxPixels']}*{easing}':"
                 f"y='{route['dyPixels']}*{easing}':shortest=1,format=yuv420p[v]",
                 "-map", "[v]", "-t", str(duration), "-r", "16", "-c:v", "libx264",
                 "-preset", "fast", "-crf", "12", "-pix_fmt", "yuv420p",
-                str(guidance_mask_destination),
+                str(target),
             ]
             try:
                 subprocess.run(mask_command, check=True, capture_output=True, text=True)
             except (FileNotFoundError, subprocess.CalledProcessError) as exc:
                 detail = getattr(exc, "stderr", "") or str(exc)
                 raise MotionProviderError(
-                    f"Unable to render object-vector guidance matte: {detail[-600:]}"
+                    f"Unable to render object-vector {label}: {detail[-600:]}"
                 ) from exc
-            _verify_temporal_control_track(guidance_mask_destination, "object matte")
+            _verify_temporal_control_track(target, label)
+
+        if guidance_mask_destination and len(mask_paths) == 1:
+            render_moving_matte(mask_paths[0], guidance_mask_destination, "object matte")
+        if guidance_corridor_destination and len(corridor_mask_paths) == 1:
+            render_moving_matte(
+                corridor_mask_paths[0],
+                guidance_corridor_destination,
+                "generative motion corridor",
+            )
         return {
             "regions": route_regions,
             "backgroundInpainted": True,
             "backgroundMode": background_mode,
             "occlusionRatio": round(occlusion_ratio, 4),
+            "generativeCorridorExpansionPixels": OBJECT_MOTION_CORRIDOR_EXPANSION,
+            "generativeCorridorFeatherPixels": OBJECT_MOTION_CORRIDOR_FEATHER,
         }
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
@@ -1531,11 +1565,11 @@ def _composite_generated_object_motion(
     moving_mask_path: Path,
     destination: Path,
 ) -> None:
-    """Keep generated motion only inside the exact tweened object silhouette."""
+    """Blend model motion through a feathered corridor around the moving subject."""
     filter_graph = (
         f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[vector];"
         f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[generated];"
-        f"[2:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gray,boxblur=2:1[mask];"
+        f"[2:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gray[mask];"
         "[vector][generated][mask]maskedmerge,format=yuv420p[v]"
     )
     command = [
@@ -1573,6 +1607,7 @@ def generate_motion_clip(
         generative_regions = _generative_regions(motion_plan)
         vector_path: Path | None = None
         vector_mask_path: Path | None = None
+        vector_corridor_path: Path | None = None
         vector_route: dict[str, Any] | None = None
 
         def validate_object_vector() -> dict[str, Any]:
@@ -1609,6 +1644,10 @@ def generate_motion_clip(
                 Path(temp_dir) / f"vector-mask-{image_path.stem}.mp4"
                 if len(object_regions) == 1 else None
             )
+            vector_corridor_path = (
+                Path(temp_dir) / f"vector-corridor-{image_path.stem}.mp4"
+                if len(object_regions) == 1 else None
+            )
             vector_route = _generate_object_vector_clip(
                 prepared_source,
                 motion_plan or {},
@@ -1616,6 +1655,7 @@ def generate_motion_clip(
                 scene_prompt=prompt,
                 negative_prompt=negative_prompt,
                 guidance_mask_destination=vector_mask_path,
+                guidance_corridor_destination=vector_corridor_path,
                 session=session,
             )
             _release_stable_diffusion_gpu_memory(session)
@@ -1695,13 +1735,16 @@ def generate_motion_clip(
                 )
                 keyframe_prompt = (
                     f"{prompt} The supplied first and final frames are mandatory trajectory keyframes. "
-                    "Generate coherent physical motion between them: preserve the same subject identity and "
-                    "shape while its visible surface, atmosphere, light, and material move naturally. "
-                    f"Keep the camera and all background scenery fixed. {actions}"
+                    "Generate one continuous physical event between them. Keep exactly one subject, but let "
+                    "its perspective, silhouette, surface, atmosphere, illumination, and shadows evolve "
+                    "naturally as its center follows the required trajectory. Nearby dust, haze, light, and "
+                    "terrain must react to the movement. This is dimensional scene motion, never a flat "
+                    f"sprite or translated crop. Keep the camera and distant scenery fixed. {actions}"
                 )[:2800]
                 keyframe_negative_prompt = (
                     f"{negative_prompt}, cutout, collage, sprite, duplicate subject, trailing copy, "
-                    "moving crop, rectangular patch, matte seam, dissolve, transparency, ghost image, "
+                    "rigid pasted silhouette, moving crop, rectangular patch, matte seam, dissolve, "
+                    "transparency, ghost image, frozen lighting, frozen atmosphere, "
                     "camera movement, zoom, shake, black splotch, color corruption"
                 )[:2200]
                 keyframe_workflow = _ltx_keyframe_workflow(
@@ -1713,12 +1756,14 @@ def generate_motion_clip(
                     effective_seed ^ 0x4C5458,
                 )
                 _queue_and_download_workflow(session, keyframe_workflow, generated_keyframe_video)
-                if not vector_mask_path:
-                    raise MotionProviderError("Object-vector keyframe generation requires an exact moving matte")
+                if not vector_corridor_path:
+                    raise MotionProviderError(
+                        "Object-vector keyframe generation requires a feathered generative corridor"
+                    )
                 _composite_generated_object_motion(
                     vector_path,
                     generated_keyframe_video,
-                    vector_mask_path,
+                    vector_corridor_path,
                     destination,
                 )
                 stabilization: dict[str, Any] = {
@@ -1741,7 +1786,7 @@ def generate_motion_clip(
                     "sourceSizing": "fit-and-pad-no-crop",
                     "modelProvider": f"{OBJECT_VECTOR_PROVIDER}+ltxv-2b-keyframe",
                     "providerPolicy": "phronesis-local-model-via-sextant-orchestration",
-                    "controlMode": "tween-endpoint-guided-generative-video",
+                    "controlMode": "feathered-generative-motion-corridor",
                     "modelDenoise": 1.0,
                     "lockedBackground": bool((motion_plan or {}).get("lockedBackground", True)),
                     "semanticIdentityPreserved": True,
@@ -1749,7 +1794,7 @@ def generate_motion_clip(
                     "motionRegionCount": len(object_regions),
                     "motionPlanSummary": str((motion_plan or {}).get("summary") or "")[:320],
                     "objectVectorRoute": vector_route,
-                    "semanticMotionGate": "start-end-keyframes-and-fixed-background-tiles",
+                    "semanticMotionGate": "start-end-keyframes-feathered-corridor-and-fixed-background-tiles",
                     "stabilization": stabilization,
                     "lockedEdgesProtected": camera_behavior == "locked",
                     "sourceFrameSsim": _measure_source_frame_fidelity(prepared_source, destination),
