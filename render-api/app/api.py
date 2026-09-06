@@ -422,6 +422,43 @@ async def animate_scene(
     return {"projectId": pid, "sceneIndex": scene_index, "jobId": job_id, "status": "QUEUED"}
 
 
+@app.post("/v1/projects/{pid}/scenes/{scene_index}/repair-and-animate", status_code=202)
+async def repair_and_animate_scene(
+    pid: str,
+    scene_index: int,
+    req: SceneAnimationRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        scene_animation_context(pid, scene_index)
+    except (FileNotFoundError, IndexError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    project = db.get(Project, pid)
+    if project is None:
+        project = Project(id=pid)
+        db.add(project)
+    job_id = f"j_{uuid.uuid4().hex[:12]}"
+    db.add(
+        Job(
+            id=job_id,
+            project_id=pid,
+            status="QUEUED",
+            payload={
+                "workflow": "scene-animation-repair",
+                "sceneIndex": scene_index,
+                "prompt": req.prompt.strip(),
+                "cameraBehavior": req.cameraBehavior,
+                "motionPlan": req.motionPlan or {},
+            },
+            progress=0.0,
+            stage="QUEUED",
+        )
+    )
+    db.commit()
+    return {"projectId": pid, "sceneIndex": scene_index, "jobId": job_id, "status": "QUEUED"}
+
+
 @app.post("/v1/projects/{pid}/scenes/animate-all", status_code=202)
 async def animate_all_scenes(
     pid: str,
