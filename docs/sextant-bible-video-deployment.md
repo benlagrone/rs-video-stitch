@@ -31,8 +31,10 @@ and publishing logic all execute on Sextant.
 
 ```text
 browser -> Sextant MediaStudio API -> Sextant video worker
-                                      -> Fortress LAN image GPU
-                                      -> Fortress LAN ComfyUI/Wan model
+                                      -> Sextant Timefold GPU admission
+                                          -> Fortress LAN image GPU
+                                          -> Fortress LAN Ollama model
+                                          -> Fortress LAN ComfyUI/Wan model
                                       -> Fortress LAN voice gateway
                                       -> YouTube API after explicit review
 ```
@@ -47,6 +49,7 @@ and keep YouTube publishing behind a separate confirmation dialog.
 - Compose project: `mediastudio-sextant`
 - Compose file: `docker-compose.yml`
 - Network: `mediastudio-sextant-net`
+- Workload-control network: `fortress-workload-control-net`
 - Private UI: `http://fortress-sextant.lan:8082/media-studio`
 - Storage: `~/Videos/MediaStudio` for Bible, real-estate, and generic projects
 - SFX library: `~/Videos/MediaStudio/sfx-library`
@@ -59,6 +62,13 @@ firewall instead of opening model ports to the general LAN. Voice provider
 tokens and provider-selection policy stay inside the Fortress voice gateway;
 YouTube credentials stay in the Sextant server environment. No credential is
 returned to the browser.
+
+Generation calls are fail-closed behind the authenticated Sextant optimization
+admission API. Timefold validates current VRAM capacity, then grants one expiring
+lease across the complete Ollama, Stable Diffusion, or ComfyUI operation. Long
+motion jobs heartbeat the lease until the artifact is downloaded and validated.
+Provider health and model inventory requests are read-only diagnostics and do
+not acquire a lease.
 
 MediaStudio keeps independent `english` and `mandarin` YouTube publishing
 profiles. The existing `/videos/youtube_token.json` remains the English token;

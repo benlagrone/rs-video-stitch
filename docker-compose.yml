@@ -7,6 +7,7 @@ services:
     container_name: mediastudio-api
     networks:
       - mediastudio-sextant-net
+      - fortress-workload-control-net
     environment:
       - RENDER_STORAGE=/videos
       - SFX_LIBRARY_ROOT=/videos/sfx-library
@@ -25,6 +26,9 @@ services:
       - ROOM_RENAMER_REQUIRED=${ROOM_RENAMER_REQUIRED:-1}
       - STABLE_DIFFUSION_API_URL=${STABLE_DIFFUSION_API_URL:-http://100.100.97.30:7861/sdapi/v1/txt2img}
       - COMFYUI_MODEL_API_URL=${COMFYUI_MODEL_API_URL:-http://100.100.97.30:8188}
+      - FORTRESS_OPTIMIZATION_MCP_URL=http://fortress-optimization-mcp:8001
+      - FORTRESS_OPTIMIZATION_MCP_TOKEN=${FORTRESS_OPTIMIZATION_MCP_TOKEN:?Set FORTRESS_OPTIMIZATION_MCP_TOKEN in the Sextant environment}
+      - FORTRESS_GPU_ADMISSION_REQUIRED=1
       - BIBLE_TEXT_API_URL=${BIBLE_TEXT_API_URL:-https://bible-api.com}
       - YOUTUBE_CLIENT_ID=${YOUTUBE_CLIENT_ID:-}
       - YOUTUBE_CLIENT_SECRET=${YOUTUBE_CLIENT_SECRET:-}
@@ -53,6 +57,7 @@ services:
     command: ["python","-m","app.worker"]
     networks:
       - mediastudio-sextant-net
+      - fortress-workload-control-net
     environment:
       - RENDER_STORAGE=/videos
       - DB_URL=sqlite:////videos/db.sqlite3
@@ -64,6 +69,9 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://100.100.97.30:11434}
       - STABLE_DIFFUSION_API_URL=${STABLE_DIFFUSION_API_URL:-http://100.100.97.30:7861/sdapi/v1/txt2img}
       - COMFYUI_MODEL_API_URL=${COMFYUI_MODEL_API_URL:-http://100.100.97.30:8188}
+      - FORTRESS_OPTIMIZATION_MCP_URL=http://fortress-optimization-mcp:8001
+      - FORTRESS_OPTIMIZATION_MCP_TOKEN=${FORTRESS_OPTIMIZATION_MCP_TOKEN:?Set FORTRESS_OPTIMIZATION_MCP_TOKEN in the Sextant environment}
+      - FORTRESS_GPU_ADMISSION_REQUIRED=1
       - BIBLE_TEXT_API_URL=${BIBLE_TEXT_API_URL:-https://bible-api.com}
     volumes:
       - ${MEDIASTUDIO_RENDER_STORAGE:-/Users/benjaminlagrone/Videos/MediaStudio}:/videos
@@ -74,3 +82,5 @@ services:
 networks:
   mediastudio-sextant-net:
     name: mediastudio-sextant-net
+  fortress-workload-control-net:
+    external: true

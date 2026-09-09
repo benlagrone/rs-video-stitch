@@ -9,7 +9,10 @@ The render API exposes `POST /v1/script/enhance`, `POST /v1/lead-card/generate`,
 and `POST /v1/youtube/description/enhance` for server-side writing through an
 Ollama-compatible API. Configure them with `OLLAMA_BASE_URL` and `OLLAMA_MODEL`
 (`mixtral:latest` on the protected Fortress model host). Browser clients call
-only these MediaStudio same-origin routes; they never call Ollama directly.
+only these MediaStudio same-origin routes; they never call Ollama directly. In
+the locked Sextant runtime, each provider generation call also acquires and
+holds a central Phronesis GPU lease through the Fortress optimization service.
+Direct model URLs remain provider adapters, not scheduling bypasses.
 
 ## CI
 

@@ -12,6 +12,27 @@ base_url="http://127.0.0.1:8082"
 curl --fail --silent --show-error "$base_url/healthz" >/dev/null
 curl --fail --silent --show-error "$base_url/media-studio" >/dev/null
 
+docker network inspect fortress-workload-control-net >/dev/null
+for container in mediastudio-api mediastudio-worker; do
+  docker inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+    | grep -qx 'FORTRESS_GPU_ADMISSION_REQUIRED=1'
+  docker inspect "$container" --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' \
+    | grep -qx 'fortress-workload-control-net'
+done
+docker exec -i mediastudio-api python - <<'PY'
+import json
+import os
+import urllib.request
+
+request = urllib.request.Request(
+    os.environ["FORTRESS_OPTIMIZATION_MCP_URL"] + "/internal/v1/phronesis/admission",
+    headers={"Authorization": f"Bearer {os.environ['FORTRESS_OPTIMIZATION_MCP_TOKEN']}"},
+)
+with urllib.request.urlopen(request, timeout=5) as response:
+    admission = json.load(response)
+assert admission["status"] in {"idle", "leased"}
+PY
+
 sfx_catalog=$(curl --fail --silent --show-error "$base_url/v1/sfx/catalog")
 python3 -c '
 import json, sys

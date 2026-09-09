@@ -17,6 +17,7 @@ from urllib.parse import quote
 import requests
 
 from app.art_styles import resolve_art_style
+from app.gpu_admission import governed_post
 from app.motion_provider import COMFYUI_MODEL_API_URL, extract_last_frame, generate_motion_clip
 from app.storage import ensure_dirs, p_input, read_project_state, save_project_state, save_scenes
 
@@ -380,12 +381,17 @@ def plan_motion_sequence(
     *,
     session=requests,
 ) -> list[dict[str, str]]:
-    response = session.post(
+    response = governed_post(
+        session,
         f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+        workload_class="ollama",
+        vram_required_mb=8192,
+        priority=4,
         json={
             "model": OLLAMA_MODEL,
             "prompt": _motion_plan_prompt(canonical, verses, visual_style, theme_interpretation),
             "stream": False,
+            "keep_alive": 0,
             "format": "json",
             "options": {"temperature": 0.25},
         },
@@ -577,14 +583,19 @@ def generate_scene_animation_prompt(
     theme_interpretation = str(
         state.get("themeInterpretation") or (document.get("info") or {}).get("themeInterpretation") or ""
     )
-    response = session.post(
+    response = governed_post(
+        session,
         f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+        workload_class="ollama",
+        vram_required_mb=8192,
+        priority=4,
         json={
             "model": OLLAMA_PROMPT_MODEL,
             "prompt": _scene_animation_writer_prompt(
                 document, scene, scene_index, visual_style, theme_interpretation, camera_behavior
             ),
             "stream": False,
+            "keep_alive": 0,
             "options": {"temperature": 0.35, "num_predict": 160},
         },
         timeout=OLLAMA_TIMEOUT_SECONDS,
@@ -709,9 +720,13 @@ def generate_scene_motion_plan(project_id: str, scene_index: int, *, session=req
         f"Existing scene action: {scene.get('action') or ''}"
     )
     try:
-        response = session.post(
+        response = governed_post(
+            session,
             f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-            json={"model": OLLAMA_PROMPT_MODEL, "prompt": instruction, "stream": False, "format": "json", "options": {"temperature": 0.2, "num_predict": 850}},
+            workload_class="ollama",
+            vram_required_mb=8192,
+            priority=4,
+            json={"model": OLLAMA_PROMPT_MODEL, "prompt": instruction, "stream": False, "keep_alive": 0, "format": "json", "options": {"temperature": 0.2, "num_predict": 850}},
             timeout=OLLAMA_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
@@ -960,8 +975,13 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
     if negative_extra.strip():
         negative_prompt = f"{negative_prompt}, {negative_extra.strip()}"
     seed = random.randint(1, 2**63 - 1)
-    response = session.post(
+    response = governed_post(
+        session,
         STABLE_DIFFUSION_API_URL,
+        workload_class="gpu",
+        vram_required_mb=8192,
+        duration_slots=2,
+        priority=5,
         json={
             "prompt": prompt,
             "negative_prompt": negative_prompt,

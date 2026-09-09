@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.db import SessionLocal, init_db
+from app.gpu_admission import governed_post
 from app.models import Job, Project
 from app.schemas import (
     ProjectSpec,
@@ -832,12 +833,17 @@ def _ollama_generate(
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
+        "keep_alive": 0,
         "options": options,
     }
 
     try:
-        response = requests.post(
+        response = governed_post(
+            requests,
             url,
+            workload_class="ollama",
+            vram_required_mb=8192,
+            priority=4,
             json=payload,
             timeout=(OLLAMA_CONNECT_TIMEOUT_SECONDS, OLLAMA_TIMEOUT_SECONDS),
         )

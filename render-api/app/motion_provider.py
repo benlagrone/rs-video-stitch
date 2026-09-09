@@ -15,6 +15,8 @@ from typing import Any
 
 import requests
 
+from app.gpu_admission import admit_gpu
+
 COMFYUI_MODEL_API_URL = os.getenv("COMFYUI_MODEL_API_URL", "http://100.100.97.30:8188")
 COMFYUI_TIMEOUT_SECONDS = float(os.getenv("COMFYUI_TIMEOUT_SECONDS", "7200"))
 COMFYUI_POLL_SECONDS = float(os.getenv("COMFYUI_POLL_SECONDS", "5"))
@@ -857,7 +859,7 @@ def _generate_region_environmental_fallback(
     return len(regions)
 
 
-def generate_motion_clip(
+def _generate_motion_clip(
     image_path: Path,
     destination: Path,
     *,
@@ -910,7 +912,6 @@ def generate_motion_clip(
                 _verify_visible_generative_motion(quality["sequenceIntegrity"])
             _verify_video(destination)
             return quality
-
         if motion_plan and any(region.get("enabled") is not False for region in motion_plan.get("regions") or []):
             control_path = Path(temp_dir) / f"control-{image_path.stem}.mp4"
             mask_path = Path(temp_dir) / f"mask-{image_path.stem}.mp4"
@@ -986,3 +987,35 @@ def generate_motion_clip(
             quality["fallbackFrom"] = "wan2.2-ti2v-5b" if not region_error else "wan2.1-vace-region-control,wan2.2-ti2v-5b"
             quality["fallbackReason"] = (str(wan_error) if not region_error else f"Region control: {region_error}; Wan: {wan_error}")[:500]
             return quality
+
+
+def generate_motion_clip(
+    image_path: Path,
+    destination: Path,
+    *,
+    prompt: str,
+    negative_prompt: str,
+    seed: int | None = None,
+    protect_style_frame: bool = False,
+    camera_behavior: str = "locked",
+    motion_plan: dict[str, Any] | None = None,
+    session=requests,
+) -> dict[str, Any]:
+    with admit_gpu(
+        "comfyui",
+        workload_id=f"mediastudio-motion-{uuid.uuid4().hex}",
+        vram_required_mb=12000,
+        duration_slots=4,
+        priority=6,
+    ):
+        return _generate_motion_clip(
+            image_path,
+            destination,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            seed=seed,
+            protect_style_frame=protect_style_frame,
+            camera_behavior=camera_behavior,
+            motion_plan=motion_plan,
+            session=session,
+        )
