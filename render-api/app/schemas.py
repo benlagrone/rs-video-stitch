@@ -194,6 +194,7 @@ class SceneAnimationBatchRequest(BaseModel):
 class SceneMotionPlanRequest(BaseModel):
     regenerate: bool = True
     motionPlan: Optional[Dict[str, Any]] = None
+    prompt: str = Field(default="", max_length=2000)
 
 
 class SceneMotionPlanResponse(BaseModel):

@@ -25,6 +25,8 @@ Bible scenes burn the verse reference and full scripture text into a wrapped low
 
 Per-scene image animation defaults to a locked-composition camera profile. Sextant fits and pads the approved still into the Wan input without cropping, stabilizes locked-camera output, compares the generated first frame with the source, and rejects clips with excessive shake, framing drift, sequence discontinuities, or localized color-block corruption along the frame edges. Rejected attempts never overwrite the approved still or a previously accepted motion clip. Deliberate slow-push and pan profiles remain selectable per scene.
 
+Each scene also carries a versioned motion plan. Exact object-vector regions move intact source pixels along normalized X/Y vectors with easing, preserving the background and decorative frame. Small occlusions use deterministic inpainting; large moving subjects first receive a masked background plate from the protected Stable Diffusion service on Fortress Phronesis, while all unmasked source pixels remain fixed. Deformable effects such as water, smoke, fire, and clouds use masked VACE generation on Fortress Phronesis. Mixed scenes first create the deterministic object motion on Sextant and then expose only the named generative regions to Phronesis. Full-frame generation is disabled for planned scenes unless explicitly enabled; if a regional route fails, MediaStudio preserves the still or deterministic motion instead of silently substituting a hallucinatory full-frame clip.
+
 Animation-prompt writing is camera-aware. Locked composition rejects or rewrites older prompts that request pans, glides, zooms, or other camera movement before they reach Wan. A rejected scene exposes a one-click corrected retry that rewrites the prompt for the selected camera behavior before queuing a new candidate.
 
 ## Architecture
@@ -93,6 +95,7 @@ mkdir -p ~/Videos/MediaStudio/{logs,projects}
 | `DEFAULT_XFADE` | `0.5` | Default cross-fade length in seconds. |
 | `DEFAULT_CRF` | `18` | Default H.264 CRF quality. |
 | `DEFAULT_PRESET` | `medium` | Default encoder preset. |
+| `LTX_KEYFRAME_CHECKPOINT` | `ltxv-2b-0.9.8-distilled-fp8.safetensors` | ComfyUI checkpoint used for start/end-keyframe motion. The locked Sextant deployment selects the stronger local 13B FP8 checkpoint hosted on Phronesis. |
 | `TITLE_FONT_FILE` | — | Override the TTF used for scene title overlays (defaults to `media/EB_Garamond/EBGaramond-VariableFont_wght.ttf`). |
 | `XTTS_API_URL` | — | Base URL for xTTS HTTP endpoint (e.g. `http://xtts:5002`). |
 | `XTTS_API_KEY` | — | Optional bearer token for the xTTS service. |

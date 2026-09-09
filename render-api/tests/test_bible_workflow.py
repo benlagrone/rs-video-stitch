@@ -1,9 +1,10 @@
 import base64
+import importlib.util
 import json
 import sys
 import tempfile
 from pathlib import Path
-from unittest import TestCase, mock
+from unittest import TestCase, mock, skipUnless
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -26,6 +27,25 @@ class _Response:
 
 
 class BibleWorkflowTest(TestCase):
+    def test_scene_prompt_requires_motion_safe_subject_margins(self):
+        prompt = bible_workflow._scene_prompt(
+            "Genesis 1:1",
+            "In the beginning God created the heaven and the earth.",
+            "Byzantine Iconography",
+            theme_interpretation="A cataclysmic creation event.",
+        )
+
+        self.assertIn("at least 12 percent inside every frame edge", prompt)
+        self.assertIn("never crop it", prompt)
+        self.assertIn("One solitary newly forming planet", prompt)
+        self.assertIn("diffuse formless gas", prompt)
+        self.assertIn("no rocky foreground", prompt)
+        self.assertIn("never touching a frame edge", prompt)
+        negative = bible_workflow._scene_negative_prompt("Genesis 1:1")
+        self.assertIn("multiple planets", negative)
+        self.assertIn("moon", negative)
+        self.assertIn("view from another planet", negative)
+
     def test_catalog_exposes_every_legacy_and_current_style(self):
         styles = art_styles.list_art_styles()
 
@@ -51,7 +71,7 @@ class BibleWorkflowTest(TestCase):
         prompt = scenes[0]["timeline"][0]["prompt"]
         self.assertIn("Art treatment: Baroque", prompt)
         self.assertIn("chiaroscuro", prompt)
-        self.assertIn("vast primordial cosmos", prompt)
+        self.assertIn("vast primordial void", prompt)
         self.assertNotIn("God", prompt)
         self.assertNotIn("human figure", prompt)
         self.assertNotIn("pair of men", prompt)
@@ -249,6 +269,14 @@ class BibleWorkflowTest(TestCase):
             generation = bible_workflow._generate_still("a scene", destination, session=session)
             self.assertEqual(destination.read_bytes(), b"png-data")
         payload = session.post.call_args.kwargs["json"]
+        self.assertEqual(
+            session.post.call_args_list[0].args[0],
+            f"{bible_workflow.COMFYUI_MODEL_API_URL.rstrip('/')}/free",
+        )
+        self.assertEqual(
+            session.post.call_args_list[0].kwargs["json"],
+            {"unload_models": True, "free_memory": True},
+        )
         self.assertEqual((payload["width"], payload["height"]), (1024, 576))
         self.assertEqual(payload["override_settings"]["sd_model_checkpoint"], bible_workflow.STABLE_DIFFUSION_CHECKPOINT)
         self.assertTrue(payload["override_settings_restore_afterwards"])
@@ -273,6 +301,26 @@ class BibleWorkflowTest(TestCase):
         negative_prompt = session.post.call_args.kwargs["json"]["negative_prompt"]
         self.assertIn("church", negative_prompt)
         self.assertIn("busy center", negative_prompt)
+
+    def test_generate_still_can_keep_a_dedicated_repair_checkpoint_loaded(self):
+        session = mock.Mock()
+        session.post.return_value = _Response({"images": [base64.b64encode(b"png-data").decode("ascii")]})
+        with tempfile.TemporaryDirectory() as tmp:
+            generation = bible_workflow._generate_still(
+                "a complete planet",
+                Path(tmp) / "scene.png",
+                checkpoint="Stable-diffusion/RealVisXL_V4.0.safetensors",
+                restore_checkpoint=False,
+                session=session,
+            )
+
+        payload = session.post.call_args.kwargs["json"]
+        self.assertEqual(
+            payload["override_settings"]["sd_model_checkpoint"],
+            "Stable-diffusion/RealVisXL_V4.0.safetensors",
+        )
+        self.assertFalse(payload["override_settings_restore_afterwards"])
+        self.assertEqual(generation["model"], "Stable-diffusion/RealVisXL_V4.0.safetensors")
 
     def test_motion_project_chains_each_clip_final_frame_into_next_scene(self):
         scenes = [
@@ -683,6 +731,8 @@ class BibleWorkflowTest(TestCase):
                 "VO": "And God said, Let there be light: and there was light.",
                 "images": ["scene_001.png"],
                 "timeline": [{"image": "scene_001.png", "video": "scene_001.mp4", "prompt": "two old men"}],
+                "animationQuality": {"status": "accepted"},
+                "animationRejected": {"reason": "stale"},
             }],
         }
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
@@ -720,6 +770,8 @@ class BibleWorkflowTest(TestCase):
         self.assertNotIn("video", saved_document["scenes"][0]["timeline"][0])
         self.assertEqual(saved_document["scenes"][0]["timeline"][0]["imageGeneration"]["seed"], 717)
         self.assertNotIn("motionGeneration", saved_document["scenes"][0]["timeline"][0])
+        self.assertNotIn("animationQuality", saved_document["scenes"][0])
+        self.assertNotIn("animationRejected", saved_document["scenes"][0])
         self.assertTrue(saved_document["scenes"][0]["imageHistory"][0].startswith("history/scene_001-"))
         self.assertEqual(save_state.call_args.args[1]["characterDesign"]["god"]["version"], 2)
 
@@ -765,6 +817,166 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(rejected_scene["motionAttempt"], 2)
         self.assertNotIn("camera pans", rejected_scene["motionPrompt"].lower())
         self.assertIn("Keep the camera locked", rejected_scene["motionPrompt"])
+
+    def test_motion_safe_repair_restores_original_still_and_scene_after_exhaustion(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)"},
+            "scenes": [{
+                "title": "Genesis 1:1",
+                "VO": "In the beginning.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png"}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(
+            bible_workflow, "read_project_state", return_value={"title": "Genesis 1 (KJV)", "hasMotionScenes": False}
+        ), mock.patch.object(
+            bible_workflow, "regenerate_bible_scene_stills"
+        ) as regenerate, mock.patch.object(
+            bible_workflow, "_validate_motion_safe_still_semantics", return_value={"status": "accepted"}
+        ), mock.patch.object(
+            bible_workflow,
+            "_prepare_motion_safe_repair_candidate",
+            side_effect=lambda _reference, _path, plan: (plan, {"status": "not-required"}),
+        ), mock.patch.object(
+            bible_workflow,
+            "animate_bible_scene",
+            side_effect=RuntimeError("Object-vector region Planet is clipped by the source frame"),
+        ) as animate, mock.patch.object(
+            bible_workflow, "save_scenes"
+        ) as save_scenes, mock.patch.object(bible_workflow, "save_project_state") as save_state:
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            still = input_dir / "images" / "scene_001.png"
+            still.write_bytes(b"original-still")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "after 3 still candidates"):
+                bible_workflow.repair_and_animate_bible_scene(
+                    "bible-test",
+                    1,
+                    "The planet moves downward.",
+                    motion_plan={"regions": [{"label": "Planet"}]},
+                    progress=mock.Mock(),
+                    log=mock.Mock(),
+                )
+
+            self.assertEqual(still.read_bytes(), b"original-still")
+            self.assertEqual(regenerate.call_count, 3)
+            self.assertEqual(
+                regenerate.call_args.kwargs["checkpoint"],
+                bible_workflow.STABLE_DIFFUSION_REPAIR_CHECKPOINT,
+            )
+            self.assertFalse(regenerate.call_args.kwargs["restore_checkpoint"])
+            self.assertEqual(animate.call_count, 3)
+            restored_document = json.loads(save_scenes.call_args.args[1])
+            self.assertIn("original still was restored", restored_document["scenes"][0]["animationQuality"]["reason"])
+        self.assertEqual(save_state.call_args.args[1]["hasMotionScenes"], False)
+
+    def test_motion_safe_repair_retries_subject_isolation_and_keeps_success(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)"},
+            "scenes": [{
+                "title": "Genesis 1:1",
+                "VO": "In the beginning.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png"}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(
+            bible_workflow, "read_project_state", return_value={"title": "Genesis 1 (KJV)"}
+        ), mock.patch.object(
+            bible_workflow, "regenerate_bible_scene_stills"
+        ) as regenerate, mock.patch.object(
+            bible_workflow, "_validate_motion_safe_still_semantics", return_value={"status": "accepted"}
+        ), mock.patch.object(
+            bible_workflow,
+            "_prepare_motion_safe_repair_candidate",
+            side_effect=lambda _reference, _path, plan: (plan, {"status": "not-required"}),
+        ), mock.patch.object(
+            bible_workflow,
+            "animate_bible_scene",
+            side_effect=[
+                RuntimeError("Object-vector region Planet produced an unsafe matte (0.000 of its box)"),
+                Path(tmp) / "input" / "motion" / "scene_001.mp4",
+            ],
+        ) as animate, mock.patch.object(
+            bible_workflow, "save_scenes"
+        ) as save_scenes, mock.patch.object(bible_workflow, "save_project_state") as save_state:
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            (input_dir / "images" / "scene_001.png").write_bytes(b"original-still")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+
+            result = bible_workflow.repair_and_animate_bible_scene(
+                "bible-test",
+                1,
+                "The planet moves downward.",
+                motion_plan={"regions": [{"label": "Planet"}]},
+                progress=mock.Mock(),
+                log=mock.Mock(),
+            )
+
+        self.assertEqual(result.name, "scene_001.mp4")
+        self.assertEqual(regenerate.call_count, 2)
+        self.assertEqual(animate.call_count, 2)
+        self.assertEqual(save_scenes.call_count, 2)
+        save_state.assert_not_called()
+
+    def test_motion_safe_semantic_validation_rejects_multiple_planets(self):
+        response = mock.Mock()
+        response.json.return_value = {
+            "caption": "a view of the planets from the surface of the moon, with a ring in the sky"
+        }
+        session = mock.Mock()
+        session.post.return_value = response
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"generated-still")
+            with self.assertRaisesRegex(RuntimeError, "multiple planets"):
+                bible_workflow._validate_motion_safe_still_semantics(
+                    "Genesis 1:1", still, session=session
+                )
+
+        response.raise_for_status.assert_called_once_with()
+        self.assertIn("/sdapi/v1/interrogate", session.post.call_args.args[0])
+
+    def test_motion_safe_semantic_validation_accepts_one_planet(self):
+        response = mock.Mock()
+        response.json.return_value = {
+            "caption": "one planet suspended against an empty dark starfield"
+        }
+        session = mock.Mock()
+        session.post.return_value = response
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"generated-still")
+            result = bible_workflow._validate_motion_safe_still_semantics(
+                "Genesis 1:1", still, session=session
+            )
+
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(result["provider"], "phronesis-sd-clip")
+
+    def test_motion_safe_semantic_validation_accepts_one_fireball(self):
+        response = mock.Mock()
+        response.json.return_value = {
+            "caption": "a fireball in the middle of a black background"
+        }
+        session = mock.Mock()
+        session.post.return_value = response
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"generated-still")
+            result = bible_workflow._validate_motion_safe_still_semantics(
+                "Genesis 1:1", still, session=session
+            )
+
+        self.assertEqual(result["status"], "accepted")
 
     def test_generic_fill_the_frame_language_does_not_trigger_decorative_border_overlay(self):
         scene = {
@@ -903,6 +1115,68 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["12"]["inputs"]["strength"], 1.0)
         self.assertEqual(workflow["14"]["inputs"]["seed"], 42)
 
+    def test_ltx_keyframe_workflow_uses_tween_start_and_end_guides(self):
+        workflow = motion_provider._ltx_keyframe_workflow(
+            "start.png", "end.png", "planet descends", "no duplicate", "test/ltx", 42
+        )
+
+        self.assertEqual(workflow["1"]["inputs"]["ckpt_name"], "ltxv-2b-0.9.8-distilled-fp8.safetensors")
+        self.assertEqual(workflow["2"]["inputs"]["image"], "start.png")
+        self.assertEqual(workflow["3"]["inputs"]["image"], "end.png")
+        self.assertEqual(workflow["8"]["inputs"]["length"], 65)
+        self.assertEqual(workflow["9"]["inputs"]["frame_idx"], 0)
+        self.assertEqual(workflow["10"]["inputs"]["frame_idx"], 64)
+        self.assertEqual(workflow["12"]["inputs"]["seed"], 42)
+
+    def test_shared_gpu_handoff_unloads_each_model_service_between_phases(self):
+        session = mock.Mock()
+
+        motion_provider._release_comfyui_gpu_memory(session)
+        motion_provider._release_stable_diffusion_gpu_memory(session)
+
+        self.assertEqual(
+            session.post.call_args_list[0],
+            mock.call(
+                f"{motion_provider.COMFYUI_MODEL_API_URL.rstrip('/')}/free",
+                json={"unload_models": True, "free_memory": True},
+                timeout=60,
+            ),
+        )
+        self.assertEqual(
+            session.post.call_args_list[1],
+            mock.call(
+                motion_provider.STABLE_DIFFUSION_API_URL.replace(
+                    "/txt2img", "/unload-checkpoint"
+                ),
+                timeout=60,
+            ),
+        )
+        self.assertEqual(session.post.return_value.raise_for_status.call_count, 2)
+
+    def test_generated_object_motion_uses_prebuilt_tracked_object_matte(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vector = Path(tmp) / "vector.mp4"
+            generated = Path(tmp) / "generated.mp4"
+            mask = Path(tmp) / "mask.mp4"
+            destination = Path(tmp) / "result.mp4"
+            for path in (vector, generated, mask):
+                path.write_bytes(b"video")
+
+            def create_result(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"composite")
+                return mock.Mock()
+
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_result) as run:
+                motion_provider._composite_generated_object_motion(
+                    vector, generated, mask, destination
+                )
+
+        command = run.call_args.args[0]
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("[vector][generated][mask]maskedmerge", graph)
+        self.assertNotIn("boxblur", graph)
+        self.assertNotIn("crop=", graph)
+
     def test_vace_region_assets_use_static_masked_inpaint_not_moving_crops(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "source.png"
@@ -932,6 +1206,76 @@ class BibleWorkflowTest(TestCase):
         self.assertNotIn("crop=", control_graph)
         self.assertNotIn("overlay", control_graph)
 
+    def test_vace_object_vector_assets_encode_a_temporal_mask_trajectory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.png"
+            vector = Path(tmp) / "vector.mp4"
+            control = Path(tmp) / "control.mp4"
+            mask = Path(tmp) / "mask.mp4"
+            source.write_bytes(b"source")
+            vector.write_bytes(b"vector")
+
+            def create_asset(command, **_kwargs):
+                if command[-1] != "-":
+                    Path(command[-1]).write_bytes(b"video")
+                return mock.Mock(stdout="lavfi.signalstats.YDIF=0.0\nlavfi.signalstats.YDIF=1.2\n")
+
+            plan = {"regions": [{
+                "label": "Existing planet",
+                "method": "object-vector",
+                "vector": {"dx": 0.0, "dy": 0.34},
+                "easing": "ease-in-out",
+                "box": {"x": 0.13, "y": 0.001, "width": 0.52, "height": 0.5},
+            }]}
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_asset) as run:
+                count = motion_provider._generate_region_control_assets(
+                    source, plan, control, mask, control_source=vector
+                )
+
+        self.assertEqual(count, 1)
+        mask_command = run.call_args_list[0].args[0]
+        mask_filter = mask_command[mask_command.index("-vf") + 1]
+        self.assertIn("T/5.0625", mask_filter)
+        self.assertIn("108.8", mask_filter)
+
+    def test_vace_object_vector_assets_use_supplied_exact_matte(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.png"
+            vector = Path(tmp) / "vector.mp4"
+            exact_matte = Path(tmp) / "exact-matte.mp4"
+            control = Path(tmp) / "control.mp4"
+            mask = Path(tmp) / "mask.mp4"
+            source.write_bytes(b"source")
+            vector.write_bytes(b"vector")
+            exact_matte.write_bytes(b"matte")
+
+            def create_asset(command, **_kwargs):
+                if command[-1] != "-":
+                    Path(command[-1]).write_bytes(b"video")
+                return mock.Mock(stdout="lavfi.signalstats.YDIF=0.0\nlavfi.signalstats.YDIF=1.2\n")
+
+            plan = {"regions": [{
+                "label": "Existing planet",
+                "method": "object-vector",
+                "vector": {"dx": 0.0, "dy": 0.34},
+                "easing": "ease-in-out",
+                "box": {"x": 0.13, "y": 0.001, "width": 0.52, "height": 0.5},
+            }]}
+            with mock.patch.object(motion_provider.subprocess, "run", side_effect=create_asset) as run:
+                count = motion_provider._generate_region_control_assets(
+                    source,
+                    plan,
+                    control,
+                    mask,
+                    control_source=vector,
+                    mask_source=exact_matte,
+                )
+
+        self.assertEqual(count, 1)
+        mask_command = run.call_args_list[0].args[0]
+        self.assertEqual(mask_command[mask_command.index("-i") + 1], str(exact_matte))
+        self.assertNotIn("-vf", mask_command)
+
     def test_static_control_gate_rejects_temporal_source_patch_motion(self):
         completed = mock.Mock(stdout="\n".join([
             "lavfi.signalstats.YDIF=0.0",
@@ -960,6 +1304,45 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(plan["regions"][0]["strength"], 1.0)
         self.assertEqual(plan["regions"][0]["box"]["width"], 0.2)
         self.assertEqual(plan["regions"][0]["direction"], "clockwise")
+        self.assertEqual(plan["version"], 2)
+        self.assertEqual(plan["regions"][0]["method"], "generative-region")
+        self.assertFalse(plan["allowFullFrameGeneration"])
+
+    def test_object_vector_plan_derives_a_bounded_displacement(self):
+        plan = bible_workflow._sanitize_motion_plan({
+            "summary": "Move the existing planet downward.",
+            "allowFullFrameGeneration": True,
+            "regions": [{
+                "id": "planet",
+                "label": "Existing planet",
+                "action": "The planet moves down.",
+                "method": "object-vector",
+                "direction": "down",
+                "strength": 1,
+                "box": {"x": 0.04, "y": 0.03, "width": 0.42, "height": 0.52},
+            }],
+        })
+
+        self.assertEqual(plan["regions"][0]["vector"], {"dx": 0.0, "dy": 0.2})
+        self.assertEqual(plan["regions"][0]["easing"], "ease-in-out")
+        self.assertTrue(plan["allowFullFrameGeneration"])
+
+    def test_explicit_planet_instruction_falls_back_to_exact_object_vector(self):
+        plan = bible_workflow._fallback_motion_plan(
+            {
+                "title": "Genesis 1:1",
+                "VO": "In the beginning God created the heaven and the earth.",
+                "timeline": [{"imageGeneration": {"prompt": "A forming planet in a dark cosmos"}}],
+            },
+            1,
+            "The planet begins higher and moves down through the frame.",
+        )
+
+        self.assertEqual(len(plan["regions"]), 1)
+        self.assertEqual(plan["regions"][0]["id"], "planet")
+        self.assertEqual(plan["regions"][0]["method"], "object-vector")
+        self.assertEqual(plan["regions"][0]["vector"]["dy"], 0.2)
+        self.assertFalse(plan["allowFullFrameGeneration"])
 
     def test_cataclysm_fallback_plan_separates_environmental_actions(self):
         plan = bible_workflow._fallback_motion_plan({
@@ -970,6 +1353,353 @@ class BibleWorkflowTest(TestCase):
 
         self.assertEqual([region["id"] for region in plan["regions"]], ["fire-arc", "forming-terrain", "dust-front"])
         self.assertTrue(plan["lockedBackground"])
+
+    def test_object_vector_route_uses_tween_endpoints_as_generative_video_control(self):
+        session = mock.Mock()
+        session.get.return_value = _Response({"system": {"os": "posix"}})
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"png-data")
+            destination = Path(tmp) / "scene.mp4"
+
+            def prepare_source(_source, prepared):
+                prepared.write_bytes(b"prepared-png")
+
+            def render_vector(_source, _plan, rendered, **_kwargs):
+                rendered.write_bytes(b"vector-motion")
+                return {"regions": [{"id": "planet", "dyPixels": 64}], "backgroundInpainted": True}
+
+            def render_model(_session, _workflow, rendered):
+                rendered.write_bytes(b"model-motion")
+
+            def extract_keyframe(_video, rendered):
+                rendered.write_bytes(b"end-frame")
+
+            def composite(_vector, generated, _moving_matte, rendered):
+                rendered.write_bytes(generated.read_bytes())
+
+            plan = bible_workflow._sanitize_motion_plan({
+                "summary": "Move the planet down.",
+                "regions": [{
+                    "id": "planet", "label": "Existing planet", "method": "object-vector",
+                    "direction": "down", "strength": 1,
+                    "box": {"x": 0.04, "y": 0.03, "width": 0.42, "height": 0.52},
+                }],
+            })
+            with mock.patch.object(
+                motion_provider, "_prepare_source_image", side_effect=prepare_source
+            ), mock.patch.object(
+                motion_provider, "_generate_object_vector_clip", side_effect=render_vector
+            ) as render, mock.patch.object(
+                motion_provider, "_extract_motion_keyframe", side_effect=extract_keyframe
+            ), mock.patch.object(
+                motion_provider, "_composite_generated_object_motion", side_effect=composite
+            ), mock.patch.object(
+                motion_provider, "_generate_region_control_assets", return_value=1
+            ) as controls, mock.patch.object(
+                motion_provider, "_upload_image", return_value="source.png"
+            ), mock.patch.object(
+                motion_provider, "_upload_asset", side_effect=["control.mp4", "mask.mp4"]
+            ), mock.patch.object(
+                motion_provider, "_queue_and_download_workflow", side_effect=render_model
+            ) as queue, mock.patch.object(
+                motion_provider, "_stabilize_locked_camera", return_value={"sampleCount": 3}
+            ), mock.patch.object(
+                motion_provider, "_protect_locked_frame_edges"
+            ), mock.patch.object(
+                motion_provider, "_measure_source_frame_fidelity", return_value=0.98
+            ), mock.patch.object(
+                motion_provider, "_measure_end_frame_fidelity", return_value=0.97
+            ), mock.patch.object(
+                motion_provider, "_measure_sequence_integrity", return_value={"meanLumaFrameDifference": 1.8}
+            ), mock.patch.object(motion_provider, "_verify_video"):
+                quality = motion_provider.generate_motion_clip(
+                    still,
+                    destination,
+                    prompt="The planet moves downward.",
+                    negative_prompt="duplicate planet",
+                    motion_plan=plan,
+                    session=session,
+                )
+            rendered_bytes = destination.read_bytes()
+
+        render.assert_called_once()
+        controls.assert_not_called()
+        queue.assert_called_once()
+        self.assertEqual(rendered_bytes, b"model-motion")
+        self.assertEqual(
+            quality["modelProvider"],
+            f"{motion_provider.OBJECT_VECTOR_PROVIDER}+ltxv-keyframe",
+        )
+        self.assertEqual(quality["controlMode"], "tracked-object-generative-texture")
+        self.assertEqual(quality["modelCheckpoint"], motion_provider.LTX_KEYFRAME_CHECKPOINT)
+        self.assertEqual(quality["modelDenoise"], 1.0)
+        self.assertEqual(
+            quality["semanticMotionGate"],
+            "single-tracked-object-matte-and-fixed-background",
+        )
+        self.assertEqual(quality["endFrameSsim"], 0.97)
+        self.assertFalse(quality["fullFrameGeneration"])
+
+    def test_hybrid_route_falls_back_to_exact_object_motion_without_full_frame_generation(self):
+        session = mock.Mock()
+        session.get.return_value = _Response({"system": {"os": "posix"}})
+        session.post.return_value = _Response({})
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            still.write_bytes(b"png-data")
+            destination = Path(tmp) / "scene.mp4"
+
+            def prepare_source(_source, prepared):
+                prepared.write_bytes(b"prepared-png")
+
+            def render_vector(_source, _plan, rendered, **_kwargs):
+                rendered.write_bytes(b"vector-motion")
+                return {"regions": [{"id": "planet", "dyPixels": 64}], "backgroundInpainted": True}
+
+            plan = bible_workflow._sanitize_motion_plan({
+                "summary": "Move the planet and animate the fire.",
+                "regions": [
+                    {
+                        "id": "planet", "label": "Existing planet", "method": "object-vector",
+                        "direction": "down", "strength": 1,
+                        "box": {"x": 0.04, "y": 0.03, "width": 0.42, "height": 0.52},
+                    },
+                    {
+                        "id": "fire", "label": "Existing fire", "method": "generative-region",
+                        "direction": "right", "strength": 0.4,
+                        "box": {"x": 0.7, "y": 0.1, "width": 0.2, "height": 0.6},
+                    },
+                ],
+            })
+            with mock.patch.object(
+                motion_provider, "_prepare_source_image", side_effect=prepare_source
+            ), mock.patch.object(
+                motion_provider, "_generate_object_vector_clip", side_effect=render_vector
+            ), mock.patch.object(
+                motion_provider, "_generate_region_control_assets",
+                side_effect=motion_provider.MotionProviderError("regional model unavailable"),
+            ), mock.patch.object(
+                motion_provider, "_measure_source_frame_fidelity", return_value=0.98
+            ), mock.patch.object(
+                motion_provider, "_measure_sequence_integrity", return_value={"meanLumaFrameDifference": 1.8}
+            ), mock.patch.object(motion_provider, "_verify_video"), mock.patch.object(
+                motion_provider, "_queue_and_download_workflow"
+            ) as queue:
+                quality = motion_provider.generate_motion_clip(
+                    still,
+                    destination,
+                    prompt="The planet moves downward while fire advances.",
+                    negative_prompt="duplicate planet",
+                    motion_plan=plan,
+                    session=session,
+                )
+            rendered_bytes = destination.read_bytes()
+
+        queue.assert_not_called()
+        self.assertEqual(rendered_bytes, b"vector-motion")
+        self.assertEqual(quality["modelProvider"], motion_provider.OBJECT_VECTOR_PROVIDER)
+        self.assertEqual(quality["fallbackFrom"], "wan2.1-vace-tween-control")
+        self.assertEqual(quality["suppressedGenerativeRegionCount"], 2)
+
+    @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
+    def test_large_background_plate_rejects_regenerated_planets(self):
+        import cv2
+        import numpy as np
+
+        image = np.zeros((320, 576, 3), dtype=np.uint8)
+        cv2.circle(image, (175, 82), 70, (190, 145, 85), -1, cv2.LINE_AA)
+        mask = np.zeros((320, 576), dtype=np.uint8)
+        cv2.circle(mask, (175, 82), 72, 255, -1, cv2.LINE_AA)
+        ok, encoded = cv2.imencode(".png", image)
+        self.assertTrue(ok)
+        generated = base64.b64encode(encoded.tobytes()).decode("ascii")
+        session = mock.Mock()
+        session.post.side_effect = [_Response({})] + [
+            item
+            for _attempt in range(3)
+            for item in (
+                _Response({"images": [generated]}),
+                _Response({"caption": "a planet with a moon in the background"}),
+            )
+        ]
+
+        with self.assertRaisesRegex(
+            motion_provider.MotionProviderError,
+            "removed object remained or was regenerated",
+        ):
+            motion_provider._generate_background_plate(
+                image,
+                mask,
+                labels=["Existing planet"],
+                scene_prompt="A planet descends.",
+                negative_prompt="duplicate planet",
+                session=session,
+            )
+
+        self.assertEqual(session.post.call_count, 7)
+        self.assertTrue(session.post.call_args_list[0].args[0].endswith("/free"))
+        self.assertTrue(all(
+            call.args[0] == motion_provider.STABLE_DIFFUSION_API_URL
+            for call in session.post.call_args_list[1::2]
+        ))
+
+    @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
+    def test_large_background_plate_falls_back_to_clean_empty_canvas(self):
+        import cv2
+        import numpy as np
+
+        image = np.zeros((320, 576, 3), dtype=np.uint8)
+        image[:, :, :] = (18, 9, 8)
+        cv2.circle(image, (175, 82), 70, (190, 145, 85), -1, cv2.LINE_AA)
+        mask = np.zeros((320, 576), dtype=np.uint8)
+        cv2.circle(mask, (175, 82), 72, 255, -1, cv2.LINE_AA)
+        planet_encoded = cv2.imencode(".png", image)[1]
+        empty = np.zeros_like(image)
+        empty[:, :, :] = (24, 12, 10)
+        empty_encoded = cv2.imencode(".png", empty)[1]
+        session = mock.Mock()
+        session.post.side_effect = [
+            _Response({}),
+            _Response({"images": [base64.b64encode(empty_encoded.tobytes()).decode("ascii")]}),
+            _Response({"caption": "an empty dark starfield and distant horizon"}),
+        ]
+
+        plate = motion_provider._generate_background_plate(
+            image,
+            mask,
+            labels=["Existing planet"],
+            scene_prompt="Byzantine inspired visual treatment with a gold-leaf palette.",
+            negative_prompt="duplicate planet",
+            session=session,
+        )
+
+        self.assertEqual(session.post.call_count, 2)
+        self.assertEqual(
+            session.post.call_args_list[0].args[0],
+            motion_provider.STABLE_DIFFUSION_API_URL,
+        )
+        self.assertLess(int(plate[82, 175, 0]), 40)
+        self.assertGreater(int(plate[250, 500, 0]), 10)
+
+    @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
+    def test_deterministic_background_plate_cannot_regenerate_removed_planet(self):
+        import cv2
+        import numpy as np
+
+        image = np.zeros((320, 576, 3), dtype=np.uint8)
+        image[:, :, :] = (18, 9, 8)
+        cv2.circle(image, (175, 82), 70, (190, 145, 85), -1, cv2.LINE_AA)
+        mask = np.zeros((320, 576), dtype=np.uint8)
+        cv2.circle(mask, (175, 82), 70, 255, -1, cv2.LINE_AA)
+
+        plate = motion_provider._deterministic_background_plate(image, mask)
+
+        source_difference = np.mean(
+            np.abs(plate[mask > 0].astype(np.float32) - image[mask > 0].astype(np.float32))
+        )
+        self.assertGreater(source_difference, 40.0)
+        self.assertLess(float(np.mean(plate[mask > 0])), 45.0)
+
+    @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
+    def test_object_vector_renderer_moves_one_segmented_object_without_duplication(self):
+        import cv2
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "planet.png"
+            destination = Path(tmp) / "planet.mp4"
+            guidance_mask = Path(tmp) / "planet-mask.mp4"
+            guidance_corridor = Path(tmp) / "planet-corridor.mp4"
+            image = np.zeros((320, 576, 3), dtype=np.uint8)
+            image[:, :, :] = (18, 9, 8)
+            cv2.circle(image, (175, 82), 54, (190, 145, 85), -1, cv2.LINE_AA)
+            cv2.circle(image, (158, 64), 16, (232, 205, 156), -1, cv2.LINE_AA)
+            self.assertTrue(cv2.imwrite(str(source), image))
+            route = motion_provider._generate_object_vector_clip(
+                source,
+                {
+                    "regions": [{
+                        "id": "planet", "label": "Existing planet", "method": "object-vector",
+                        "vector": {"dx": 0.0, "dy": 0.2}, "easing": "ease-in-out",
+                        "box": {"x": 0.18, "y": 0.07, "width": 0.26, "height": 0.34},
+                        "enabled": True,
+                    }],
+                },
+                destination,
+                guidance_mask_destination=guidance_mask,
+                guidance_corridor_destination=guidance_corridor,
+            )
+
+            motion_provider._verify_video(destination)
+            motion_provider._verify_video(guidance_mask)
+            motion_provider._verify_video(guidance_corridor)
+
+        self.assertEqual(route["regions"][0]["dyPixels"], 64.0)
+        self.assertTrue(route["backgroundInpainted"])
+        self.assertTrue(guidance_mask.exists())
+        self.assertTrue(guidance_corridor.exists())
+        self.assertEqual(
+            route["generativeCorridorExpansionPixels"],
+            motion_provider.OBJECT_MOTION_CORRIDOR_EXPANSION,
+        )
+
+    @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
+    def test_large_celestial_vector_removes_entire_planner_box_from_background(self):
+        import cv2
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "dark-planet.png"
+            destination = Path(tmp) / "dark-planet.mp4"
+            image = np.zeros((320, 576, 3), dtype=np.uint8)
+            image[:, :, :] = (18, 9, 8)
+            cv2.circle(image, (175, 92), 85, (120, 105, 90), -1, cv2.LINE_AA)
+            cv2.arc(image, (175, 92), (85, 85), 0, -80, 80, (230, 220, 180), 4)
+            self.assertTrue(cv2.imwrite(str(source), image))
+
+            route = motion_provider._generate_object_vector_clip(
+                source,
+                {
+                    "regions": [{
+                        "id": "planet", "label": "Planet", "method": "object-vector",
+                        "vector": {"dx": 0.0, "dy": 0.2}, "easing": "ease-in-out",
+                        "box": {"x": 0.14, "y": 0.01, "width": 0.34, "height": 0.58},
+                        "enabled": True,
+                    }],
+                },
+                destination,
+            )
+
+        self.assertEqual(
+            route["backgroundMode"],
+            "validated-full-canvas-celestial-plate",
+        )
+
+    @skipUnless(importlib.util.find_spec("cv2"), "OpenCV runtime not installed")
+    def test_object_vector_rejects_subject_clipped_opposite_inward_motion(self):
+        import cv2
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "clipped-planet.png"
+            image = np.zeros((320, 576, 3), dtype=np.uint8)
+            cv2.circle(image, (175, 45), 70, (190, 145, 85), -1, cv2.LINE_AA)
+            self.assertTrue(cv2.imwrite(str(source), image))
+
+            with self.assertRaisesRegex(motion_provider.MotionProviderError, "clipped by the source frame"):
+                motion_provider._generate_object_vector_clip(
+                    source,
+                    {
+                        "regions": [{
+                            "id": "planet", "label": "Planet", "method": "object-vector",
+                            "vector": {"dx": 0.0, "dy": 0.2}, "easing": "ease-in-out",
+                            "box": {"x": 0.14, "y": 0.0, "width": 0.34, "height": 0.42},
+                            "enabled": True,
+                        }],
+                    },
+                    Path(tmp) / "rejected.mp4",
+                )
 
     def test_locked_motion_falls_back_to_svd_after_wan_quality_rejection(self):
         session = mock.Mock()
@@ -1339,7 +2069,7 @@ class BibleWorkflowTest(TestCase):
             self.assertEqual(video.read_bytes(), b"protected-motion")
             command = run.call_args.args[0]
             filter_graph = command[command.index("-filter_complex") + 1]
-            self.assertIn("maskedmerge", filter_graph)
+            self.assertIn("[motion][still][mask]maskedmerge", filter_graph)
             self.assertNotIn("alphamerge", filter_graph)
             self.assertNotIn("overlay", filter_graph)
             self.assertIn("lutrgb=r=255:g=255:b=255", filter_graph)
@@ -1364,7 +2094,7 @@ class BibleWorkflowTest(TestCase):
             filter_graph = command[command.index("-filter_complex") + 1]
             self.assertIn("drawbox=x=24:y=24", filter_graph)
             self.assertIn("boxblur=6", filter_graph)
-            self.assertIn("maskedmerge", filter_graph)
+            self.assertIn("[motion][still][mask]maskedmerge", filter_graph)
             self.assertNotIn("crop", filter_graph)
             self.assertNotIn("overlay", filter_graph)
             self.assertIn("-loop", command)

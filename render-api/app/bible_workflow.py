@@ -17,7 +17,7 @@ from urllib.parse import quote
 import requests
 
 from app.art_styles import resolve_art_style
-from app.gpu_admission import governed_post
+from app.gpu_admission import admit_gpu, governed_post
 from app.motion_provider import COMFYUI_MODEL_API_URL, extract_last_frame, generate_motion_clip
 from app.storage import ensure_dirs, p_input, read_project_state, save_project_state, save_scenes
 
@@ -31,6 +31,10 @@ STABLE_DIFFUSION_TIMEOUT_SECONDS = float(os.getenv("STABLE_DIFFUSION_TIMEOUT_SEC
 STABLE_DIFFUSION_CHECKPOINT = os.getenv(
     "STABLE_DIFFUSION_CHECKPOINT",
     "Stable-diffusion/absolutereality_v181.safetensors",
+)
+STABLE_DIFFUSION_REPAIR_CHECKPOINT = os.getenv(
+    "STABLE_DIFFUSION_REPAIR_CHECKPOINT",
+    "Stable-diffusion/RealVisXL_V4.0.safetensors",
 )
 MEDIASTUDIO_RUNTIME_HOST = os.getenv("MEDIASTUDIO_RUNTIME_HOST", "")
 SEXTANT_ORCHESTRATOR_URL = os.getenv("SEXTANT_ORCHESTRATOR_URL", "")
@@ -199,6 +203,12 @@ def _scene_negative_prompt(reference: str) -> str:
             ", anthropomorphic God, human deity, portrait of God, elderly deity, two elderly men, architecture, "
             "building, house, palace, church, temple, arches, columns, city, village, road, paved path"
         )
+        if verse_number == 1:
+            negative += (
+                ", (second planet:1.8), (extra planet:1.8), (multiple planets:1.8), (moon:1.7), (moons:1.7), "
+                "satellite, extra orb, small celestial spheres, ringed planet, planetary rings, galaxy disc, solar system, "
+                "solar system diagram, rocky foreground, crater foreground, view from moon, view from another planet"
+            )
         if not verse_number or verse_number <= 25 or verse_number == 30:
             negative += (
                 ", person, people, man, woman, male figure, female figure, human, humanoid, face, portrait, "
@@ -212,7 +222,14 @@ def _genesis_one_visual_subject(reference: str) -> str:
     match = re.match(r"^genesis\s+1(?::(\d+))?\b", reference.strip(), flags=re.IGNORECASE)
     verse_number = int(match.group(1) or 0) if match else 0
     subjects = {
-        1: "A vast primordial cosmos and newly forming earth beneath immense heavens",
+        1: (
+            "(One solitary newly forming planet, one celestial body total:1.8), centered in the upper-middle of a vast "
+            "primordial void, the complete round planet fully visible and occupying about one third of the frame width, "
+            "with (empty black space:1.5) above, below, and on both sides, never touching a frame edge. Show the existing "
+            "materials of creation only as diffuse formless gas, dust, sparks, and energy flowing into that one planet; "
+            "no rocky foreground, viewpoint from another world, moons, satellites, rings, secondary planets, stars drawn "
+            "as round bodies, or other celestial spheres"
+        ),
         2: "A formless dark ocean under a deep empty sky, with wind tracing broad ripples across the water",
         3: "The first radiant light breaking across primordial darkness and illuminating the ocean",
         4: "A sharp boundary forming between luminous day and deep darkness across the same horizon",
@@ -292,7 +309,10 @@ def _scene_prompt(
             f"Art treatment: {style_name}. {style_direction}. "
             f"{_theme_prompt(theme_interpretation)} "
             "Creation-era cosmic and natural setting with no civilization; make the physical transformation, scale, "
-            "atmosphere, and living world fill the frame. Modest composition, cinematic 16:9 framing, coherent "
+            "atmosphere, and living world fill the frame. Motion-safe composition: keep every principal movable "
+            "subject fully visible, cleanly separated from other forms, and at least 12 percent inside every frame "
+            "edge; never crop it, touch it to the canvas boundary, or fuse it into terrain. Modest composition, "
+            "cinematic 16:9 framing, coherent "
             "lighting, no text, no lettering, no watermark, no modern objects."
         )
     setting_policy = (
@@ -305,7 +325,9 @@ def _scene_prompt(
         f"{_theme_prompt(theme_interpretation)} "
         f"Composition policy: {_god_portrayal_instruction(reference, verse)} "
         f"{setting_policy} "
-        "modest composition, expressive but restrained emotion, cinematic 16:9 framing, coherent lighting, "
+        "Motion-safe composition: keep every principal movable subject fully visible, cleanly separated from other "
+        "forms, and at least 12 percent inside every frame edge; never crop it, touch it to the canvas boundary, or "
+        "fuse it into terrain. Modest composition, expressive but restrained emotion, cinematic 16:9 framing, coherent lighting, "
         "no text, no lettering, no watermark, no modern objects."
     )
 
@@ -622,6 +644,18 @@ def generate_scene_animation_prompt(
 
 MOTION_REGION_EFFECTS = {"drift", "rise", "surge", "roll", "fracture", "radiate", "pulse"}
 MOTION_REGION_DIRECTIONS = {"left", "right", "up", "down", "outward", "clockwise", "counterclockwise", "pulse"}
+MOTION_REGION_METHODS = {"object-vector", "generative-region"}
+MOTION_VECTOR_EASINGS = {"linear", "ease-in", "ease-out", "ease-in-out"}
+
+
+def _default_vector(direction: str, strength: float) -> dict[str, float]:
+    distance = round(0.05 + (strength * 0.15), 3)
+    return {
+        "left": {"dx": -distance, "dy": 0.0},
+        "right": {"dx": distance, "dy": 0.0},
+        "up": {"dx": 0.0, "dy": -distance},
+        "down": {"dx": 0.0, "dy": distance},
+    }.get(direction, {"dx": 0.0, "dy": 0.0})
 
 
 def _sanitize_motion_plan(plan: dict[str, Any], *, source: str = "edited") -> dict[str, Any]:
@@ -640,6 +674,17 @@ def _sanitize_motion_plan(plan: dict[str, Any], *, source: str = "edited") -> di
             continue
         effect = str(item.get("effect") or "drift").lower()
         direction = str(item.get("direction") or "right").lower()
+        method = str(item.get("method") or item.get("renderMode") or "generative-region").lower()
+        vector = item.get("vector") if isinstance(item.get("vector"), dict) else {}
+        try:
+            dx = min(0.5, max(-0.5, float(vector.get("dx", 0.0))))
+            dy = min(0.5, max(-0.5, float(vector.get("dy", 0.0))))
+        except (TypeError, ValueError):
+            dx, dy = 0.0, 0.0
+        if method == "object-vector" and dx == 0.0 and dy == 0.0:
+            default_vector = _default_vector(direction, strength)
+            dx, dy = default_vector["dx"], default_vector["dy"]
+        easing = str(item.get("easing") or "ease-in-out").lower()
         regions.append({
             "id": re.sub(r"[^a-z0-9-]+", "-", str(item.get("id") or f"region-{position + 1}").lower()).strip("-")[:40],
             "label": re.sub(r"\s+", " ", str(item.get("label") or f"Region {position + 1}")).strip()[:80],
@@ -647,29 +692,65 @@ def _sanitize_motion_plan(plan: dict[str, Any], *, source: str = "edited") -> di
             "effect": effect if effect in MOTION_REGION_EFFECTS else "drift",
             "direction": direction if direction in MOTION_REGION_DIRECTIONS else "right",
             "strength": round(strength, 2),
+            "method": method if method in MOTION_REGION_METHODS else "generative-region",
+            "vector": {"dx": round(dx, 3), "dy": round(dy, 3)},
+            "easing": easing if easing in MOTION_VECTOR_EASINGS else "ease-in-out",
             "box": {"x": round(x, 3), "y": round(y, 3), "width": round(width, 3), "height": round(height, 3)},
             "enabled": item.get("enabled") is not False,
         })
     if not regions:
         raise ValueError("A motion plan must contain at least one usable region")
     return {
-        "version": 1,
+        "version": 2,
         "source": source,
         "summary": re.sub(r"\s+", " ", str(plan.get("summary") or "Animate selected scene elements while holding the composition fixed.")).strip()[:320],
         "lockedBackground": plan.get("lockedBackground") is not False,
+        "allowFullFrameGeneration": plan.get("allowFullFrameGeneration") is True,
+        "fallbackMode": "still",
         "regions": regions,
         "updatedAt": time.time(),
     }
 
 
-def _fallback_motion_plan(scene: dict[str, Any], scene_index: int) -> dict[str, Any]:
+def _fallback_motion_plan(
+    scene: dict[str, Any],
+    scene_index: int,
+    motion_instruction: str = "",
+) -> dict[str, Any]:
     timeline = (scene.get("timeline") or [{}])[0]
     image_generation = timeline.get("imageGeneration") or {}
     context = " ".join([
         str(scene.get("title") or ""), str(scene.get("VO") or ""), str(scene.get("action") or ""),
         str(image_generation.get("prompt") or timeline.get("prompt") or ""),
+        motion_instruction,
     ]).lower()
-    if any(word in context for word in ("cataclysm", "planet", "cosmos", "collision", "fractur", "fire", "molten")):
+    explicit_direction = next(
+        (direction for direction in ("down", "up", "left", "right") if direction in motion_instruction.lower()),
+        "",
+    )
+    explicit_subject = next(
+        (subject for subject in ("planet", "moon", "sun", "boat", "bird", "animal", "figure", "person") if subject in motion_instruction.lower()),
+        "",
+    )
+    if explicit_subject and explicit_direction:
+        raw = {
+            "summary": f"Move the existing {explicit_subject} {explicit_direction} along one exact vector while the rest of the frame remains fixed.",
+            "lockedBackground": True,
+            "allowFullFrameGeneration": False,
+            "regions": [{
+                "id": explicit_subject,
+                "label": f"Existing {explicit_subject}",
+                "action": motion_instruction,
+                "effect": "drift",
+                "direction": explicit_direction,
+                "strength": 1.0,
+                "method": "object-vector",
+                "vector": _default_vector(explicit_direction, 1.0),
+                "easing": "ease-in-out",
+                "box": {"x": 0.04, "y": 0.03, "width": 0.42, "height": 0.52},
+            }],
+        }
+    elif any(word in context for word in ("cataclysm", "planet", "cosmos", "collision", "fractur", "fire", "molten")):
         raw = {
             "summary": "Continue the existing cosmic cataclysm through distinct environmental actions while the planet and frame remain stable.",
             "lockedBackground": True,
@@ -700,24 +781,34 @@ def _fallback_motion_plan(scene: dict[str, Any], scene_index: int) -> dict[str, 
     return _sanitize_motion_plan(raw, source="source-prompt+scripture-fallback")
 
 
-def generate_scene_motion_plan(project_id: str, scene_index: int, *, session=requests) -> dict[str, Any]:
+def generate_scene_motion_plan(
+    project_id: str,
+    scene_index: int,
+    motion_instruction: str = "",
+    *,
+    session=requests,
+) -> dict[str, Any]:
     document, scene, _, _ = scene_animation_context(project_id, scene_index)
     state = read_project_state(project_id) or {}
     timeline = (scene.get("timeline") or [{}])[0]
     source_prompt = str((timeline.get("imageGeneration") or {}).get("prompt") or timeline.get("prompt") or "")
     instruction = (
         "Return only valid JSON for an image-to-video motion plan. Use the scripture event and the exact source-image "
-        "prompt to identify 2 to 5 DISTINCT EXISTING visual regions that should move. This is motion art direction, not "
-        "pixel segmentation: give normalized 0..1 bounding boxes. Prefer scenery and physical events over faces or whole "
+        "prompt and requested animation to identify 1 to 5 DISTINCT EXISTING visual regions that should move. Give "
+        "normalized 0..1 bounding boxes around the actual subjects. Prefer scenery and physical events over faces or whole "
         "people. Never invent an object absent from the source prompt. Keep the background, horizon, frame edges, scale, "
-        "and camera locked. Each region needs id, label, action, effect (drift|rise|surge|roll|fracture|radiate|pulse), "
+        "and camera locked. Choose method object-vector for an intact object that translates through the frame, and "
+        "generative-region only for deformable water, fire, smoke, light, terrain, or atmosphere. Each region needs id, "
+        "label, action, method, effect (drift|rise|surge|roll|fracture|radiate|pulse), "
         "direction (left|right|up|down|outward|clockwise|counterclockwise|pulse), strength 0.1..1, enabled true, and "
-        "box {x,y,width,height}. Add a concise summary and lockedBackground true. For a cataclysm, separate fire, terrain, "
-        "dust/debris, and atmosphere rather than moving the whole image. JSON shape: "
-        "{\"summary\":\"...\",\"lockedBackground\":true,\"regions\":[{...}]}.\n\n"
+        "box {x,y,width,height}. Object-vector regions also need vector {dx,dy} as normalized frame displacement and "
+        "easing linear|ease-in|ease-out|ease-in-out. Add a concise summary, lockedBackground true, "
+        "allowFullFrameGeneration false, and fallbackMode still. Never choose full-frame generation merely because a "
+        "regional method is difficult. JSON shape: "
+        "{\"summary\":\"...\",\"lockedBackground\":true,\"allowFullFrameGeneration\":false,\"regions\":[{...}]}.\n\n"
         f"Reference: {scene.get('title')}\nScripture event: {scene.get('VO') or scene.get('description')}\n"
         f"Source-image prompt: {source_prompt}\nTheme: {_theme_instruction(state.get('themeInterpretation'))}\n"
-        f"Existing scene action: {scene.get('action') or ''}"
+        f"Existing scene action: {scene.get('action') or ''}\nRequested animation: {motion_instruction}"
     )
     try:
         response = governed_post(
@@ -734,7 +825,7 @@ def generate_scene_motion_plan(project_id: str, scene_index: int, *, session=req
         content = str(payload.get("response") or ((payload.get("message") or {}).get("content") if isinstance(payload.get("message"), dict) else "")).strip()
         plan = _sanitize_motion_plan(json.loads(content), source="source-image-prompt+scripture")
     except (requests.RequestException, json.JSONDecodeError, TypeError, ValueError):
-        plan = _fallback_motion_plan(scene, scene_index)
+        plan = _fallback_motion_plan(scene, scene_index, motion_instruction)
     scene["motionPlan"] = plan
     save_scenes(project_id, json.dumps(document, indent=2), project_name=str((document.get("info") or {}).get("name") or project_id))
     return plan
@@ -836,22 +927,22 @@ def animate_bible_scene(
     log: Log,
 ) -> Path:
     document, scene, still_path, clip_path = scene_animation_context(project_id, scene_index)
-    if motion_plan:
-        scene["motionPlan"] = _sanitize_motion_plan(motion_plan, source="edited")
-    elif not scene.get("motionPlan"):
-        progress("PLANNING_MOTION_REGIONS", 0.08)
-        log(f"Planning controlled motion regions for scene {scene_index}")
-        scene["motionPlan"] = generate_scene_motion_plan(project_id, scene_index)
-        document, scene, still_path, clip_path = scene_animation_context(project_id, scene_index)
     resolved_prompt = re.sub(r"\s+", " ", prompt).strip()
     if not resolved_prompt:
-        progress("WRITING_MOTION_PROMPT", 0.12)
+        progress("WRITING_MOTION_PROMPT", 0.08)
         log(f"Generating a continuity-safe animation prompt for scene {scene_index}")
         resolved_prompt = generate_scene_animation_prompt(
             project_id,
             scene_index,
             camera_behavior=camera_behavior,
         )
+    if motion_plan:
+        scene["motionPlan"] = _sanitize_motion_plan(motion_plan, source="edited")
+    elif not scene.get("motionPlan"):
+        progress("PLANNING_MOTION_REGIONS", 0.12)
+        log(f"Planning controlled motion regions for scene {scene_index}")
+        scene["motionPlan"] = generate_scene_motion_plan(project_id, scene_index, resolved_prompt)
+        document, scene, still_path, clip_path = scene_animation_context(project_id, scene_index)
     resolved_prompt = _enforce_camera_behavior_prompt(resolved_prompt, scene, camera_behavior)
     scene["motionPrompt"] = resolved_prompt
     prior_generation = ((scene.get("timeline") or [{}])[0].get("motionGeneration") or {})
@@ -916,6 +1007,205 @@ def animate_bible_scene(
     return clip_path
 
 
+def _validate_motion_safe_still_semantics(
+    reference: str,
+    still_path: Path,
+    *,
+    session=requests,
+) -> dict[str, Any]:
+    """Fail closed when a generated still contradicts exact scene constraints."""
+    if not re.match(r"^genesis\s+1:1\b", reference.strip(), flags=re.IGNORECASE):
+        return {"status": "not-required"}
+
+    interrogation_url = (
+        STABLE_DIFFUSION_API_URL.rsplit("/sdapi/", 1)[0].rstrip("/")
+        + "/sdapi/v1/interrogate"
+    )
+    response = session.post(
+        interrogation_url,
+        json={
+            "image": base64.b64encode(still_path.read_bytes()).decode("ascii"),
+            "model": "clip",
+        },
+        timeout=STABLE_DIFFUSION_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    caption = re.sub(r"\s+", " ", str(response.json().get("caption") or "")).strip().lower()
+    if not caption:
+        raise RuntimeError("Motion-safe still semantic validation returned no caption")
+
+    required_subject = re.search(
+        r"\b(planet|earth|world|globe|sphere|fireball|celestial body)\b", caption
+    )
+    forbidden = [
+        label
+        for label, pattern in (
+            ("multiple planets", r"\bplanets\b"),
+            ("moon", r"\bmoons?\b"),
+            ("galaxy", r"\bgalax(?:y|ies)\b"),
+            ("ring", r"\brings?\b"),
+        )
+        if re.search(pattern, caption)
+    ]
+    if not required_subject or forbidden:
+        problems = []
+        if not required_subject:
+            problems.append("no single planet was identified")
+        if forbidden:
+            problems.append(f"forbidden extra celestial content: {', '.join(forbidden)}")
+        raise RuntimeError(
+            "Motion-safe still semantic validation rejected the image: "
+            f"{'; '.join(problems)}. Phronesis caption: {caption[:300]}"
+        )
+    return {"status": "accepted", "provider": "phronesis-sd-clip", "caption": caption[:500]}
+
+
+def _prepare_motion_safe_repair_candidate(
+    reference: str,
+    _still_path: Path,
+    motion_plan: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Align celestial vector boxes to the deliberately regenerated composition."""
+    plan = json.loads(json.dumps(motion_plan)) if motion_plan else None
+    celestial_regions = [
+        region
+        for region in ((plan or {}).get("regions") or [])
+        if str(region.get("method") or "").lower() == "object-vector"
+        and re.search(
+            r"\b(planet|earth|world|globe|sphere|moon|sun|orb)\b",
+            str(region.get("label") or ""),
+            flags=re.IGNORECASE,
+        )
+    ]
+    if not celestial_regions or not re.match(
+        r"^genesis\s+1:1\b", reference.strip(), flags=re.IGNORECASE
+    ):
+        return plan, {"status": "not-required"}
+
+    for region in celestial_regions:
+        region["box"] = {"x": 0.16, "y": 0.04, "width": 0.68, "height": 0.84}
+    plan = _sanitize_motion_plan(plan or {}, source="motion-safe-repair")
+    return plan, {
+        "status": "applied",
+        "method": "celestial-subject-box-alignment",
+        "sourcePixelsChanged": False,
+    }
+
+
+def repair_and_animate_bible_scene(
+    project_id: str,
+    scene_index: int,
+    prompt: str = "",
+    camera_behavior: str = "locked",
+    motion_plan: dict[str, Any] | None = None,
+    *,
+    progress: Progress,
+    log: Log,
+    max_still_attempts: int = 3,
+) -> Path:
+    """Replace a clipped still and animate it as one recoverable operation.
+
+    Motion prompts cannot reconstruct source pixels that were already outside
+    the canvas.  This workflow generates fresh motion-safe compositions until
+    the object-vector preflight passes.  If every candidate fails, the exact
+    original still, scene document, and project state are restored.
+    """
+    document, _scene, still_path, _clip_path = scene_animation_context(project_id, scene_index)
+    original_document = json.loads(json.dumps(document))
+    original_still = still_path.read_bytes()
+    original_state = read_project_state(project_id) or {}
+    attempts = max(1, min(int(max_still_attempts), 5))
+    last_error: Exception | None = None
+    attempts_used = 0
+    repairable_source_errors = (
+        "clipped by the source frame",
+        "produced an unsafe matte",
+        "did not isolate an existing object",
+        "unable to segment object-vector region",
+        "object-vector region is too small",
+        "rectangular scenery matte",
+        "motion-safe still semantic validation",
+    )
+
+    for attempt in range(1, attempts + 1):
+        attempts_used = attempt
+        log(f"Generating motion-safe still candidate {attempt}/{attempts} for scene {scene_index}")
+        progress("REPAIRING_STILL", 0.03 + ((attempt - 1) / attempts) * 0.18)
+        regenerate_bible_scene_stills(
+            project_id,
+            [scene_index],
+            checkpoint=STABLE_DIFFUSION_REPAIR_CHECKPOINT,
+            restore_checkpoint=False,
+            progress=lambda _stage, _value: None,
+            log=log,
+        )
+        try:
+            repaired_document, repaired_scene, repaired_still_path, _ = scene_animation_context(
+                project_id, scene_index
+            )
+            candidate_plan, reframing = _prepare_motion_safe_repair_candidate(
+                str(repaired_scene.get("title") or f"Scene {scene_index}"),
+                repaired_still_path,
+                motion_plan or repaired_scene.get("motionPlan"),
+            )
+            semantic_validation = _validate_motion_safe_still_semantics(
+                str(repaired_scene.get("title") or f"Scene {scene_index}"),
+                repaired_still_path,
+            )
+            repaired_timeline = repaired_scene.setdefault("timeline", [{}])
+            if not repaired_timeline:
+                repaired_timeline.append({})
+            repaired_generation = repaired_timeline[0].setdefault("imageGeneration", {})
+            repaired_generation["semanticValidation"] = semantic_validation
+            repaired_generation["motionSafeReframing"] = reframing
+            if candidate_plan:
+                repaired_scene["motionPlan"] = candidate_plan
+            repaired_name = str((repaired_document.get("info") or {}).get("name") or project_id)
+            save_scenes(
+                project_id,
+                json.dumps(repaired_document, indent=2),
+                project_name=repaired_name,
+            )
+            return animate_bible_scene(
+                project_id,
+                scene_index,
+                prompt,
+                camera_behavior,
+                candidate_plan,
+                progress=progress,
+                log=log,
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if not any(message in str(exc).lower() for message in repairable_source_errors):
+                break
+            log(f"Still candidate {attempt} failed motion-safe subject isolation: {exc}")
+
+    still_path.parent.mkdir(parents=True, exist_ok=True)
+    still_path.write_bytes(original_still)
+    restored_scene = (original_document.get("scenes") or [])[scene_index - 1]
+    restored_scene["animationQuality"] = {
+        "status": "rejected",
+        "cameraBehavior": camera_behavior,
+        "reason": (
+            f"Automatic motion-safe repair did not produce an accepted animation after {attempts_used} "
+            f"still candidate{'s' if attempts_used != 1 else ''}. The original still was restored. "
+            f"Last error: {str(last_error)[:500]}"
+        ),
+        "updatedAt": time.time(),
+    }
+    project_name = str((original_document.get("info") or {}).get("name") or project_id)
+    save_scenes(project_id, json.dumps(original_document, indent=2), project_name=project_name)
+    save_project_state(
+        project_id,
+        original_state,
+        project_name=str(original_state.get("title") or project_name),
+    )
+    if last_error is not None:
+        raise RuntimeError(restored_scene["animationQuality"]["reason"]) from last_error
+    raise RuntimeError(restored_scene["animationQuality"]["reason"])
+
+
 def build_storyboard(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     passage_data = fetch_passage(payload["passage"], payload.get("translation") or "kjv")
     canonical = str(passage_data.get("reference") or payload["passage"]).strip()
@@ -967,7 +1257,28 @@ def build_storyboard(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]
     return canonical, scenes
 
 
-def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "", session=requests) -> dict[str, Any]:
+def _generate_still_unadmitted(
+    prompt: str,
+    destination: Path,
+    *,
+    negative_extra: str = "",
+    checkpoint: str | None = None,
+    restore_checkpoint: bool = True,
+    session=requests,
+) -> dict[str, Any]:
+    # ComfyUI and Stable Diffusion share the Phronesis GPU. Release any staged
+    # video model before asking the still-image service to allocate its UNet.
+    # The cleanup is best-effort because an already-idle ComfyUI instance must
+    # not prevent still generation.
+    try:
+        cleanup = session.post(
+            f"{COMFYUI_MODEL_API_URL.rstrip('/')}/free",
+            json={"unload_models": True, "free_memory": True},
+            timeout=60,
+        )
+        cleanup.raise_for_status()
+    except requests.RequestException:
+        pass
     negative_prompt = (
         "text, watermark, logo, modern clothing, modern architecture, deformed anatomy, extra limbs, "
         f"duplicate people, face morph, blur, low detail, {GOD_CHARACTER_NEGATIVE}"
@@ -975,28 +1286,40 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
     if negative_extra.strip():
         negative_prompt = f"{negative_prompt}, {negative_extra.strip()}"
     seed = random.randint(1, 2**63 - 1)
-    response = governed_post(
-        session,
+    selected_checkpoint = checkpoint or STABLE_DIFFUSION_CHECKPOINT
+    payload = {
+        "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "width": 1024,
+        "height": 576,
+        "steps": 24,
+        "cfg_scale": 7,
+        "sampler_name": "DPM++ 2M Karras",
+        "seed": seed,
+        "override_settings": {"sd_model_checkpoint": selected_checkpoint},
+        "override_settings_restore_afterwards": restore_checkpoint,
+    }
+    response = session.post(
         STABLE_DIFFUSION_API_URL,
-        workload_class="gpu",
-        vram_required_mb=8192,
-        duration_slots=2,
-        priority=5,
-        json={
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "width": 1024,
-            "height": 576,
-            "steps": 24,
-            "cfg_scale": 7,
-            "sampler_name": "DPM++ 2M Karras",
-            "seed": seed,
-            "override_settings": {"sd_model_checkpoint": STABLE_DIFFUSION_CHECKPOINT},
-            "override_settings_restore_afterwards": True,
-        },
+        json=payload,
         timeout=STABLE_DIFFUSION_TIMEOUT_SECONDS,
     )
-    response.raise_for_status()
+    resolution_fallback = False
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        if getattr(exc.response, "status_code", None) != 500:
+            raise
+        # The 12 GB Phronesis GPU can render 16:9 reliably at this size after
+        # a video model has run, even when 1024x576 cannot be allocated.
+        payload = {**payload, "width": 640, "height": 360}
+        response = session.post(
+            STABLE_DIFFUSION_API_URL,
+            json=payload,
+            timeout=STABLE_DIFFUSION_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        resolution_fallback = True
     images = response.json().get("images") or []
     if not images:
         raise RuntimeError("Stable Diffusion returned no image")
@@ -1006,13 +1329,40 @@ def _generate_still(prompt: str, destination: Path, *, negative_extra: str = "",
         "prompt": prompt,
         "negativePrompt": negative_prompt,
         "seed": seed,
-        "model": STABLE_DIFFUSION_CHECKPOINT,
+        "model": selected_checkpoint,
         "sampler": "DPM++ 2M Karras",
         "steps": 24,
         "cfgScale": 7,
-        "width": 1024,
-        "height": 576,
+        "width": payload["width"],
+        "height": payload["height"],
+        "resolutionFallback": resolution_fallback,
     }
+
+
+def _generate_still(
+    prompt: str,
+    destination: Path,
+    *,
+    negative_extra: str = "",
+    checkpoint: str | None = None,
+    restore_checkpoint: bool = True,
+    session=requests,
+) -> dict[str, Any]:
+    with admit_gpu(
+        "gpu",
+        workload_id=f"mediastudio-still-{uuid.uuid4().hex}",
+        vram_required_mb=8192,
+        duration_slots=2,
+        priority=5,
+    ):
+        return _generate_still_unadmitted(
+            prompt,
+            destination,
+            negative_extra=negative_extra,
+            checkpoint=checkpoint,
+            restore_checkpoint=restore_checkpoint,
+            session=session,
+        )
 
 
 def _title_card_prompt(
@@ -1116,6 +1466,8 @@ def regenerate_bible_scene_stills(
     project_id: str,
     scene_indexes: list[int] | None = None,
     *,
+    checkpoint: str | None = None,
+    restore_checkpoint: bool = True,
     progress: Progress,
     log: Log,
 ) -> Path:
@@ -1159,12 +1511,20 @@ def regenerate_bible_scene_stills(
             shutil.copy2(destination, backup_dir / backup_name)
             scene.setdefault("imageHistory", []).append(f"history/{backup_name}")
         log(f"Regenerating scenery-first still {position}/{len(indexes)} for {reference}")
-        generation = _generate_still(prompt, destination, negative_extra=_scene_negative_prompt(reference))
+        generation = _generate_still(
+            prompt,
+            destination,
+            negative_extra=_scene_negative_prompt(reference),
+            checkpoint=checkpoint,
+            restore_checkpoint=restore_checkpoint,
+        )
         timeline[0]["image"] = destination.name
         timeline[0]["prompt"] = prompt
         timeline[0]["imageGeneration"] = generation
         timeline[0].pop("video", None)
         timeline[0].pop("motionGeneration", None)
+        scene.pop("animationQuality", None)
+        scene.pop("animationRejected", None)
         scene["imageUpdatedAt"] = time.time()
         last_path = destination
         progress("IMAGE_REGENERATION", 0.05 + (position / len(indexes)) * 0.9)

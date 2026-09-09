@@ -1,10 +1,12 @@
 """Sextant-owned adapter for the model-only ComfyUI runtime on Fortress LAN."""
 from __future__ import annotations
 
+import base64
 import json
 import os
 import random
 import re
+import shutil
 import statistics
 import subprocess
 import tempfile
@@ -18,9 +20,21 @@ import requests
 from app.gpu_admission import admit_gpu
 
 COMFYUI_MODEL_API_URL = os.getenv("COMFYUI_MODEL_API_URL", "http://100.100.97.30:8188")
+STABLE_DIFFUSION_API_URL = os.getenv(
+    "STABLE_DIFFUSION_API_URL", "http://100.100.97.30:7861/sdapi/v1/txt2img"
+)
+BACKGROUND_PLATE_API_URL = STABLE_DIFFUSION_API_URL.replace("/txt2img", "/img2img")
+IMAGE_INTERROGATE_API_URL = STABLE_DIFFUSION_API_URL.replace("/txt2img", "/interrogate")
 COMFYUI_TIMEOUT_SECONDS = float(os.getenv("COMFYUI_TIMEOUT_SECONDS", "7200"))
 COMFYUI_POLL_SECONDS = float(os.getenv("COMFYUI_POLL_SECONDS", "5"))
 WORKFLOW_PATH = Path(__file__).resolve().parent / "workflows" / "wan2_2_ti2v_5b_api.json"
+OBJECT_VECTOR_PROVIDER = "sextant-object-vector-v1"
+LTX_KEYFRAME_CHECKPOINT = os.getenv(
+    "LTX_KEYFRAME_CHECKPOINT",
+    "ltxv-2b-0.9.8-distilled-fp8.safetensors",
+)
+OBJECT_MOTION_CORRIDOR_EXPANSION = 40
+OBJECT_MOTION_CORRIDOR_FEATHER = 14.0
 FRAME_PROTECTION_WIDTH = 576
 FRAME_PROTECTION_HEIGHT = 320
 FRAME_PROTECTION_X = 69
@@ -67,6 +81,24 @@ def extract_last_frame(video_path: Path, destination: Path) -> None:
         raise MotionProviderError(f"Unable to carry the previous scene into the next scene: {exc}") from exc
     if not destination.exists() or destination.stat().st_size == 0:
         raise MotionProviderError("Previous scene did not yield a usable final frame")
+
+
+def _extract_motion_keyframe(video_path: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-sseof", "-0.08",
+        "-i", str(video_path), "-frames:v", "1", "-vf",
+        f"scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black",
+        str(destination),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise MotionProviderError(f"Unable to extract the object-vector ending keyframe: {exc}") from exc
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise MotionProviderError("Object-vector tween did not yield an ending keyframe")
 
 
 def _set_path(document: dict[str, Any], dotted_path: str, value: Any) -> None:
@@ -235,6 +267,63 @@ def _vace_region_workflow(
     }
 
 
+def _ltx_keyframe_workflow(
+    start_image_name: str,
+    end_image_name: str,
+    prompt: str,
+    negative_prompt: str,
+    prefix: str,
+    seed: int,
+) -> dict[str, Any]:
+    """Generate real motion between the deterministic tween's exact endpoint frames."""
+    return {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {
+            "ckpt_name": LTX_KEYFRAME_CHECKPOINT,
+        }},
+        "2": {"class_type": "LoadImage", "inputs": {"image": start_image_name}},
+        "3": {"class_type": "LoadImage", "inputs": {"image": end_image_name}},
+        "4": {"class_type": "CLIPLoader", "inputs": {
+            "clip_name": "t5xxl_fp16.safetensors", "type": "ltxv", "device": "cpu",
+        }},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["4", 0]}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {
+            "text": negative_prompt, "clip": ["4", 0],
+        }},
+        "7": {"class_type": "LTXVConditioning", "inputs": {
+            "positive": ["5", 0], "negative": ["6", 0], "frame_rate": 16,
+        }},
+        "8": {"class_type": "EmptyLTXVLatentVideo", "inputs": {
+            "width": FRAME_PROTECTION_WIDTH, "height": FRAME_PROTECTION_HEIGHT,
+            # This checkpoint decodes 16 more frames than its latent length.
+            # A 65-frame latent therefore yields the required 81-frame, 5.0625s clip.
+            "length": 65, "batch_size": 1,
+        }},
+        "9": {"class_type": "LTXVAddGuide", "inputs": {
+            "positive": ["7", 0], "negative": ["7", 1], "vae": ["1", 2],
+            "latent": ["8", 0], "image": ["2", 0], "frame_idx": 0, "strength": 1.0,
+        }},
+        "10": {"class_type": "LTXVAddGuide", "inputs": {
+            "positive": ["9", 0], "negative": ["9", 1], "vae": ["1", 2],
+            "latent": ["9", 2], "image": ["3", 0], "frame_idx": 64, "strength": 1.0,
+        }},
+        "11": {"class_type": "ModelSamplingLTXV", "inputs": {
+            "model": ["1", 0], "max_shift": 2.05, "base_shift": 0.95, "latent": ["10", 2],
+        }},
+        "12": {"class_type": "KSampler", "inputs": {
+            "model": ["11", 0], "seed": seed, "steps": 20, "cfg": 3.0,
+            "sampler_name": "euler", "scheduler": "normal", "positive": ["10", 0],
+            "negative": ["10", 1], "latent_image": ["10", 2], "denoise": 1.0,
+        }},
+        "13": {"class_type": "VAEDecode", "inputs": {
+            "samples": ["12", 0], "vae": ["1", 2],
+        }},
+        "14": {"class_type": "CreateVideo", "inputs": {"images": ["13", 0], "fps": 16}},
+        "15": {"class_type": "SaveVideo", "inputs": {
+            "video": ["14", 0], "filename_prefix": prefix, "format": "mp4", "codec": "h264",
+        }},
+    }
+
+
 def _region_motion_offset(region: dict[str, Any], index: int) -> tuple[str, str]:
     strength = min(1.0, max(0.1, float(region.get("strength") or 0.5)))
     distance = round(5 + (strength * 15), 2)
@@ -258,12 +347,16 @@ def _generate_region_control_assets(
     motion_plan: dict[str, Any],
     control_destination: Path,
     mask_destination: Path,
+    *,
+    control_source: Path | None = None,
+    mask_source: Path | None = None,
 ) -> int:
-    """Create VACE inpaint tracks; planned regions regenerate while the source stays fixed."""
+    """Create VACE inpaint tracks over a fixed still or deterministic object-vector control track."""
     regions = [region for region in motion_plan.get("regions") or [] if region.get("enabled") is not False][:5]
     if not regions:
         raise MotionProviderError("Motion plan has no enabled regions")
     mask_terms = []
+    has_temporal_mask = False
     for region in regions:
         box = region.get("box") or {}
         x = max(0, min(FRAME_PROTECTION_WIDTH - 24, round(float(box.get("x", 0.1)) * FRAME_PROTECTION_WIDTH)))
@@ -271,6 +364,16 @@ def _generate_region_control_assets(
         width = max(24, min(FRAME_PROTECTION_WIDTH - x, round(float(box.get("width", 0.35)) * FRAME_PROTECTION_WIDTH)))
         height = max(24, min(FRAME_PROTECTION_HEIGHT - y, round(float(box.get("height", 0.35)) * FRAME_PROTECTION_HEIGHT)))
         center_x, center_y = x + (width / 2), y + (height / 2)
+        if control_source and region.get("method") == "object-vector":
+            vector = region.get("vector") or {}
+            dx = round(float(vector.get("dx", 0.0)) * FRAME_PROTECTION_WIDTH, 3)
+            dy = round(float(vector.get("dy", 0.0)) * FRAME_PROTECTION_HEIGHT, 3)
+            easing = _vector_easing_expression(
+                str(region.get("easing") or "ease-in-out"), 5.0625, "T"
+            )
+            center_x = f"({center_x}+({dx})*({easing}))"
+            center_y = f"({center_y}+({dy})*({easing}))"
+            has_temporal_mask = has_temporal_mask or abs(dx) >= 1.0 or abs(dy) >= 1.0
         spread_x, spread_y = max(18, width / 2.8), max(18, height / 2.8)
         mask_terms.append(
             f"255*exp(-(((X-{center_x})*(X-{center_x})/(2*{spread_x}*{spread_x}))"
@@ -280,12 +383,20 @@ def _generate_region_control_assets(
     for term in mask_terms[1:]:
         mask_expression = f"max({mask_expression},{term})"
     mask_filter = f"format=gray,geq=lum='{mask_expression}',boxblur=8:1,format=yuv420p"
-    mask_command = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-        f"color=black:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d=5.0625",
-        "-vf", mask_filter, "-t", "5.0625", "-r", "16", "-c:v", "libx264", "-preset", "fast",
-        "-crf", "12", "-pix_fmt", "yuv420p", str(mask_destination),
-    ]
+    if mask_source:
+        mask_command = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(mask_source),
+            "-t", "5.0625", "-r", "16", "-c:v", "libx264", "-preset", "fast",
+            "-crf", "12", "-pix_fmt", "yuv420p", str(mask_destination),
+        ]
+        has_temporal_mask = True
+    else:
+        mask_command = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+            f"color=black:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d=5.0625",
+            "-vf", mask_filter, "-t", "5.0625", "-r", "16", "-c:v", "libx264", "-preset", "fast",
+            "-crf", "12", "-pix_fmt", "yuv420p", str(mask_destination),
+        ]
     control_graph = (
         f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
         "force_original_aspect_ratio=decrease:force_divisible_by=2,"
@@ -295,9 +406,12 @@ def _generate_region_control_assets(
         "[2:v]format=yuv420p[neutral];"
         "[source][neutral][mask]maskedmerge,format=yuv420p[control]"
     )
+    control_input = ["-i", str(control_source)] if control_source else [
+        "-loop", "1", "-framerate", "16", "-i", str(image_path)
+    ]
     control_command = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-loop", "1", "-framerate", "16",
-        "-i", str(image_path), "-i", str(mask_destination), "-f", "lavfi", "-i",
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *control_input,
+        "-i", str(mask_destination), "-f", "lavfi", "-i",
         f"color=gray:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d=5.0625",
         "-filter_complex", control_graph, "-map", "[control]", "-t", "5.0625", "-r", "16",
         "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", str(control_destination),
@@ -310,8 +424,12 @@ def _generate_region_control_assets(
         raise MotionProviderError(f"Unable to build region-control tracks: {detail[-600:]}") from exc
     if not control_destination.exists() or not mask_destination.exists():
         raise MotionProviderError("Region-control track generation produced no video")
-    _verify_static_control_track(control_destination, "control")
-    _verify_static_control_track(mask_destination, "mask")
+    if control_source is None:
+        _verify_static_control_track(control_destination, "control")
+    if has_temporal_mask:
+        _verify_temporal_control_track(mask_destination, "mask")
+    else:
+        _verify_static_control_track(mask_destination, "mask")
     return len(regions)
 
 
@@ -336,6 +454,25 @@ def _verify_static_control_track(path: Path, label: str) -> None:
         raise MotionProviderError(
             f"VACE {label} track contains temporal image movement; translated source patches are prohibited"
         )
+
+
+def _verify_temporal_control_track(path: Path, label: str) -> None:
+    """Require an object-vector mask to carry a measurable trajectory."""
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+        "-vf", "signalstats,metadata=print:file=-", "-f", "null", "-",
+    ]
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise MotionProviderError(f"Unable to validate the VACE {label} trajectory: {exc}") from exc
+    frame_differences = [
+        float(line.split("=", 1)[1])
+        for line in completed.stdout.splitlines()
+        if line.startswith("lavfi.signalstats.YDIF=")
+    ]
+    if not frame_differences or max(frame_differences) <= 0.05:
+        raise MotionProviderError(f"VACE {label} trajectory contains no measurable movement")
 
 
 def _wait_for_output(session, prompt_id: str) -> dict:
@@ -525,7 +662,43 @@ def _measure_source_frame_fidelity(image_path: Path, video_path: Path) -> float:
         stats_path.unlink(missing_ok=True)
 
 
-def _measure_sequence_integrity(video_path: Path) -> dict[str, float | int]:
+def _measure_end_frame_fidelity(image_path: Path, video_path: Path) -> float:
+    stats_path = video_path.with_name(f"{video_path.stem}.end-ssim.log")
+    filter_graph = (
+        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black[s];"
+        f"[1:v]select='eq(n,0)',setpts=N/FRAME_RATE/TB[v];[s][v]ssim=stats_file={stats_path}"
+    )
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-loop", "1", "-i", str(image_path),
+        "-sseof", "-0.08", "-i", str(video_path), "-filter_complex", filter_graph,
+        "-frames:v", "1", "-f", "null", "-",
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        content = stats_path.read_text(encoding="utf-8", errors="replace")
+        match = re.search(r"All:([0-9.]+)", content)
+        if not match:
+            raise MotionProviderError("Unable to measure final-keyframe fidelity")
+        score = float(match.group(1))
+        if score < SOURCE_FRAME_MIN_SSIM:
+            raise MotionProviderError(
+                f"Animation rejected for final-keyframe drift: ending SSIM {score:.3f} "
+                f"is below {SOURCE_FRAME_MIN_SSIM:.3f}"
+            )
+        return round(score, 4)
+    except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
+        raise MotionProviderError(f"Unable to validate final-keyframe fidelity: {exc}") from exc
+    finally:
+        stats_path.unlink(missing_ok=True)
+
+
+def _measure_sequence_integrity(
+    video_path: Path,
+    *,
+    ignored_tile_boxes: list[dict[str, float]] | None = None,
+) -> dict[str, float | int]:
     stats_path = video_path.with_name(f"{video_path.stem}.signalstats.log")
     command = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(video_path),
@@ -585,7 +758,7 @@ def _measure_sequence_integrity(video_path: Path) -> dict[str, float | int]:
                 f"mean luma-frame difference {metrics['meanLumaFrameDifference']:.2f} is below "
                 f"{SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE:.2f}"
             )
-        metrics.update(_measure_edge_tile_integrity(video_path))
+        metrics.update(_measure_edge_tile_integrity(video_path, ignored_tile_boxes=ignored_tile_boxes))
         return metrics
     except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
         raise MotionProviderError(f"Unable to validate animation sequence integrity: {exc}") from exc
@@ -603,10 +776,32 @@ def _verify_visible_generative_motion(metrics: dict[str, float | int]) -> None:
         )
 
 
-def _measure_edge_tile_integrity(video_path: Path) -> dict[str, float | int]:
+def _measure_edge_tile_integrity(
+    video_path: Path,
+    *,
+    ignored_tile_boxes: list[dict[str, float]] | None = None,
+) -> dict[str, float | int]:
     # Localized model corruption can hide inside healthy whole-frame averages. Sample every
     # 4x4 tile so central generation failures are caught as well as edge artifacts.
-    tiles = [(row, column) for row in range(4) for column in range(4)]
+    def intersects_ignored_box(row: int, column: int) -> bool:
+        tile_left, tile_top = column / 4, row / 4
+        tile_right, tile_bottom = (column + 1) / 4, (row + 1) / 4
+        return any(
+            tile_left < float(box.get("x", 0.0)) + float(box.get("width", 0.0))
+            and tile_right > float(box.get("x", 0.0))
+            and tile_top < float(box.get("y", 0.0)) + float(box.get("height", 0.0))
+            and tile_bottom > float(box.get("y", 0.0))
+            for box in ignored_tile_boxes or []
+        )
+
+    tiles = [
+        (row, column)
+        for row in range(4)
+        for column in range(4)
+        if not intersects_ignored_box(row, column)
+    ]
+    if not tiles:
+        raise MotionProviderError("Motion corridor leaves no fixed-background tiles for validation")
     worst_saturation_jump = 0.0
     worst_luma_difference = 0.0
     worst_tile = ""
@@ -859,6 +1054,772 @@ def _generate_region_environmental_fallback(
     return len(regions)
 
 
+def _object_vector_regions(motion_plan: dict[str, Any] | None) -> list[dict[str, Any]]:
+    return [
+        region
+        for region in (motion_plan or {}).get("regions") or []
+        if region.get("enabled") is not False and region.get("method") == "object-vector"
+    ][:5]
+
+
+def _generative_regions(motion_plan: dict[str, Any] | None) -> list[dict[str, Any]]:
+    return [
+        region
+        for region in (motion_plan or {}).get("regions") or []
+        if region.get("enabled") is not False and region.get("method") != "object-vector"
+    ][:5]
+
+
+def _object_vector_motion_corridors(motion_plan: dict[str, Any] | None) -> list[dict[str, float]]:
+    """Return swept object bounds so fixed-background QA does not flag intended motion."""
+    corridors: list[dict[str, float]] = []
+    for region in _object_vector_regions(motion_plan):
+        box = region.get("box") or {}
+        vector = region.get("vector") or {}
+        x = float(box.get("x", 0.0))
+        y = float(box.get("y", 0.0))
+        width = float(box.get("width", 0.0))
+        height = float(box.get("height", 0.0))
+        dx = float(vector.get("dx", 0.0))
+        dy = float(vector.get("dy", 0.0))
+        left = max(0.0, min(x, x + dx))
+        top = max(0.0, min(y, y + dy))
+        right = min(1.0, max(x + width, x + dx + width))
+        bottom = min(1.0, max(y + height, y + dy + height))
+        corridors.append({
+            "x": left,
+            "y": top,
+            "width": max(0.0, right - left),
+            "height": max(0.0, bottom - top),
+        })
+    return corridors
+
+
+def _vector_easing_expression(easing: str, duration: float, variable: str = "t") -> str:
+    unit = f"({variable}/{duration})"
+    return {
+        "linear": unit,
+        "ease-in": f"({unit}*{unit})",
+        "ease-out": f"(1-(1-{unit})*(1-{unit}))",
+        "ease-in-out": f"(3*{unit}*{unit}-2*{unit}*{unit}*{unit})",
+    }.get(easing, f"(3*{unit}*{unit}-2*{unit}*{unit}*{unit})")
+
+
+def _release_comfyui_gpu_memory(session=requests) -> None:
+    """Unload retained video models before Stable Diffusion uses the shared Phronesis GPU."""
+    response = session.post(
+        f"{COMFYUI_MODEL_API_URL.rstrip('/')}/free",
+        json={"unload_models": True, "free_memory": True},
+        timeout=60,
+    )
+    response.raise_for_status()
+
+
+def _release_stable_diffusion_gpu_memory(session=requests) -> None:
+    """Unload the image checkpoint before ComfyUI begins the video synthesis phase."""
+    response = session.post(
+        STABLE_DIFFUSION_API_URL.replace("/txt2img", "/unload-checkpoint"),
+        timeout=60,
+    )
+    response.raise_for_status()
+
+
+def _generate_background_plate(
+    image,
+    object_mask,
+    *,
+    labels: list[str],
+    scene_prompt: str,
+    negative_prompt: str,
+    session=requests,
+):
+    """Use protected local inpainting to reconstruct only pixels hidden by a large object."""
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except ImportError as exc:
+        raise MotionProviderError("Background-plate generation requires the bundled OpenCV runtime") from exc
+
+    _release_comfyui_gpu_memory(session)
+    expanded_mask = cv2.dilate(object_mask, np.ones((11, 11), dtype=np.uint8), iterations=2)
+    ok_image, encoded_image = cv2.imencode(".png", image)
+    ok_mask, encoded_mask = cv2.imencode(".png", expanded_mask)
+    if not ok_image or not ok_mask:
+        raise MotionProviderError("Unable to encode the source and mask for background reconstruction")
+    object_names = ", ".join(label for label in labels if label) or "masked foreground object"
+    label_text = object_names.lower()
+    celestial_object = any(
+        token in label_text for token in ("planet", "moon", "sun", "orb", "sphere")
+    )
+    if celestial_object:
+        background_subject = (
+            "unobstructed continuation of the existing sky, atmosphere, stars, haze, and distant "
+            "landscape visible immediately around the mask; no celestial body, circle, sphere, orb, moon, or planet"
+        )
+        object_negatives = "planet, moon, sun, orb, sphere, circle, circular silhouette, celestial body"
+    else:
+        background_subject = (
+            "unobstructed continuation of the existing background textures and scenery visible immediately around the mask"
+        )
+        object_negatives = object_names
+    prompt = (
+        "Create an empty background plate for this exact image. Fill the white mask with "
+        f"{background_subject}. Match the nearest boundary colors, texture, depth, lighting, and art style. "
+        f"Remove the masked {object_names} completely. The filled area must contain background only. "
+        "Do not add any subject, focal object, figure, structure, symbol, text, or border."
+    )
+    payload = {
+        "init_images": [base64.b64encode(encoded_image.tobytes()).decode("ascii")],
+        "mask": base64.b64encode(encoded_mask.tobytes()).decode("ascii"),
+        "prompt": prompt,
+        "negative_prompt": (
+            f"{negative_prompt}, {object_negatives}, duplicate object, foreground subject, hard mask edge, "
+            "black hole, circular cutout, seam, text, watermark"
+        )[:1800],
+        "width": FRAME_PROTECTION_WIDTH,
+        "height": FRAME_PROTECTION_HEIGHT,
+        "steps": 24,
+        "cfg_scale": 6.0,
+        "sampler_name": "DPM++ 2M Karras",
+        "denoising_strength": 0.92,
+        "mask_blur": 24,
+        "inpainting_fill": 2,
+        "inpaint_full_res": False,
+        "inpaint_full_res_padding": 48,
+    }
+    forbidden_terms = {
+        "planet": {"planet", "moon", "sun", "orb", "sphere", "celestial body"},
+        "moon": {"planet", "moon", "sun", "orb", "sphere", "celestial body"},
+        "person": {"person", "people", "man", "woman", "human", "figure"},
+        "car": {"car", "vehicle", "automobile", "truck"},
+        "boat": {"boat", "ship", "vessel"},
+        "bird": {"bird", "animal"},
+    }
+    forbidden = set()
+    for category, terms in forbidden_terms.items():
+        if category in label_text:
+            forbidden.update(terms)
+    if not forbidden:
+        forbidden.update(
+            token for token in re.findall(r"[a-z]{4,}", label_text)
+            if token not in {"existing", "foreground", "object", "region"}
+        )
+
+    if celestial_object:
+        # A large independently generated empty plate needs a broad transition
+        # into the preserved scenery. Keep the complete removal mask opaque so
+        # no trace of the old celestial body can bleed back into the plate.
+        transition_mask = cv2.dilate(
+            expanded_mask,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (61, 61)),
+            iterations=1,
+        )
+        blend_mask = cv2.GaussianBlur(
+            transition_mask, (0, 0), sigmaX=24.0, sigmaY=24.0
+        )
+        blend_mask = cv2.max(blend_mask, expanded_mask)
+    else:
+        blend_mask = cv2.GaussianBlur(expanded_mask, (0, 0), sigmaX=10.0, sigmaY=10.0)
+    alpha = (blend_mask.astype(np.float32) / 255.0)[:, :, None]
+
+    def validate_generated_fill(generated) -> str:
+        """Describe only the pixels replacing the object, not the preserved scene."""
+        x, y, width, height = cv2.boundingRect(expanded_mask)
+        crop = generated[y:y + height, x:x + width].copy()
+        crop_mask = expanded_mask[y:y + height, x:x + width]
+        inside = crop_mask > 0
+        if not np.any(inside):
+            raise MotionProviderError("Background validation mask was empty")
+        outside = ~inside
+        if np.any(outside):
+            neutral = np.median(crop[inside], axis=0).astype(np.uint8)
+            crop[outside] = neutral
+        ok_crop, encoded_crop = cv2.imencode(".png", crop)
+        if not ok_crop:
+            raise MotionProviderError("Unable to encode the reconstructed background region")
+        interrogation = session.post(
+            IMAGE_INTERROGATE_API_URL,
+            json={
+                "image": base64.b64encode(encoded_crop.tobytes()).decode("ascii"),
+                "model": "clip",
+            },
+            timeout=300,
+        )
+        interrogation.raise_for_status()
+        caption = str(interrogation.json().get("caption") or "").strip().lower()
+        if not caption:
+            raise MotionProviderError("Background semantic validation returned no caption")
+        return caption
+
+    def decode_generated(response, failure_prefix: str):
+        images = response.json().get("images") or []
+        if not images:
+            raise MotionProviderError(f"{failure_prefix} returned no image")
+        try:
+            decoded = base64.b64decode(str(images[0]).split(",")[-1])
+            generated = cv2.imdecode(np.frombuffer(decoded, dtype=np.uint8), cv2.IMREAD_COLOR)
+        except (ValueError, TypeError) as exc:
+            raise MotionProviderError(f"{failure_prefix} returned an invalid image") from exc
+        if generated is None:
+            raise MotionProviderError(f"{failure_prefix} returned an unreadable image")
+        if generated.shape[:2] != image.shape[:2]:
+            generated = cv2.resize(
+                generated, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LANCZOS4
+            )
+        return generated
+
+    rejected_captions: list[str] = []
+    # Image-conditioned inpainting persistently reconstructs round celestial
+    # subjects from their surrounding rim and silhouette. For those subjects,
+    # skip directly to an independently generated empty plate so the removed
+    # body cannot leak through the conditioning image.
+    for _attempt in range(0 if celestial_object else 3):
+        payload["seed"] = random.randint(1, 2**31 - 1)
+        response = session.post(BACKGROUND_PLATE_API_URL, json=payload, timeout=600)
+        response.raise_for_status()
+        generated = decode_generated(response, "Background reconstruction")
+        candidate = np.clip(
+            (generated.astype(np.float32) * alpha) + (image.astype(np.float32) * (1.0 - alpha)),
+            0,
+            255,
+        ).astype(np.uint8)
+        caption = validate_generated_fill(generated)
+        matches = sorted(term for term in forbidden if term in caption)
+        if not matches:
+            return candidate
+        rejected_captions.append(caption[:240])
+
+    style_sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", scene_prompt)
+        if any(
+            cue in sentence.lower()
+            for cue in ("art treatment", "visual treatment", "art style", "palette", "texture", "lighting")
+        )
+    ]
+    style_context = " ".join(style_sentences)[:600]
+    for term in sorted(forbidden | {label_text}, key=len, reverse=True):
+        if term:
+            style_context = re.sub(rf"\b{re.escape(term)}s?\b", "", style_context, flags=re.IGNORECASE)
+    style_context = re.sub(r"\s+", " ", style_context).strip()
+    if celestial_object:
+        empty_background = (
+            "empty primordial cosmic background plate, deep starfield, subtle atmospheric haze, "
+            "distant barren rocky horizon along the lower edge, background only, no focal subject"
+        )
+    else:
+        empty_background = (
+            "empty unobstructed background plate matching the surrounding setting, depth, palette, "
+            "texture, and light direction, background only, no focal subject"
+        )
+    canvas_payload = {
+        "prompt": f"{empty_background}. {style_context}"[:1800],
+        "negative_prompt": payload["negative_prompt"],
+        "width": FRAME_PROTECTION_WIDTH,
+        "height": FRAME_PROTECTION_HEIGHT,
+        "steps": 24,
+        "cfg_scale": 7.0,
+        "sampler_name": "DPM++ 2M Karras",
+    }
+    for _attempt in range(3):
+        canvas_payload["seed"] = random.randint(1, 2**31 - 1)
+        response = session.post(STABLE_DIFFUSION_API_URL, json=canvas_payload, timeout=600)
+        response.raise_for_status()
+        generated = decode_generated(response, "Empty background generation")
+        caption = validate_generated_fill(generated)
+        matches = sorted(term for term in forbidden if term in caption)
+        if not matches:
+            if celestial_object:
+                # Use the independently generated plate across the whole area
+                # behind the moving body. Rectangular inpainting cannot invent
+                # a large hidden sky and horizon without exposing its bounds.
+                # Preserve only the far-right landmark/frame and near-bottom
+                # foreground through long directional transitions.
+                frame_height, frame_width = image.shape[:2]
+                yy, xx = np.mgrid[0:frame_height, 0:frame_width]
+
+                def smoothstep(values):
+                    values = np.clip(values, 0.0, 1.0)
+                    return values * values * (3.0 - (2.0 * values))
+
+                preserve_right = smoothstep(
+                    (xx - (frame_width * 0.68)) / max(1.0, frame_width * 0.20)
+                )
+                preserve_bottom = smoothstep(
+                    (yy - (frame_height * 0.70)) / max(1.0, frame_height * 0.30)
+                )
+                preserve_source = np.maximum(preserve_right, preserve_bottom)[:, :, None]
+                return np.clip(
+                    (generated.astype(np.float32) * (1.0 - preserve_source))
+                    + (image.astype(np.float32) * preserve_source),
+                    0,
+                    255,
+                ).astype(np.uint8)
+            return np.clip(
+                (generated.astype(np.float32) * alpha)
+                + (image.astype(np.float32) * (1.0 - alpha)),
+                0,
+                255,
+            ).astype(np.uint8)
+        rejected_captions.append(caption[:240])
+    raise MotionProviderError(
+        "Background plate rejected because the removed object remained or was regenerated: "
+        + "; ".join(rejected_captions)
+    )
+
+
+def _deterministic_background_plate(image, object_mask):
+    """Remove a large foreground object without allowing a model to invent a replacement."""
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except ImportError as exc:
+        raise MotionProviderError("Deterministic background reconstruction requires OpenCV") from exc
+
+    expanded_mask = cv2.dilate(object_mask, np.ones((11, 11), dtype=np.uint8), iterations=2)
+    x, y, box_width, box_height = cv2.boundingRect(expanded_mask)
+    box_area = max(1, box_width * box_height)
+    rectangularity = float(np.count_nonzero(expanded_mask)) / float(box_area)
+    if rectangularity >= 0.75 and x > 0 and x + box_width < image.shape[1]:
+        band = min(12, x, image.shape[1] - (x + box_width))
+        left = np.mean(image[y:y + box_height, x - band:x], axis=1)
+        right = np.mean(image[y:y + box_height, x + box_width:x + box_width + band], axis=1)
+        left = cv2.GaussianBlur(
+            left[:, None, :].astype(np.float32), (1, 0), sigmaX=0.0, sigmaY=5.0
+        )[:, 0, :]
+        right = cv2.GaussianBlur(
+            right[:, None, :].astype(np.float32), (1, 0), sigmaX=0.0, sigmaY=5.0
+        )[:, 0, :]
+        # Continue each background row through the removed object instead of
+        # repeating one edge across its full box.  The old constant fill left a
+        # visible rectangular band whenever the moving object uncovered it.
+        horizontal_mix = np.linspace(0.0, 1.0, box_width, dtype=np.float32)[None, :, None]
+        fill = (
+            (left[:, None, :] * (1.0 - horizontal_mix))
+            + (right[:, None, :] * horizontal_mix)
+        )
+        fill = cv2.GaussianBlur(fill, (0, 0), sigmaX=7.0, sigmaY=2.5)
+        reconstructed = image.copy()
+        reconstructed[y:y + box_height, x:x + box_width] = np.clip(fill, 0, 255).astype(np.uint8)
+    else:
+        full_resolution = cv2.inpaint(image, expanded_mask, 15, cv2.INPAINT_TELEA)
+        half_size = (max(2, image.shape[1] // 2), max(2, image.shape[0] // 2))
+        half_image = cv2.resize(image, half_size, interpolation=cv2.INTER_AREA)
+        half_mask = cv2.resize(expanded_mask, half_size, interpolation=cv2.INTER_NEAREST)
+        broad_fill = cv2.inpaint(half_image, half_mask, 11, cv2.INPAINT_NS)
+        broad_fill = cv2.resize(
+            broad_fill,
+            (image.shape[1], image.shape[0]),
+            interpolation=cv2.INTER_CUBIC,
+        )
+        reconstructed = cv2.addWeighted(full_resolution, 0.65, broad_fill, 0.35, 0.0)
+    blend_mask = cv2.GaussianBlur(expanded_mask, (0, 0), sigmaX=10.0, sigmaY=10.0)
+    alpha = (blend_mask.astype(np.float32) / 255.0)[:, :, None]
+    return np.clip(
+        (reconstructed.astype(np.float32) * alpha)
+        + (image.astype(np.float32) * (1.0 - alpha)),
+        0,
+        255,
+    ).astype(np.uint8)
+
+
+def _celestial_circle_mask(image, bounds, *, cv2, np):
+    """Find one round celestial body without absorbing its rectangular scenery."""
+    x, y, box_width, box_height = bounds
+    crop = image[y:y + box_height, x:x + box_width]
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (9, 9), 2.0)
+    minimum_dimension = min(box_width, box_height)
+    circles = cv2.HoughCircles(
+        gray,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=max(24, minimum_dimension // 3),
+        param1=100,
+        param2=34,
+        minRadius=max(12, round(minimum_dimension * 0.12)),
+        maxRadius=max(18, round(minimum_dimension * 0.48)),
+    )
+    if circles is None or not len(circles[0]):
+        return None
+    center_x = box_width / 2.0
+    center_y = box_height / 2.0
+    circle = min(
+        circles[0],
+        key=lambda item: (
+            ((float(item[0]) - center_x) ** 2) + ((float(item[1]) - center_y) ** 2)
+        ) / max(1.0, float(item[2]) ** 2),
+    )
+    circle_x, circle_y, radius = (round(float(value)) for value in circle)
+    radius = max(10, round(radius * 1.06))
+    hard_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+    cv2.circle(hard_mask, (x + circle_x, y + circle_y), radius, 255, thickness=-1)
+    return hard_mask
+
+
+def _generate_object_vector_clip(
+    image_path: Path,
+    motion_plan: dict[str, Any],
+    destination: Path,
+    *,
+    scene_prompt: str = "",
+    negative_prompt: str = "",
+    guidance_mask_destination: Path | None = None,
+    guidance_corridor_destination: Path | None = None,
+    session=requests,
+) -> dict[str, Any]:
+    """Segment existing objects, inpaint their old locations, and tween exact vectors.
+
+    This runs deterministic classical vision on Sextant. It does not invoke a
+    generative model, cannot invent subjects, and keeps every unselected pixel
+    fixed. GrabCut turns the planner's bounding boxes into soft object mattes;
+    a scene fails closed when a box cannot produce a credible isolated object.
+    """
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except ImportError as exc:
+        raise MotionProviderError("Object-vector rendering requires the bundled OpenCV runtime") from exc
+
+    regions = _object_vector_regions(motion_plan)
+    if not regions:
+        raise MotionProviderError("Motion plan has no enabled object-vector regions")
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise MotionProviderError("Unable to read the prepared source image for object-vector motion")
+    height, width = image.shape[:2]
+    if (width, height) != (FRAME_PROTECTION_WIDTH, FRAME_PROTECTION_HEIGHT):
+        raise MotionProviderError(
+            f"Object-vector source must be {FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}"
+        )
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp_root = destination.parent / f".{destination.stem}-object-vector-{uuid.uuid4().hex[:8]}"
+    temp_root.mkdir(parents=True, exist_ok=False)
+    union_mask = np.zeros((height, width), dtype=np.uint8)
+    background_removal_mask = np.zeros((height, width), dtype=np.uint8)
+    sprite_paths: list[Path] = []
+    mask_paths: list[Path] = []
+    corridor_mask_paths: list[Path] = []
+    route_regions: list[dict[str, Any]] = []
+    region_labels: list[str] = []
+    try:
+        for index, region in enumerate(regions, start=1):
+            box = region.get("box") or {}
+            x = max(1, min(width - 3, round(float(box.get("x", 0.1)) * width)))
+            y = max(1, min(height - 3, round(float(box.get("y", 0.1)) * height)))
+            box_width = max(12, min(width - x - 1, round(float(box.get("width", 0.35)) * width)))
+            box_height = max(12, min(height - y - 1, round(float(box.get("height", 0.35)) * height)))
+            if box_width < 12 or box_height < 12:
+                raise MotionProviderError(f"Object-vector region {region.get('label') or index} is too small")
+
+            label_text = str(region.get("label") or "").lower()
+            celestial_region = any(
+                token in label_text for token in ("planet", "moon", "sun", "orb", "sphere")
+            )
+            hard_mask = (
+                _celestial_circle_mask(
+                    image,
+                    (x, y, box_width, box_height),
+                    cv2=cv2,
+                    np=np,
+                )
+                if celestial_region
+                else None
+            )
+            if hard_mask is None:
+                grab_mask = np.zeros((height, width), dtype=np.uint8)
+                background_model = np.zeros((1, 65), np.float64)
+                foreground_model = np.zeros((1, 65), np.float64)
+                try:
+                    cv2.grabCut(
+                        image,
+                        grab_mask,
+                        (x, y, box_width, box_height),
+                        background_model,
+                        foreground_model,
+                        5,
+                        cv2.GC_INIT_WITH_RECT,
+                    )
+                except cv2.error as exc:
+                    raise MotionProviderError(
+                        f"Unable to segment object-vector region {region.get('label') or index}"
+                    ) from exc
+                binary = np.where(
+                    (grab_mask == cv2.GC_FGD) | (grab_mask == cv2.GC_PR_FGD), 255, 0
+                ).astype(np.uint8)
+                bounded = np.zeros_like(binary)
+                bounded[y:y + box_height, x:x + box_width] = binary[y:y + box_height, x:x + box_width]
+                component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+                    (bounded > 0).astype(np.uint8), 8
+                )
+                if component_count <= 1:
+                    raise MotionProviderError(
+                        f"Object-vector region {region.get('label') or index} did not isolate an existing object"
+                    )
+                largest_label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+                hard_mask = np.where(labels == largest_label, 255, 0).astype(np.uint8)
+            area_ratio = float(np.count_nonzero(hard_mask)) / float(box_width * box_height)
+            if area_ratio < 0.025 or area_ratio > 0.92:
+                raise MotionProviderError(
+                    f"Object-vector region {region.get('label') or index} produced an unsafe matte "
+                    f"({area_ratio:.3f} of its box)"
+                )
+            hard_mask = cv2.morphologyEx(
+                hard_mask, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8), iterations=2
+            )
+            soft_mask = cv2.GaussianBlur(hard_mask, (0, 0), sigmaX=2.4, sigmaY=2.4)
+            union_mask = cv2.max(union_mask, hard_mask)
+            mask_x, mask_y, mask_width, mask_height = cv2.boundingRect(hard_mask)
+            matte_rectangularity = float(np.count_nonzero(hard_mask)) / float(
+                max(1, mask_width * mask_height)
+            )
+            if celestial_region and matte_rectangularity > 0.9:
+                raise MotionProviderError(
+                    f"Object-vector region {region.get('label') or index} produced a rectangular scenery matte"
+                )
+            region_removal_mask = hard_mask.copy()
+            if celestial_region:
+                horizontal_padding = round(box_width * 0.04)
+                vertical_padding = round(box_height * 0.20)
+                removal_left = max(0, x - horizontal_padding)
+                removal_top = max(0, y - vertical_padding)
+                removal_right = min(width, x + box_width + horizontal_padding)
+                removal_bottom = min(height, y + box_height + vertical_padding)
+                region_removal_mask = np.zeros_like(hard_mask)
+                region_removal_mask[
+                    removal_top:removal_bottom,
+                    removal_left:removal_right,
+                ] = 255
+            background_removal_mask = cv2.max(background_removal_mask, region_removal_mask)
+            sprite = cv2.cvtColor(image, cv2.COLOR_BGR2BGRA)
+            sprite[:, :, 3] = soft_mask
+            sprite_path = temp_root / f"sprite-{index}.png"
+            if not cv2.imwrite(str(sprite_path), sprite):
+                raise MotionProviderError("Unable to save an object-vector sprite")
+            sprite_paths.append(sprite_path)
+            mask_path = temp_root / f"mask-{index}.png"
+            if not cv2.imwrite(str(mask_path), soft_mask):
+                raise MotionProviderError("Unable to save an object-vector guidance matte")
+            mask_paths.append(mask_path)
+            region_labels.append(str(region.get("label") or f"Region {index}"))
+
+            vector = region.get("vector") or {}
+            dx = round(float(vector.get("dx", 0.0)) * width, 3)
+            dy = round(float(vector.get("dy", 0.0)) * height, 3)
+            if abs(dx) < 1.0 and abs(dy) < 1.0:
+                raise MotionProviderError(
+                    f"Object-vector region {region.get('label') or index} has no visible displacement"
+                )
+            edge_guard = 4
+            clipped_against_motion = (
+                (dy > 1.0 and np.any(hard_mask[:edge_guard, :]))
+                or (dy < -1.0 and np.any(hard_mask[-edge_guard:, :]))
+                or (dx > 1.0 and np.any(hard_mask[:, :edge_guard]))
+                or (dx < -1.0 and np.any(hard_mask[:, -edge_guard:]))
+            )
+            if clipped_against_motion:
+                raise MotionProviderError(
+                    f"Object-vector region {region.get('label') or index} is clipped by the source frame; "
+                    "regenerate a motion-safe still with the complete subject inside the canvas"
+                )
+            swept_corridor = np.zeros_like(hard_mask)
+            for step in range(17):
+                progress = step / 16.0
+                eased = (3.0 * progress * progress) - (2.0 * progress * progress * progress)
+                transform = np.float32([[1.0, 0.0, dx * eased], [0.0, 1.0, dy * eased]])
+                translated = cv2.warpAffine(
+                    region_removal_mask,
+                    transform,
+                    (width, height),
+                    flags=cv2.INTER_NEAREST,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=0,
+                )
+                swept_corridor = cv2.max(swept_corridor, translated)
+            corridor_kernel_size = (OBJECT_MOTION_CORRIDOR_EXPANSION * 2) + 1
+            swept_corridor = cv2.dilate(
+                swept_corridor,
+                cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE,
+                    (corridor_kernel_size, corridor_kernel_size),
+                ),
+                iterations=1,
+            )
+            swept_corridor = cv2.GaussianBlur(
+                swept_corridor,
+                (0, 0),
+                sigmaX=OBJECT_MOTION_CORRIDOR_FEATHER,
+                sigmaY=OBJECT_MOTION_CORRIDOR_FEATHER,
+            )
+            corridor_mask_path = temp_root / f"corridor-mask-{index}.png"
+            if not cv2.imwrite(str(corridor_mask_path), swept_corridor):
+                raise MotionProviderError("Unable to save an object-vector generative corridor")
+            corridor_mask_paths.append(corridor_mask_path)
+            route_regions.append({
+                "id": str(region.get("id") or f"region-{index}"),
+                "label": str(region.get("label") or f"Region {index}"),
+                "dxPixels": dx,
+                "dyPixels": dy,
+                "easing": str(region.get("easing") or "ease-in-out"),
+                "matteAreaRatio": round(area_ratio, 4),
+            })
+
+        occlusion_ratio = float(np.count_nonzero(union_mask)) / float(width * height)
+        celestial_object = any(
+            token in " ".join(region_labels).lower()
+            for token in ("planet", "moon", "sun", "orb", "sphere")
+        )
+        if occlusion_ratio >= 0.10 and celestial_object:
+            background = _generate_background_plate(
+                image,
+                background_removal_mask,
+                labels=region_labels,
+                scene_prompt=scene_prompt,
+                negative_prompt=negative_prompt,
+                session=session,
+            )
+            background_mode = "validated-full-canvas-celestial-plate"
+        elif occlusion_ratio >= 0.10:
+            background = _generate_background_plate(
+                image,
+                background_removal_mask,
+                labels=region_labels,
+                scene_prompt=scene_prompt,
+                negative_prompt=negative_prompt,
+                session=session,
+            )
+            background_mode = "protected-local-generative-plate"
+        else:
+            inpaint_mask = cv2.dilate(
+                background_removal_mask,
+                np.ones((7, 7), dtype=np.uint8),
+                iterations=2,
+            )
+            background = cv2.inpaint(image, inpaint_mask, 5, cv2.INPAINT_TELEA)
+            background_mode = "deterministic-small-object-inpaint"
+        background_path = temp_root / "background.png"
+        if not cv2.imwrite(str(background_path), background):
+            raise MotionProviderError("Unable to save the object-vector background")
+
+        duration = 5.0625
+        command = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+        for source in [background_path, *sprite_paths]:
+            command.extend(["-framerate", "16", "-loop", "1", "-i", str(source)])
+        graph = ["[0:v]format=rgba[base0]"]
+        current = "base0"
+        for index, route in enumerate(route_regions, start=1):
+            easing = _vector_easing_expression(str(route["easing"]), duration)
+            output = f"base{index}"
+            graph.append(
+                f"[{index}:v]format=rgba[sprite{index}];"
+                f"[{current}][sprite{index}]overlay="
+                f"x='{route['dxPixels']}*{easing}':y='{route['dyPixels']}*{easing}':"
+                f"shortest=1:format=auto[{output}]"
+            )
+            current = output
+        graph.append(f"[{current}]format=yuv420p[v]")
+        command.extend([
+            "-filter_complex", ";".join(graph), "-map", "[v]", "-t", str(duration), "-r", "16",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart", str(destination),
+        ])
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            detail = getattr(exc, "stderr", "") or str(exc)
+            raise MotionProviderError(f"Unable to render object-vector motion: {detail[-600:]}") from exc
+        if not destination.exists() or destination.stat().st_size == 0:
+            raise MotionProviderError("Object-vector rendering produced no video")
+        def render_moving_matte(source: Path, target: Path, label: str) -> None:
+            route = route_regions[0]
+            easing = _vector_easing_expression(str(route["easing"]), duration)
+            mask_command = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i",
+                f"color=black:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d={duration}",
+                "-framerate", "16", "-loop", "1", "-i", str(source),
+                "-filter_complex",
+                f"[0:v]format=gray[base];[1:v]format=gray[matte];"
+                f"[base][matte]overlay=x='{route['dxPixels']}*{easing}':"
+                f"y='{route['dyPixels']}*{easing}':shortest=1,format=yuv420p[v]",
+                "-map", "[v]", "-t", str(duration), "-r", "16", "-c:v", "libx264",
+                "-preset", "fast", "-crf", "12", "-pix_fmt", "yuv420p",
+                str(target),
+            ]
+            try:
+                subprocess.run(mask_command, check=True, capture_output=True, text=True)
+            except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+                detail = getattr(exc, "stderr", "") or str(exc)
+                raise MotionProviderError(
+                    f"Unable to render object-vector {label}: {detail[-600:]}"
+                ) from exc
+            _verify_temporal_control_track(target, label)
+
+        if guidance_mask_destination and len(mask_paths) == 1:
+            render_moving_matte(mask_paths[0], guidance_mask_destination, "object matte")
+        if guidance_corridor_destination and len(corridor_mask_paths) == 1:
+            corridor_command = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-framerate", "16", "-loop", "1", "-i", str(corridor_mask_paths[0]),
+                "-vf", "format=gray", "-t", str(duration), "-r", "16", "-c:v", "libx264",
+                "-preset", "fast", "-crf", "12", "-pix_fmt", "yuv420p",
+                str(guidance_corridor_destination),
+            ]
+            try:
+                subprocess.run(corridor_command, check=True, capture_output=True, text=True)
+            except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+                detail = getattr(exc, "stderr", "") or str(exc)
+                raise MotionProviderError(
+                    f"Unable to render object-vector generative motion corridor: {detail[-600:]}"
+                ) from exc
+        return {
+            "regions": route_regions,
+            "backgroundInpainted": True,
+            "backgroundMode": background_mode,
+            "occlusionRatio": round(occlusion_ratio, 4),
+            "generativeCorridorExpansionPixels": OBJECT_MOTION_CORRIDOR_EXPANSION,
+            "generativeCorridorFeatherPixels": OBJECT_MOTION_CORRIDOR_FEATHER,
+        }
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def _composite_generated_object_motion(
+    vector_path: Path,
+    generated_path: Path,
+    moving_mask_path: Path,
+    destination: Path,
+) -> None:
+    """Apply generated texture only inside the tracked moving-object matte.
+
+    The deterministic vector render owns the subject count, trajectory, and
+    background.  The model contributes evolving surface detail inside the one
+    moving matte, so a model-retained copy at the original location cannot leak
+    into the accepted clip.
+    """
+    filter_graph = (
+        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[vector];"
+        f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gbrp[generated];"
+        f"[2:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},format=gray[mask];"
+        "[vector][generated][mask]maskedmerge,format=yuv420p[v]"
+    )
+    command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(vector_path), "-i", str(generated_path), "-i", str(moving_mask_path),
+        "-filter_complex", filter_graph, "-map", "[v]", "-t", "5.0625", "-r", "16",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart", str(destination),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        raise MotionProviderError(f"Unable to composite generated object motion: {detail[-600:]}") from exc
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise MotionProviderError("Generated object-motion composite produced no video")
+
+
 def _generate_motion_clip(
     image_path: Path,
     destination: Path,
@@ -871,11 +1832,68 @@ def _generate_motion_clip(
     motion_plan: dict[str, Any] | None = None,
     session=requests,
 ) -> dict[str, Any]:
-    model_health = session.get(f"{COMFYUI_MODEL_API_URL.rstrip('/')}/system_stats", timeout=10)
-    model_health.raise_for_status()
     with tempfile.TemporaryDirectory(prefix="mediastudio-motion-") as temp_dir:
         prepared_source = Path(temp_dir) / f"prepared-{image_path.stem}.png"
         _prepare_source_image(image_path, prepared_source)
+        object_regions = _object_vector_regions(motion_plan)
+        generative_regions = _generative_regions(motion_plan)
+        vector_path: Path | None = None
+        vector_mask_path: Path | None = None
+        vector_corridor_path: Path | None = None
+        vector_route: dict[str, Any] | None = None
+
+        def validate_object_vector() -> dict[str, Any]:
+            quality: dict[str, Any] = {
+                "status": "accepted",
+                "cameraBehavior": "locked",
+                "sourceSizing": "fit-and-pad-no-crop",
+                "modelProvider": OBJECT_VECTOR_PROVIDER,
+                "providerPolicy": "sextant-deterministic-local",
+                "controlMode": "segmented-object-vector-tween",
+                "modelDenoise": 0.0,
+                "lockedBackground": True,
+                "semanticIdentityPreserved": True,
+                "fullFrameGeneration": False,
+                "motionRegionCount": len(object_regions),
+                "motionPlanSummary": str((motion_plan or {}).get("summary") or "")[:320],
+                "route": vector_route or {},
+                "stabilization": {
+                    "sampleCount": 0,
+                    "p95TranslationPixels": 0.0,
+                    "maxTranslationPixels": 0.0,
+                    "largeCorrectionRatio": 0.0,
+                },
+                "lockedEdgesProtected": True,
+            }
+            quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
+            quality["sequenceIntegrity"] = _measure_sequence_integrity(destination)
+            _verify_video(destination)
+            return quality
+
+        if object_regions:
+            vector_path = Path(temp_dir) / f"vector-{image_path.stem}.mp4"
+            vector_mask_path = (
+                Path(temp_dir) / f"vector-mask-{image_path.stem}.mp4"
+                if len(object_regions) == 1 else None
+            )
+            vector_corridor_path = (
+                Path(temp_dir) / f"vector-corridor-{image_path.stem}.mp4"
+                if len(object_regions) == 1 else None
+            )
+            vector_route = _generate_object_vector_clip(
+                prepared_source,
+                motion_plan or {},
+                vector_path,
+                scene_prompt=prompt,
+                negative_prompt=negative_prompt,
+                guidance_mask_destination=vector_mask_path,
+                guidance_corridor_destination=vector_corridor_path,
+                session=session,
+            )
+            _release_stable_diffusion_gpu_memory(session)
+
+        model_health = session.get(f"{COMFYUI_MODEL_API_URL.rstrip('/')}/system_stats", timeout=10)
+        model_health.raise_for_status()
         uploaded_name = _upload_image(session, prepared_source)
         prefix = f"mediastudio/{uuid.uuid4().hex}"
         model_denoise = LOCKED_CAMERA_DENOISE if camera_behavior == "locked" else 1.0
@@ -908,58 +1926,229 @@ def _generate_motion_clip(
                 quality["decorativeFrameProtected"] = True
             quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
             quality["sequenceIntegrity"] = _measure_sequence_integrity(destination)
-            if provider.startswith("wan2.1-vace-region-control"):
+            if provider.startswith("wan2.1-vace-"):
                 _verify_visible_generative_motion(quality["sequenceIntegrity"])
             _verify_video(destination)
             return quality
-        if motion_plan and any(region.get("enabled") is not False for region in motion_plan.get("regions") or []):
+        def add_fallback(
+            quality: dict[str, Any],
+            provider: str | None = None,
+            reason: str | None = None,
+        ) -> dict[str, Any]:
+            providers: list[str] = []
+            reasons: list[str] = []
+            if provider:
+                providers.append(provider)
+            if reason:
+                reasons.append(reason)
+            if providers:
+                quality["fallbackFrom"] = ",".join(providers)
+                quality["fallbackReason"] = "; ".join(reasons)[:500]
+            return quality
+
+        allow_full_frame = not motion_plan or bool((motion_plan or {}).get("allowFullFrameGeneration"))
+        guided_regions = [
+            region
+            for region in (motion_plan or {}).get("regions") or []
+            if region.get("enabled") is not False
+        ] if vector_path else generative_regions
+        keyframe_error: MotionProviderError | None = None
+        if vector_path and not generative_regions:
+            end_keyframe = Path(temp_dir) / f"end-{image_path.stem}.png"
+            generated_keyframe_video = Path(temp_dir) / f"generated-{image_path.stem}.mp4"
+            try:
+                _extract_motion_keyframe(vector_path, end_keyframe)
+                end_image_name = _upload_image(session, end_keyframe)
+                actions = " ".join(
+                    str(region.get("action") or "").strip()
+                    for region in object_regions
+                    if str(region.get("action") or "").strip()
+                )
+                keyframe_prompt = (
+                    f"{prompt} The supplied first and final frames are mandatory trajectory keyframes. "
+                    "Generate one continuous physical event between them. Keep exactly one subject, but let "
+                    "its perspective, silhouette, surface, atmosphere, illumination, and shadows evolve "
+                    "naturally as its center follows the required trajectory. Nearby dust, haze, light, and "
+                    "terrain must react to the movement. This is dimensional scene motion, never a flat "
+                    f"sprite or translated crop. Keep the camera and distant scenery fixed. {actions}"
+                )[:2800]
+                keyframe_negative_prompt = (
+                    f"{negative_prompt}, cutout, collage, sprite, duplicate subject, trailing copy, "
+                    "rigid pasted silhouette, moving crop, rectangular patch, matte seam, dissolve, "
+                    "transparency, ghost image, frozen lighting, frozen atmosphere, "
+                    "camera movement, zoom, shake, black splotch, color corruption"
+                )[:2200]
+                keyframe_workflow = _ltx_keyframe_workflow(
+                    uploaded_name,
+                    end_image_name,
+                    keyframe_prompt,
+                    keyframe_negative_prompt,
+                    f"{prefix}-ltx-keyframe",
+                    effective_seed ^ 0x4C5458,
+                )
+                _queue_and_download_workflow(session, keyframe_workflow, generated_keyframe_video)
+                if not vector_mask_path:
+                    raise MotionProviderError(
+                        "Object-vector keyframe generation requires a tracked moving-object matte"
+                    )
+                _composite_generated_object_motion(
+                    vector_path,
+                    generated_keyframe_video,
+                    vector_mask_path,
+                    destination,
+                )
+                stabilization: dict[str, Any] = {
+                    "sampleCount": 0,
+                    "p95TranslationPixels": 0.0,
+                    "maxTranslationPixels": 0.0,
+                    "largeCorrectionRatio": 0.0,
+                }
+                if camera_behavior == "locked":
+                    stabilization = _stabilize_locked_camera(destination)
+                    _protect_locked_frame_edges(prepared_source, destination)
+                sequence_integrity = _measure_sequence_integrity(
+                    destination,
+                    ignored_tile_boxes=_object_vector_motion_corridors(motion_plan),
+                )
+                _verify_visible_generative_motion(sequence_integrity)
+                quality = {
+                    "status": "accepted",
+                    "cameraBehavior": camera_behavior,
+                    "sourceSizing": "fit-and-pad-no-crop",
+                    "modelProvider": f"{OBJECT_VECTOR_PROVIDER}+ltxv-keyframe",
+                    "modelCheckpoint": LTX_KEYFRAME_CHECKPOINT,
+                    "providerPolicy": "phronesis-local-model-via-sextant-orchestration",
+                    "controlMode": "tracked-object-generative-texture",
+                    "modelDenoise": 1.0,
+                    "lockedBackground": bool((motion_plan or {}).get("lockedBackground", True)),
+                    "semanticIdentityPreserved": True,
+                    "fullFrameGeneration": False,
+                    "motionRegionCount": len(object_regions),
+                    "motionPlanSummary": str((motion_plan or {}).get("summary") or "")[:320],
+                    "objectVectorRoute": vector_route,
+                    "semanticMotionGate": "single-tracked-object-matte-and-fixed-background",
+                    "stabilization": stabilization,
+                    "lockedEdgesProtected": camera_behavior == "locked",
+                    "sourceFrameSsim": _measure_source_frame_fidelity(prepared_source, destination),
+                    "endFrameSsim": _measure_end_frame_fidelity(end_keyframe, destination),
+                    "sequenceIntegrity": sequence_integrity,
+                }
+                _verify_video(destination)
+                return quality
+            except Exception as exc:  # noqa: BLE001 - continue through the controlled fallback ladder
+                keyframe_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
+        if guided_regions:
+            regional_plan = {**(motion_plan or {}), "regions": guided_regions}
             control_path = Path(temp_dir) / f"control-{image_path.stem}.mp4"
             mask_path = Path(temp_dir) / f"mask-{image_path.stem}.mp4"
             try:
-                region_count = _generate_region_control_assets(prepared_source, motion_plan, control_path, mask_path)
+                region_count = _generate_region_control_assets(
+                    prepared_source,
+                    regional_plan,
+                    control_path,
+                    mask_path,
+                    control_source=vector_path,
+                    mask_source=(vector_mask_path if vector_path and not generative_regions else None),
+                )
                 control_name = _upload_asset(session, control_path, "video/mp4")
                 mask_name = _upload_asset(session, mask_path, "video/mp4")
+                region_prompt = prompt
+                region_negative_prompt = negative_prompt
+                if vector_path:
+                    actions = " ".join(
+                        str(region.get("action") or "").strip()
+                        for region in object_regions
+                        if str(region.get("action") or "").strip()
+                    )
+                    region_prompt = (
+                        f"{prompt} Motion trajectory control: follow the supplied moving mask exactly. "
+                        f"Resynthesize the moving subject as coherent natural footage at every frame; "
+                        f"the tween supplies position only and must not look like a pasted or cropped layer. {actions}"
+                    )[:2800]
+                    region_negative_prompt = (
+                        f"{negative_prompt}, pasted cutout, collage edge, moving crop, rectangular patch, "
+                        "sprite, paper cutout, doubled subject, duplicate object, trailing copy, matte seam"
+                    )[:2200]
                 region_workflow = _vace_region_workflow(
-                    uploaded_name, control_name, mask_name, prompt, negative_prompt,
+                    uploaded_name, control_name, mask_name, region_prompt, region_negative_prompt,
                     f"{prefix}-region-control", effective_seed,
                 )
                 _queue_and_download_workflow(session, region_workflow, destination)
-                quality = validate_candidate("wan2.1-vace-region-control", 1.0)
+                provider = "wan2.1-vace-tween-control" if vector_path else "wan2.1-vace-region-control"
+                quality = validate_candidate(provider, 1.0)
                 quality["motionRegionCount"] = region_count
                 quality["motionPlanSummary"] = str(motion_plan.get("summary") or "")[:320]
                 quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
                 quality["controlMode"] = "masked-generative-inpaint"
                 quality["semanticMotionGate"] = "static-control-and-visible-generation"
-                return quality
+                if vector_path:
+                    quality["modelProvider"] = f"{OBJECT_VECTOR_PROVIDER}+wan2.1-vace-tween-control"
+                    quality["controlMode"] = "tween-guided-generative-video"
+                    quality["semanticMotionGate"] = "dynamic-vector-mask-and-visible-generation"
+                    quality["objectVectorRoute"] = vector_route
+                    quality["fullFrameGeneration"] = False
+                return add_fallback(quality)
             except Exception as exc:  # noqa: BLE001 - provider failures must preserve the existing fallback chain
                 region_error = exc if isinstance(exc, MotionProviderError) else MotionProviderError(str(exc))
                 try:
                     restrained_workflow = _vace_region_workflow(
-                        uploaded_name, control_name, mask_name, prompt, negative_prompt,
+                        uploaded_name, control_name, mask_name, region_prompt, region_negative_prompt,
                         f"{prefix}-region-control-restrained", effective_seed ^ 0x13A7,
                         strength=0.72,
                     )
                     _queue_and_download_workflow(session, restrained_workflow, destination)
-                    quality = validate_candidate("wan2.1-vace-region-control-restrained", 1.0)
+                    provider = (
+                        "wan2.1-vace-tween-control-restrained"
+                        if vector_path else "wan2.1-vace-region-control-restrained"
+                    )
+                    quality = validate_candidate(provider, 1.0)
                     quality["motionRegionCount"] = region_count
                     quality["motionPlanSummary"] = str(motion_plan.get("summary") or "")[:320]
                     quality["lockedBackground"] = bool(motion_plan.get("lockedBackground", True))
                     quality["controlMode"] = "masked-generative-inpaint"
                     quality["semanticMotionGate"] = "static-control-and-visible-generation"
-                    quality["fallbackFrom"] = "wan2.1-vace-region-control"
-                    quality["fallbackReason"] = str(region_error)[:500]
-                    return quality
+                    if vector_path:
+                        quality["modelProvider"] = f"{OBJECT_VECTOR_PROVIDER}+wan2.1-vace-tween-control-restrained"
+                        quality["controlMode"] = "tween-guided-generative-video"
+                        quality["semanticMotionGate"] = "dynamic-vector-mask-and-visible-generation"
+                        quality["objectVectorRoute"] = vector_route
+                        quality["fullFrameGeneration"] = False
+                    return add_fallback(
+                        quality,
+                        "wan2.1-vace-region-control",
+                        str(region_error),
+                    )
                 except Exception as restrained_error:  # noqa: BLE001 - retain the existing model fallback ladder
                     region_error = MotionProviderError(
                         f"VACE: {region_error}; restrained VACE: {restrained_error}"
                     )
+        if region_error and vector_path:
+            shutil.copy2(vector_path, destination)
+            quality = validate_object_vector()
+            providers = ["wan2.1-vace-tween-control"]
+            reasons = [str(region_error)]
+            if keyframe_error:
+                providers.insert(0, "ltxv-2b-keyframe")
+                reasons.insert(0, f"LTX keyframe: {keyframe_error}")
+            quality["fallbackFrom"] = ",".join(providers)
+            quality["fallbackReason"] = "; ".join(reasons)[:500]
+            quality["suppressedGenerativeRegionCount"] = len(guided_regions)
+            return quality
+        if region_error and not allow_full_frame:
+            raise MotionProviderError(
+                f"Regional animation rejected: {region_error}. Full-frame generation is disabled; "
+                "the approved still was preserved."
+            ) from region_error
         try:
             _queue_and_download_workflow(session, workflow, destination)
             quality = validate_candidate("wan2.2-ti2v-5b", model_denoise)
             if region_error:
-                quality["fallbackFrom"] = "wan2.1-vace-region-control"
-                quality["fallbackReason"] = str(region_error)[:500]
-            return quality
+                return add_fallback(
+                    quality,
+                    "wan2.1-vace-region-control",
+                    str(region_error),
+                )
+            return add_fallback(quality)
         except MotionProviderError as wan_error:
             if camera_behavior != "locked":
                 raise
@@ -976,17 +2165,12 @@ def _generate_motion_clip(
                     f"Wan animation rejected: {wan_error}; SVD fallback rejected: {fallback_error}; "
                     "procedural motion is disabled because it is not generative scene animation"
                 ) from fallback_error
-                providers = "wan2.2-ti2v-5b,stable-video-diffusion"
-                reasons = f"Wan: {wan_error}; SVD: {fallback_error}"
-                if region_error:
-                    providers = f"wan2.1-vace-region-control,{providers}"
-                    reasons = f"Region control: {region_error}; {reasons}"
-                quality["fallbackFrom"] = providers
-                quality["fallbackReason"] = reasons[:500]
-                return quality
-            quality["fallbackFrom"] = "wan2.2-ti2v-5b" if not region_error else "wan2.1-vace-region-control,wan2.2-ti2v-5b"
-            quality["fallbackReason"] = (str(wan_error) if not region_error else f"Region control: {region_error}; Wan: {wan_error}")[:500]
-            return quality
+            providers = "wan2.2-ti2v-5b"
+            reasons = f"Wan: {wan_error}"
+            if region_error:
+                providers = f"wan2.1-vace-region-control,{providers}"
+                reasons = f"Region control: {region_error}; {reasons}"
+            return add_fallback(quality, providers, reasons)
 
 
 def generate_motion_clip(
