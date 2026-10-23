@@ -60,11 +60,12 @@ const HYPERFRAMES_COMPOSITIONS = {
 function hyperframesEditUrl(compositionId, variables = {}) {
   const composition = HYPERFRAMES_COMPOSITIONS[compositionId];
   if (!composition) return HYPERFRAMES_EDITOR;
-  const variableParams = Object.entries(variables)
+  const variableQuery = new URLSearchParams(Object.entries(variables)
     .filter(([, value]) => typeof value === 'string' && value.trim())
-    .map(([key, value]) => `&hf_${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join('');
-  return `${HYPERFRAMES_EDITOR}&selFile=${encodeURIComponent(composition.file)}&selId=${encodeURIComponent(composition.elementId)}&selSelector=${encodeURIComponent(`#${composition.elementId}`)}${variableParams}`;
+    .map(([key, value]) => [`hf_${key}`, value]));
+  const [editorOrigin, editorRoute] = HYPERFRAMES_EDITOR.split('#');
+  const editorUrl = `${editorOrigin}${variableQuery.size ? `?${variableQuery}` : ''}#${editorRoute}`;
+  return `${editorUrl}&selFile=${encodeURIComponent(composition.file)}&selId=${encodeURIComponent(composition.elementId)}&selSelector=${encodeURIComponent(`#${composition.elementId}`)}`;
 }
 
 function hyperframesBinding(leadCard, sceneTransition) {
