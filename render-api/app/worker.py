@@ -7,7 +7,7 @@ import traceback
 import uuid
 from threading import Event, Thread
 from sqlalchemy import select
-from app.db import SessionLocal
+from app.db import SessionLocal, init_db
 from app.models import Artifact, Job
 from app.renderer import render_project
 from app.bible_workflow import (
@@ -116,6 +116,7 @@ def _heartbeat(job_id: str, worker_id: str, stop_event: Event) -> None:
 
 
 def loop(stop_event: Event | None = None) -> None:
+    init_db()
     worker_id = f"worker-{uuid.uuid4().hex}"
     with SessionLocal() as session:
         recover_unleased_jobs_on_startup(session, worker_id)
