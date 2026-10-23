@@ -41,6 +41,9 @@ VIBEVOICE_DEFAULT_SPEAKER = os.getenv("VIBEVOICE_DEFAULT_SPEAKER", "Carter")
 VIBEVOICE_DEFAULT_CFG_SCALE = float(os.getenv("VIBEVOICE_DEFAULT_CFG_SCALE", "1.5"))
 VOICE_GATEWAY_URL = os.getenv("VOICE_GATEWAY_URL", "http://100.100.97.30:8133")
 VOICE_GATEWAY_TIMEOUT_SECONDS = float(os.getenv("VOICE_GATEWAY_TIMEOUT_SECONDS", "300"))
+VOICE_GATEWAY_REQUEST_TIMEOUT_SECONDS = float(
+    os.getenv("VOICE_GATEWAY_REQUEST_TIMEOUT_SECONDS", "90")
+)
 HYPERFRAMES_PROJECT_DIR = Path(os.getenv("HYPERFRAMES_PROJECT_DIR", "/srv/hyperframes"))
 HYPERFRAMES_COMPOSITIONS = {
     "lecrown-lead-card": "compositions/lecrown-lead-card.html",
@@ -1194,14 +1197,24 @@ def _synthesize_voice_gateway(
     }
     create_url = f"{base_url}/v1/tts/jobs"
     _log(log, f"Fortress Voice Gateway POST {create_url} voice={payload['speaker_name']!r}")
-    try:
-        response = requests.post(create_url, json=payload, timeout=30)
-        response.raise_for_status()
-        job = response.json()
-    except requests.RequestException as exc:
-        raise TTSConfigurationError(f"Fortress Voice Gateway request failed: {exc}") from exc
-    except ValueError as exc:
-        raise TTSConfigurationError("Fortress Voice Gateway returned invalid JSON") from exc
+    for attempt in range(2):
+        try:
+            response = requests.post(
+                create_url,
+                json=payload,
+                timeout=VOICE_GATEWAY_REQUEST_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            job = response.json()
+            break
+        except requests.RequestException as exc:
+            if attempt == 0:
+                _log(log, "Fortress Voice Gateway was unavailable; retrying the selected voice once")
+                time.sleep(2)
+                continue
+            raise TTSConfigurationError(f"Fortress Voice Gateway request failed: {exc}") from exc
+        except ValueError as exc:
+            raise TTSConfigurationError("Fortress Voice Gateway returned invalid JSON") from exc
 
     job_id = str(job.get("job_id") or job.get("jobId") or "").strip()
     status = str(job.get("status") or "").lower()
@@ -1463,6 +1476,10 @@ def render_project(
                             log=log,
                         )
                 except TTSConfigurationError as exc:
+                    if tts_api in {"voice-gateway", "vibevoice-proxy", "azure-proxy"}:
+                        raise RuntimeError(
+                            f"{tts_api} failed for scene {idx}; refusing to mix a fallback voice into this render: {exc}"
+                        ) from exc
                     _log(
                         log,
                         f"Scene {idx}: {exc}; falling back to local voice",

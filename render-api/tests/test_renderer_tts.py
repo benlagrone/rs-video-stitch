@@ -364,6 +364,16 @@ class RendererTTSTest(TestCase):
             self.assertTrue(result.exists())
             self.assertEqual(len(flite_outputs), 1)
 
+    def test_voice_gateway_failure_does_not_mix_in_local_robot_voice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage_root = _setup_project(Path(tmp), "voice-gateway", voice="Carter")
+            with mock.patch.object(
+                renderer,
+                "_synthesize_voice_gateway",
+                side_effect=renderer.TTSConfigurationError("gateway unavailable"),
+            ), self.assertRaisesRegex(RuntimeError, "refusing to mix a fallback voice"):
+                renderer.render_project("pid123", storage_root, {}, "output.mp4")
+
     def test_intro_title_preserves_up_to_five_explicit_lines(self):
         wrapped = renderer._wrap_intro_title("Line One\nLine Two\nLine Three\nLine Four")
         self.assertEqual(wrapped, "Line One\nLine Two\nLine Three\nLine Four")
