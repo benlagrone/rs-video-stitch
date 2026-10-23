@@ -1861,6 +1861,24 @@ textarea {
   padding: 12px;
 }
 
+.youtube-auth-link {
+  align-items: center;
+  background: color-mix(in srgb, var(--accent) 8%, var(--field));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 10px;
+}
+
+.youtube-auth-link p {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0;
+}
+
 .manual-auth-panel button {
   justify-self: start;
 }

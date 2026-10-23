@@ -1229,7 +1229,7 @@ export function App() {
         for (let attempt = 0; attempt < 60; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 2000));
           const statusResult = await request(`/v1/youtube/auth/status?profile=${encodeURIComponent(youtubeProfile)}`);
-          setYoutubeAuth(statusResult);
+          setYoutubeAuth((current) => ({ ...(current || {}), ...statusResult, authUrl: result.authUrl }));
           if (statusResult.authenticated) {
             const catalog = await request('/v1/youtube/channels?force=true');
             setYoutubeChannels(catalog.channels || []);
@@ -1243,6 +1243,16 @@ export function App() {
       setError(err.message || String(err));
     } finally {
       setIsConnectingYoutube(false);
+    }
+  }
+
+  async function copyYoutubeAuthorizationLink() {
+    if (!youtubeAuth?.authUrl) return;
+    try {
+      await navigator.clipboard.writeText(youtubeAuth.authUrl);
+      setStatus('YouTube authorization link copied for your external browser');
+    } catch (err) {
+      setError(`Could not copy the authorization link: ${err.message || String(err)}`);
     }
   }
 
@@ -2315,6 +2325,12 @@ export function App() {
                     {isUpdatingYoutubeDetails ? 'Updating details' : 'Update YouTube details'}
                   </button>
                 </div>
+                {youtubeAuth?.authUrl && !youtubeAuth?.authenticated && (
+                  <div className="youtube-auth-link">
+                    <p>Use your external browser profile if the in-app Google tab cannot sign in.</p>
+                    <button type="button" onClick={copyYoutubeAuthorizationLink}>Copy authorization link</button>
+                  </div>
+                )}
                 {youtubeAuth?.manualCallback && !youtubeAuth?.authenticated && (
                   <div className="manual-auth-panel">
                     <p>After Google redirects to localhost, copy the full callback URL from that tab and paste it here.</p>
