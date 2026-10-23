@@ -161,6 +161,14 @@ class ScriptEnhanceApiTest(TestCase):
         self.assertIn("Outgoing scene: Front Entry", payload["prompt"])
         self.assertIn("Incoming scene: Living Room", payload["prompt"])
 
+    def test_transition_title_batch_parser_accepts_numbered_ollama_output(self):
+        parsed = api._parse_hyperframes_transition_titles(
+            "1. Grand Arrival\n2. Light-Filled Living\n3. Private Retreat",
+            3,
+        )
+
+        self.assertEqual(parsed, ["Grand Arrival", "Light-Filled Living", "Private Retreat"])
+
     def test_enhance_youtube_description_calls_ollama_with_listing_prompt(self):
         complete_description = " ".join(["Property details and viewing information"] * 20)
         with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(

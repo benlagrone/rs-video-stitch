@@ -1006,10 +1006,21 @@ def _parse_hyperframes_transition_titles(value: str, expected_count: int) -> lis
             titles = payload.get("titles") if isinstance(payload, dict) else None
             if isinstance(titles, list):
                 cleaned = [_parse_hyperframes_transition_title(str(title)) for title in titles]
-                if len(cleaned) == expected_count:
-                    return cleaned
+                if len(cleaned) >= expected_count:
+                    return cleaned[:expected_count]
         except (TypeError, ValueError):
             pass
+    numbered = [
+        re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", line).strip()
+        for line in value.splitlines()
+    ]
+    cleaned = [
+        _parse_hyperframes_transition_title(line)
+        for line in numbered
+        if line and not line.startswith(("{", "}", "[", "]", "\"titles\""))
+    ]
+    if len(cleaned) >= expected_count:
+        return cleaned[:expected_count]
     raise HTTPException(status_code=502, detail="Ollama did not return one usable transition title for every scene pair")
 
 
@@ -1456,14 +1467,21 @@ def _listing_pipeline_project(pid: str) -> dict:
     scenes = _listing_pipeline_scenes(state, pid, assignments)
     transition_titles: dict[str, str] = {}
     if len(scenes) > 1:
-        titles = _parse_hyperframes_transition_titles(
-            _ollama_generate(
-                _hyperframes_transition_titles_prompt(scenes, str(state.get("language") or "en-US")),
-                temperature=0.3,
-                num_predict=256,
-            ),
-            len(scenes) - 1,
-        )
+        transition_prompt = _hyperframes_transition_titles_prompt(scenes, str(state.get("language") or "en-US"))
+        try:
+            titles = _parse_hyperframes_transition_titles(
+                _ollama_generate(transition_prompt, temperature=0.3, num_predict=256),
+                len(scenes) - 1,
+            )
+        except HTTPException:
+            titles = _parse_hyperframes_transition_titles(
+                _ollama_generate(
+                    f"{transition_prompt}\nReturn exactly {len(scenes) - 1} numbered lines, one title per scene pair.",
+                    temperature=0.2,
+                    num_predict=256,
+                ),
+                len(scenes) - 1,
+            )
         transition_titles = {str(index): title for index, title in enumerate(titles)}
 
     hyperframes = {
