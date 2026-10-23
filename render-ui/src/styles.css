@@ -885,6 +885,26 @@ textarea {
   width: 76px;
 }
 
+.hyperframes-transition-title {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 190px minmax(0, 1fr);
+  margin: 10px 0;
+}
+
+.hyperframes-transition-title span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.hyperframes-transition-title input {
+  min-height: 34px;
+  padding: 7px 8px;
+}
+
 .script-section-textarea {
   font-size: 13px;
   line-height: 1.45;
@@ -1831,6 +1851,11 @@ progress {
 
   .scene-card-controls {
     justify-content: stretch;
+  }
+
+  .hyperframes-transition-title {
+    align-items: stretch;
+    grid-template-columns: 1fr;
   }
 
   .scene-image-assignment-row {

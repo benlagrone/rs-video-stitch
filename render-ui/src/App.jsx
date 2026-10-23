@@ -1934,6 +1934,16 @@ export function App() {
                           </span>
                         </span>
                       </div>
+                      {nextScene && (
+                        <label className="hyperframes-transition-title">
+                          <span>HyperFrames transition title</span>
+                          <input
+                            value={transitionVariables.transition_title}
+                            onChange={(event) => setHyperframesTransitionTitles((current) => ({ ...current, [index]: event.target.value }))}
+                            placeholder={`Transition to scene ${index + 2}`}
+                          />
+                        </label>
+                      )}
                       <div className="scene-image-assignment-row">
                         <div className="scene-image-preview-list">
                           {assignedImages.length ? assignedImages.map((imageName) => {
