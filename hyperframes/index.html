@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920,height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  </head>
+  <body>
+    <main id="root" data-composition-id="mediastudio-hyperframes" data-width="1920" data-height="1080" data-duration="2.4" data-fps="30">
+      <div id="lead" class="clip" data-composition-id="lecrown-lead-card" data-composition-src="compositions/lecrown-lead-card.html" data-start="0" data-duration="2.4" data-track-index="0"></div>
+    </main>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines['mediastudio-hyperframes'] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>

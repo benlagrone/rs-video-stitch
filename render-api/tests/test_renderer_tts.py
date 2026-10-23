@@ -63,9 +63,60 @@ class RendererTTSTest(TestCase):
                         "intro": "lecrown-lead-card",
                         "betweenSceneSections": "lecrown-scene-transition",
                     },
+                    "modes": {
+                        "intro": "hyperframes",
+                        "betweenSceneSections": "hyperframes",
+                    },
                     "transitionTitles": {"0": "From Entry to Living"},
                 },
             )
+
+    def test_hyperframes_manifest_preserves_traditional_choices(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = renderer._write_hyperframes_manifest(
+                Path(tmp),
+                "listing.mp4",
+                {
+                    "leadCard": "lecrown-lead-card",
+                    "sceneTransition": "lecrown-scene-transition",
+                    "leadCardMode": "traditional",
+                    "sceneTransitionMode": "traditional",
+                },
+            )
+
+            self.assertEqual(
+                json.loads(manifest.read_text(encoding="utf-8"))["modes"],
+                {"intro": "traditional", "betweenSceneSections": "traditional"},
+            )
+
+    def test_hyperframes_clip_uses_packaged_composition_and_adds_audio(self):
+        commands = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_dir = root / "hyperframes"
+            executable = project_dir / "node_modules/.bin/hyperframes"
+            executable.parent.mkdir(parents=True)
+            executable.write_text("", encoding="utf-8")
+            output = root / "intro.mp4"
+
+            def fake_run(command, log=None):
+                commands.append(command)
+                Path(command[command.index("--output") + 1] if "--output" in command else command[-1]).write_bytes(b"video")
+
+            with mock.patch.object(renderer, "HYPERFRAMES_PROJECT_DIR", project_dir), mock.patch.object(renderer, "run", side_effect=fake_run):
+                renderer._render_hyperframes_clip(
+                    "lecrown-lead-card",
+                    {"title": "A listing"},
+                    output,
+                    30,
+                    "medium",
+                    18,
+                    None,
+                )
+
+            self.assertEqual(commands[0][0], str(executable))
+            self.assertIn("lecrown-lead-card.html", commands[0][commands[0].index("--composition") + 1])
+            self.assertIn("anullsrc=channel_layout=stereo:sample_rate=48000", commands[1])
 
     def test_bundled_font_picker_resolves_exact_selected_face(self):
         renderer._find_font_by_family.cache_clear()

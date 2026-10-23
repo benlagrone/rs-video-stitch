@@ -68,12 +68,14 @@ function hyperframesEditUrl(compositionId, variables = {}) {
   return `${editorUrl}&selFile=${encodeURIComponent(composition.file)}&selId=${encodeURIComponent(composition.elementId)}&selSelector=${encodeURIComponent(`#${composition.elementId}`)}`;
 }
 
-function hyperframesBinding(leadCard, sceneTransition, transitionTitles) {
+function hyperframesBinding(leadCard, sceneTransition, transitionTitles, leadCardMode = 'hyperframes', sceneTransitionMode = 'hyperframes') {
   return {
     projectId: HYPERFRAMES_PROJECT_ID,
     leadCard,
     sceneTransition,
     transitionTitles,
+    leadCardMode,
+    sceneTransitionMode,
   };
 }
 
@@ -363,6 +365,8 @@ export function App() {
   const [hyperframesLeadCard, setHyperframesLeadCard] = useState('lecrown-lead-card');
   const [hyperframesSceneTransition, setHyperframesSceneTransition] = useState('lecrown-scene-transition');
   const [hyperframesTransitionTitles, setHyperframesTransitionTitles] = useState({});
+  const [leadCardMode, setLeadCardMode] = useState('hyperframes');
+  const [sceneTransitionMode, setSceneTransitionMode] = useState('hyperframes');
   const [generatingTransitionIndex, setGeneratingTransitionIndex] = useState(null);
   const [renderOptions, setRenderOptions] = useState({});
   const [voiceProviders, setVoiceProviders] = useState([]);
@@ -430,8 +434,14 @@ export function App() {
   const recognizedTitleCard = useMemo(() => titleCardFromScript(script, scriptTitle || title), [script, scriptTitle, title]);
   const scriptSections = useMemo(() => splitScript(recognizedScriptTitle.narration), [recognizedScriptTitle]);
   const selectedHyperframes = useMemo(
-    () => hyperframesBinding(hyperframesLeadCard, hyperframesSceneTransition, hyperframesTransitionTitles),
-    [hyperframesLeadCard, hyperframesSceneTransition, hyperframesTransitionTitles],
+    () => hyperframesBinding(
+      hyperframesLeadCard,
+      hyperframesSceneTransition,
+      hyperframesTransitionTitles,
+      leadCardMode,
+      sceneTransitionMode,
+    ),
+    [hyperframesLeadCard, hyperframesSceneTransition, hyperframesTransitionTitles, leadCardMode, sceneTransitionMode],
   );
 
   const scenesPayload = useMemo(
@@ -801,6 +811,8 @@ export function App() {
       setHyperframesLeadCard(savedHyperframes.leadCard || 'lecrown-lead-card');
       setHyperframesSceneTransition(savedHyperframes.sceneTransition || 'lecrown-scene-transition');
       setHyperframesTransitionTitles(savedHyperframes.transitionTitles || {});
+      setLeadCardMode(savedHyperframes.leadCardMode || 'hyperframes');
+      setSceneTransitionMode(savedHyperframes.sceneTransitionMode || 'hyperframes');
       setRenderOptions(renderOptionsFromProject(state));
       setYoutubeTitle(state.youtubeTitle || '');
       setYoutubeDescription(state.youtubeDescription || '');
@@ -1400,7 +1412,13 @@ export function App() {
       const nextTransitionTitles = { ...hyperframesTransitionTitles, [index]: transitionTitle };
       setHyperframesTransitionTitles(nextTransitionTitles);
       await saveProject({
-        hyperframes: hyperframesBinding(hyperframesLeadCard, hyperframesSceneTransition, nextTransitionTitles),
+        hyperframes: hyperframesBinding(
+          hyperframesLeadCard,
+          hyperframesSceneTransition,
+          nextTransitionTitles,
+          leadCardMode,
+          sceneTransitionMode,
+        ),
       });
       const url = hyperframesEditUrl(hyperframesSceneTransition, { ...variables, transition_title: transitionTitle });
       if (hyperframesWindow) hyperframesWindow.location.assign(url);
@@ -1813,19 +1831,35 @@ export function App() {
             </button>
           </div>
           <div className="hyperframes-binding">
-            <strong>HyperFrames render map</strong>
-            <label>Opening title card
-              <select value={hyperframesLeadCard} onChange={(event) => setHyperframesLeadCard(event.target.value)}>
-                <option value="lecrown-lead-card">lecrown-lead-card</option>
+            <strong>Opening and transition style</strong>
+            <label>Opening card
+              <select value={leadCardMode} onChange={(event) => setLeadCardMode(event.target.value)}>
+                <option value="traditional">Traditional card</option>
+                <option value="hyperframes">HyperFrames animated card</option>
               </select>
             </label>
-            <label>Between scene sections
-              <select value={hyperframesSceneTransition} onChange={(event) => setHyperframesSceneTransition(event.target.value)}>
-                <option value="lecrown-scene-transition">lecrown-scene-transition</option>
+            <label>Scene transitions
+              <select value={sceneTransitionMode} onChange={(event) => setSceneTransitionMode(event.target.value)}>
+                <option value="traditional">Traditional cut</option>
+                <option value="hyperframes">HyperFrames animated transition</option>
               </select>
             </label>
-            <p>These IDs are saved with the project and recorded in every render manifest.</p>
-            <a className="secondary-action hyperframes-launch" href={hyperframesEditUrl(hyperframesLeadCard)} target="_blank" rel="noreferrer">Edit selected title card</a>
+            {leadCardMode === 'hyperframes' && (
+              <label>HyperFrames opening composition
+                <select value={hyperframesLeadCard} onChange={(event) => setHyperframesLeadCard(event.target.value)}>
+                  <option value="lecrown-lead-card">lecrown-lead-card</option>
+                </select>
+              </label>
+            )}
+            {sceneTransitionMode === 'hyperframes' && (
+              <label>HyperFrames transition composition
+                <select value={hyperframesSceneTransition} onChange={(event) => setHyperframesSceneTransition(event.target.value)}>
+                  <option value="lecrown-scene-transition">lecrown-scene-transition</option>
+                </select>
+              </label>
+            )}
+            <p>The selected style is saved with the project and applied to the rendered video.</p>
+            {leadCardMode === 'hyperframes' && <a className="secondary-action hyperframes-launch" href={hyperframesEditUrl(hyperframesLeadCard)} target="_blank" rel="noreferrer">Edit animated opening</a>}
           </div>
           <label className="check-row"><input type="checkbox" checked={useIntro} onChange={(event) => setUseIntro(event.target.checked)} />Use 1 second leader card</label>
           <label>Lead card line 1<input value={introLines[0] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 0, event.target.value))} placeholder="Primary title line" /></label>
@@ -1915,7 +1949,7 @@ export function App() {
                           {assignedImages.length ? ` - ${assignedImages.join(', ')}` : ''}
                         </span>
                         <span className="scene-card-controls">
-                          {nextScene && (
+                          {nextScene && sceneTransitionMode === 'hyperframes' && (
                             <button
                               type="button"
                               className="secondary-action hyperframes-launch"
@@ -1940,7 +1974,7 @@ export function App() {
                           </span>
                         </span>
                       </div>
-                      {nextScene && (
+                      {nextScene && sceneTransitionMode === 'hyperframes' && (
                         <label className="hyperframes-transition-title">
                           <span>HyperFrames transition title</span>
                           <input

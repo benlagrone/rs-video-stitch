@@ -1,0 +1,8 @@
+{
+  "name": "mediastudio-hyperframes",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "hyperframes": "0.8.188"
+  }
+}

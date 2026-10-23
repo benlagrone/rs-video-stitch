@@ -41,6 +41,11 @@ VIBEVOICE_DEFAULT_SPEAKER = os.getenv("VIBEVOICE_DEFAULT_SPEAKER", "Carter")
 VIBEVOICE_DEFAULT_CFG_SCALE = float(os.getenv("VIBEVOICE_DEFAULT_CFG_SCALE", "1.5"))
 VOICE_GATEWAY_URL = os.getenv("VOICE_GATEWAY_URL", "http://100.100.97.30:8133")
 VOICE_GATEWAY_TIMEOUT_SECONDS = float(os.getenv("VOICE_GATEWAY_TIMEOUT_SECONDS", "300"))
+HYPERFRAMES_PROJECT_DIR = Path(os.getenv("HYPERFRAMES_PROJECT_DIR", "/srv/hyperframes"))
+HYPERFRAMES_COMPOSITIONS = {
+    "lecrown-lead-card": "compositions/lecrown-lead-card.html",
+    "lecrown-scene-transition": "compositions/lecrown-scene-transition.html",
+}
 
 _FONT_ENV_VAR = "TITLE_FONT_FILE"
 _DEFAULT_FONT_RELATIVE = Path("media") / "EB_Garamond" / "EBGaramond-VariableFont_wght.ttf"
@@ -468,6 +473,10 @@ def _write_hyperframes_manifest(
                     "intro": binding.get("leadCard"),
                     "betweenSceneSections": binding.get("sceneTransition"),
                 },
+                "modes": {
+                    "intro": binding.get("leadCardMode", "hyperframes"),
+                    "betweenSceneSections": binding.get("sceneTransitionMode", "hyperframes"),
+                },
                 "transitionTitles": binding.get("transitionTitles", {}),
             },
             indent=2,
@@ -476,6 +485,75 @@ def _write_hyperframes_manifest(
         encoding="utf-8",
     )
     return manifest_path
+
+
+def _render_hyperframes_clip(
+    composition_id: str,
+    variables: Dict[str, str],
+    destination: Path,
+    fps: int,
+    preset: str,
+    crf: int,
+    log: Optional[LogFunc],
+) -> Path:
+    """Render an approved HyperFrames composition and give it a silent audio track."""
+    composition = HYPERFRAMES_COMPOSITIONS.get(composition_id)
+    if not composition:
+        raise ValueError(f"Unsupported HyperFrames composition: {composition_id}")
+    if not HYPERFRAMES_PROJECT_DIR.exists():
+        raise RuntimeError(
+            "HyperFrames renderer is unavailable: the packaged composition project is missing"
+        )
+
+    silent_destination = destination.with_name(f"{destination.stem}.silent.mp4")
+    command = [
+        str(HYPERFRAMES_PROJECT_DIR / "node_modules/.bin/hyperframes"),
+        "render",
+        str(HYPERFRAMES_PROJECT_DIR),
+        "--composition",
+        composition,
+        "--output",
+        str(silent_destination),
+        "--fps",
+        str(fps),
+        "--quality",
+        "standard",
+        "--workers",
+        "1",
+        "--low-memory-mode",
+        "--no-browser-gpu",
+        "--variables",
+        json.dumps(variables, ensure_ascii=False),
+    ]
+    _log(log, f"Rendering HyperFrames composition {composition_id}")
+    run(command, log)
+    if not silent_destination.exists():
+        raise RuntimeError(f"HyperFrames did not produce {silent_destination.name}")
+
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(silent_destination),
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-c:v",
+            "libx264",
+            "-preset",
+            preset,
+            "-crf",
+            str(crf),
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(destination),
+        ],
+        log,
+    )
+    return destination
 
 
 def _log(log: Optional[LogFunc], message: str) -> None:
@@ -1276,6 +1354,11 @@ def render_project(
     )
     title_font_path = _resolve_title_font_from_style(title_style, project_root, log)
     intro_enabled = _truthy(opts.get("introEnabled") or opts.get("intro_enabled"))
+    hyperframes_binding = opts.get("hyperframes") or scenes_doc.get("hyperframes")
+    if not isinstance(hyperframes_binding, dict):
+        hyperframes_binding = {}
+    lead_card_mode = str(hyperframes_binding.get("leadCardMode") or "traditional").strip().lower()
+    transition_mode = str(hyperframes_binding.get("sceneTransitionMode") or "traditional").strip().lower()
     info_meta = scenes_doc.get("info") if isinstance(scenes_doc.get("info"), dict) else {}
     if "introTitle" in opts or "intro_title" in opts:
         raw_intro_title = opts.get("introTitle") if "introTitle" in opts else opts.get("intro_title")
@@ -1638,6 +1721,7 @@ def render_project(
 
     update("CONCAT", 0.9)
     thumbnail_file: Optional[Path] = None
+    intro_file: Optional[Path] = None
     if intro_enabled and scenes:
         first_images = scenes[0].get("images") or []
         first_image_name = first_images[0] if first_images else None
@@ -1650,30 +1734,82 @@ def render_project(
                     intro_background = requested_background
                 else:
                     _log(log, f"Requested intro background {requested_background.name} is missing; using first scene")
-            leader_template = (
-                _resolve_leader_template(input_dir, str(intro_leader_image) if intro_leader_image else None, log)
-                if intro_leader_enabled
-                else None
-            )
-            intro_file, thumbnail_file = _create_intro_card_assets(
-                background_image=intro_background,
-                leader_template=leader_template,
-                title=intro_title,
-                work_dir=work_dir,
-                output_dir=output_dir,
-                fps=fps,
-                duration=intro_duration,
-                title_font_path=title_font_path,
-                preset=preset,
-                crf=crf,
-                log=log,
-                thumbnail_enabled=thumbnail_enabled,
-            )
+            if lead_card_mode == "hyperframes":
+                intro_file = _render_hyperframes_clip(
+                    str(hyperframes_binding.get("leadCard") or "lecrown-lead-card"),
+                    {
+                        "image": intro_background.resolve().as_uri(),
+                        "title": intro_title.split("\n", 1)[0] or pid,
+                        "detail": " · ".join(line for line in intro_title.splitlines()[1:3] if line.strip()),
+                        "micro": " · ".join(line for line in intro_title.splitlines()[3:] if line.strip()),
+                    },
+                    work_dir / "hyperframes_intro.mp4",
+                    fps,
+                    preset,
+                    crf,
+                    log,
+                )
+                if thumbnail_enabled:
+                    thumbnail_file = output_dir / "thumbnail.jpg"
+                    _generate_youtube_thumbnail(intro_file, thumbnail_file, log)
+            else:
+                leader_template = (
+                    _resolve_leader_template(input_dir, str(intro_leader_image) if intro_leader_image else None, log)
+                    if intro_leader_enabled
+                    else None
+                )
+                intro_file, thumbnail_file = _create_intro_card_assets(
+                    background_image=intro_background,
+                    leader_template=leader_template,
+                    title=intro_title,
+                    work_dir=work_dir,
+                    output_dir=output_dir,
+                    fps=fps,
+                    duration=intro_duration,
+                    title_font_path=title_font_path,
+                    preset=preset,
+                    crf=crf,
+                    log=log,
+                    thumbnail_enabled=thumbnail_enabled,
+                )
             scene_files.insert(0, intro_file)
             if thumbnail_file:
                 _log(log, f"Thumbnail ready: {thumbnail_file}")
         else:
             _log(log, "Intro card requested, but first scene has no image; skipping intro")
+
+    if transition_mode == "hyperframes" and len(scenes) > 1:
+        rendered_scene_files: List[Path] = []
+        transition_titles = hyperframes_binding.get("transitionTitles") or {}
+        content_scene_files = scene_files[1:] if intro_file else scene_files
+        for index, scene_file in enumerate(content_scene_files):
+            rendered_scene_files.append(scene_file)
+            if index >= len(scenes) - 1:
+                continue
+            current_images = scenes[index].get("images") or []
+            next_images = scenes[index + 1].get("images") or []
+            if not current_images or not next_images:
+                raise ValueError(f"Cannot render HyperFrames transition after scene {index:02d}: missing adjacent image")
+            transition_file = _render_hyperframes_clip(
+                str(hyperframes_binding.get("sceneTransition") or "lecrown-scene-transition"),
+                {
+                    "outgoing_image": (input_dir / "images" / current_images[-1]).resolve().as_uri(),
+                    "incoming_image": (input_dir / "images" / next_images[0]).resolve().as_uri(),
+                    "transition_title": str(
+                        transition_titles.get(str(index))
+                        or transition_titles.get(index)
+                        or scenes[index + 1].get("title")
+                        or f"Scene {index + 2}"
+                    ),
+                },
+                work_dir / f"hyperframes_transition_{index:02d}.mp4",
+                fps,
+                preset,
+                crf,
+                log,
+            )
+            rendered_scene_files.append(transition_file)
+        scene_files = ([intro_file] if intro_file else []) + rendered_scene_files
 
     final_path = output_dir / output_name
     concat_output_path = final_path
@@ -1733,7 +1869,6 @@ def render_project(
         # overlay and layout as the published video.
         _generate_youtube_thumbnail(final_path, thumbnail_file, log)
 
-    hyperframes_binding = opts.get("hyperframes") or scenes_doc.get("hyperframes")
     hyperframes_manifest = _write_hyperframes_manifest(output_dir, output_name, hyperframes_binding)
     if hyperframes_manifest:
         _log(log, f"HyperFrames render map: {hyperframes_manifest.name}")

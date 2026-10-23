@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920,height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      :root { --gold: #d39d27; }
+      * { box-sizing: border-box; margin: 0; }
+      #root { position: absolute; inset: 0; overflow: hidden; background: #080808; color: white; font-family: Inter, Arial, sans-serif; }
+      .clip { position: absolute; }
+      #strip { inset: 0; width: 200%; }
+      .panel { position: absolute; inset: 0; width: 50%; overflow: hidden; }
+      .panel img { width: 100%; height: 100%; object-fit: cover; }
+      #outgoing { left: 0; } #incoming { left: 50%; }
+      .shade { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(0,0,0,.55), rgba(0,0,0,.12), rgba(0,0,0,.55)); }
+      #rule { left: 0; top: 0; width: 100%; height: 14px; background: var(--gold); transform-origin: left; }
+      #title { left: 116px; bottom: 126px; max-width: 1050px; font-size: 72px; font-weight: 800; letter-spacing: -.055em; line-height: .95; text-transform: uppercase; }
+      #brand { right: 112px; top: 94px; color: var(--gold); font-size: 26px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+    </style>
+  </head>
+  <body>
+    <main id="root" data-composition-id="lecrown-scene-transition" data-width="1920" data-height="1080" data-duration="1.2" data-fps="30" data-composition-variables='[{"id":"outgoing_image","type":"string","label":"Outgoing image","default":""},{"id":"incoming_image","type":"string","label":"Incoming image","default":""},{"id":"transition_title","type":"string","label":"Transition title","default":"Discover more"}]'>
+      <div id="strip" class="clip" data-start="0" data-duration="1.2"><section id="outgoing" class="panel"><img data-var-src="outgoing_image" alt="" /><div class="shade"></div></section><section id="incoming" class="panel"><img data-var-src="incoming_image" alt="" /><div class="shade"></div></section></div>
+      <div id="rule" class="clip" data-start=".12" data-duration="1.08"></div>
+      <p id="brand" class="clip" data-start=".18" data-duration="1.02">LeCrown Properties</p>
+      <h2 id="title" class="clip" data-start=".55" data-duration=".65" data-var-text="transition_title">Discover more</h2>
+    </main>
+    <script>
+      const tl = gsap.timeline({ paused: true });
+      tl.set('#strip', { xPercent: 0 }).to('#strip', { xPercent: -50, duration: .68, ease: 'power3.inOut' }, .18)
+        .fromTo('#rule', { scaleX: 0, opacity: 0 }, { scaleX: 1, opacity: 1, duration: .38, ease: 'power3.out' }, .12)
+        .fromTo('#brand', { opacity: 0, x: 40 }, { opacity: 1, x: 0, duration: .25, ease: 'power3.out' }, .28)
+        .fromTo('#title', { opacity: 0, y: 36, filter: 'blur(9px)' }, { opacity: 1, y: 0, filter: 'blur(0)', duration: .3, ease: 'power4.out' }, .55);
+      window.__timelines = window.__timelines || {};
+      window.__timelines['lecrown-scene-transition'] = tl;
+    </script>
+  </body>
+</html>
