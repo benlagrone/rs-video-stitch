@@ -1405,6 +1405,12 @@ textarea {
   white-space: nowrap;
 }
 
+.button-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .hyperframes-binding {
   background: var(--accent-soft);
   border: 1px solid var(--line-strong);

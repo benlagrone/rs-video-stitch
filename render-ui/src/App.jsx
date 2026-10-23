@@ -285,6 +285,7 @@ function projectStateFromValues(values) {
     propertyAddress: values.propertyAddress,
     projectId: values.resolvedProjectId,
     script: values.script,
+    originalScriptText: values.originalScriptText,
     targetSeconds: Number(values.targetSeconds) || 60,
     sceneDurations: values.sceneDurations,
     sceneImageAssignments: values.sceneImageAssignments,
@@ -336,6 +337,7 @@ export function App() {
   const [propertyAddress, setPropertyAddress] = useState('');
   const [projectId, setProjectId] = useState('');
   const [script, setScript] = useState('Welcome to this property. The opening view should establish the home and the neighborhood.\n\nStep inside to highlight the living spaces, natural light, and everyday comfort.\n\nFinish with the strongest selling points and a clear invitation to schedule a showing.');
+  const [originalScriptText, setOriginalScriptText] = useState('');
   const [targetSeconds, setTargetSeconds] = useState(60);
   const [sceneDurations, setSceneDurations] = useState([]);
   const [sceneImageAssignments, setSceneImageAssignments] = useState([]);
@@ -701,6 +703,7 @@ export function App() {
     setPropertyAddress('');
     setProjectId('');
     setScript('Welcome to this property. The opening view should establish the home and the neighborhood.\n\nStep inside to highlight the living spaces, natural light, and everyday comfort.\n\nFinish with the strongest selling points and a clear invitation to schedule a showing.');
+    setOriginalScriptText('');
     setTargetSeconds(60);
     setSceneDurations([]);
     setSceneImageAssignments([]);
@@ -782,7 +785,10 @@ export function App() {
       setScriptTitle(state.scriptTitle || '');
       setPropertyAddress(state.propertyAddress || '');
       setProjectId(pid);
-      setScript(scriptFromProject(state, persistedScenes));
+      const loadedScript = scriptFromProject(state, persistedScenes);
+      const savedOriginalScript = String(state.originalScriptText || loadedScript).trim();
+      setScript(loadedScript);
+      setOriginalScriptText(savedOriginalScript);
       setTargetSeconds(state.targetSeconds || 60);
       setSceneDurations(savedSceneDurations);
       setSceneImageAssignments(sanitizeSceneImageAssignments(savedSceneImageAssignments, projectImages.map((image) => image.name)));
@@ -815,7 +821,7 @@ export function App() {
       setSceneTransitionMode(savedHyperframes.sceneTransitionMode || 'hyperframes');
       setRenderOptions(renderOptionsFromProject(state));
       setYoutubeTitle(state.youtubeTitle || '');
-      setYoutubeDescription(state.youtubeDescription || '');
+      setYoutubeDescription(state.youtubeDescription || savedOriginalScript);
       setYoutubeTags(state.youtubeTags || '');
       setYoutubePrivacy(state.youtubePrivacy || 'private');
       setYoutubeProfile(state.youtubeProfile || youtubeProfileForLanguage(savedLanguage));
@@ -1084,6 +1090,10 @@ export function App() {
     setError('');
     setIsSavingProject(true);
     try {
+      const sourceScript = originalScriptText || script;
+      const descriptionFromSource = youtubeDescription || sourceScript;
+      if (!originalScriptText.trim()) setOriginalScriptText(sourceScript);
+      if (!youtubeDescription.trim() && sourceScript.trim()) setYoutubeDescription(sourceScript);
       setStatus('Saving project');
       await request('/healthz');
       await uploadAssetItems(images, 'images');
@@ -1109,6 +1119,7 @@ export function App() {
             propertyAddress,
             resolvedProjectId,
             script,
+            originalScriptText: sourceScript,
             targetSeconds,
             sceneDurations,
             sceneImageAssignments,
@@ -1131,7 +1142,7 @@ export function App() {
             hyperframes: overrides.hyperframes ?? selectedHyperframes,
             renderOptions,
             youtubeTitle,
-            youtubeDescription: overrides.youtubeDescription ?? youtubeDescription,
+            youtubeDescription: overrides.youtubeDescription ?? descriptionFromSource,
             youtubeTags,
             youtubePrivacy,
             youtubeProfile,
@@ -1243,13 +1254,14 @@ export function App() {
     setIsUploadingYoutube(true);
     try {
       const selectedOutput = videoHref ? outputName : (outputs.find((file) => file.endsWith('.mp4') || file.endsWith('.mpg') || file.endsWith('.mov')) || outputName);
+      const description = youtubeDescription || originalScriptText || script;
       const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/youtube/upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           filename: selectedOutput,
           title: youtubeTitle.trim() || title || selectedOutput,
-          description: youtubeDescription,
+          description,
           tags: youtubeTags.split(',').map((tag) => tag.trim()).filter(Boolean),
           privacyStatus: youtubePrivacy,
           categoryId: '22',
@@ -1313,13 +1325,14 @@ export function App() {
     setIsUpdatingYoutubeDetails(true);
     setStatus('Updating YouTube details');
     try {
+      const description = youtubeDescription || originalScriptText || script;
       const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/youtube/metadata`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           videoId,
           title: youtubeTitle.trim() || title || outputName,
-          description: youtubeDescription,
+          description,
           tags: youtubeTags.split(',').map((tag) => tag.trim()).filter(Boolean),
           privacyStatus: youtubePrivacy,
           categoryId: '22',
@@ -1349,7 +1362,7 @@ export function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: youtubeTitle.trim() || title || outputName,
-          script,
+          script: originalScriptText || script,
           currentDescription: youtubeDescription,
           roomInfo: roomInfoPayload,
         }),
@@ -1440,6 +1453,7 @@ export function App() {
     setIsEnhancing(true);
     setStatus(withRoomInfo ? 'Enhancing script with room info' : 'Enhancing script');
     try {
+      if (!originalScriptText.trim()) setOriginalScriptText(script);
       const result = await request('/v1/script/enhance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2299,10 +2313,16 @@ export function App() {
                 <label>Title<input value={youtubeTitle} onChange={(event) => setYoutubeTitle(event.target.value)} placeholder={title || outputName} /></label>
                 <div className="output-heading compact-heading">
                   <h4>Description</h4>
-                  <button type="button" onClick={writeYoutubeDescription} disabled={isWritingYoutubeDescription || (!script.trim() && !youtubeDescription.trim())}>
-                    {isWritingYoutubeDescription ? 'Writing' : 'AI write description'}
-                  </button>
+                  <span className="button-row">
+                    <button type="button" onClick={() => setYoutubeDescription(originalScriptText || script)} disabled={!(originalScriptText || script).trim()}>
+                      Use original text
+                    </button>
+                    <button type="button" onClick={writeYoutubeDescription} disabled={isWritingYoutubeDescription || (!(originalScriptText || script).trim() && !youtubeDescription.trim())}>
+                      {isWritingYoutubeDescription ? 'Writing' : 'Enhance with Ollama'}
+                    </button>
+                  </span>
                 </div>
+                <p className="hint">Starts with the original intake text. Edit it directly, or enhance that source with Ollama.</p>
                 <label>Description<textarea className="short-textarea youtube-description-textarea" value={youtubeDescription} onChange={(event) => setYoutubeDescription(event.target.value)} /></label>
                 <label>Tags<input value={youtubeTags} onChange={(event) => setYoutubeTags(event.target.value)} placeholder="comma, separated, tags" /></label>
                 <label>Privacy<select value={youtubePrivacy} onChange={(event) => setYoutubePrivacy(event.target.value)}><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select></label>
