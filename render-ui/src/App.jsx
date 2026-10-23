@@ -3,6 +3,7 @@ import { BibleStudio } from './BibleStudio.jsx';
 import {
   leadLinesFromState,
   renderOptionsFromProject,
+  sceneAssignmentsFromRoomInfo,
   sanitizeSceneImageAssignments,
   sceneImageAssignmentsFromProject,
 } from './projectState.js';
@@ -63,7 +64,7 @@ function splitScript(script) {
 function sentenceChunks(text) {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return [];
-  const sentences = normalized.match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g) || [normalized];
+  const sentences = normalized.match(/[^.!?。！？]+[.!?。！？]+(?:\s+|$)|[^.!?。！？]+$/g) || [normalized];
   return sentences.map((sentence) => sentence.trim()).filter(Boolean);
 }
 
@@ -1312,6 +1313,19 @@ export function App() {
     setStatus(`Split script into ${splitScript(nextScript).length} scene sections`);
   }
 
+  function buildScenesFromRoomLabels() {
+    if (!script.trim() || !images.length) return;
+    const assignments = sceneAssignmentsFromRoomInfo(images, imageRoomInfo);
+    if (!assignments.length || assignments.every((scene) => !scene.length)) {
+      setError('Run Auto-name rooms before building scenes from room labels.');
+      return;
+    }
+    const nextScript = splitScriptIntoSections(script, assignments.length);
+    setScript(nextScript);
+    setSceneImageAssignments(assignments);
+    setStatus(`Built ${assignments.length} room-based scenes from ${images.length} images`);
+  }
+
   async function submitRender() {
     if (isRendering) return;
     setError('');
@@ -1695,8 +1709,11 @@ export function App() {
             <button className="secondary-action" type="button" onClick={splitScriptForImages} disabled={!script.trim() || images.length < 1}>
               Split into image scenes
             </button>
+            <button className="secondary-action" type="button" onClick={buildScenesFromRoomLabels} disabled={!script.trim() || images.length < 1}>
+              Build scenes from room labels
+            </button>
           </div>
-          <p className="hint">Separate scenes with a blank line. Uploaded images stay in the loading zone until added to a scene. Each scene can use 1-3 pictures, and scene time is split across them.</p>
+          <p className="hint">Build scenes from room labels groups Room Renamer results into reviewable 1–3-photo scenes and splits the narration to match.</p>
           {unassignedImageCount > 0 && (
             <p className="hint warning-hint">
               {unassignedImageCount} image{unassignedImageCount === 1 ? ' is' : 's are'} still in the loading zone. Add them to scene sections before rendering.

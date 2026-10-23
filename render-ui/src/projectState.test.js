@@ -4,9 +4,29 @@ import assert from 'node:assert/strict';
 import {
   leadLinesFromState,
   renderOptionsFromProject,
+  sceneAssignmentsFromRoomInfo,
   sanitizeSceneImageAssignments,
   sceneImageAssignmentsFromProject,
 } from './projectState.js';
+
+test('groups Room Renamer labels into three-image scene assignments', () => {
+  const assignments = sceneAssignmentsFromRoomInfo(
+    [{ name: 'front-1.jpg' }, { name: 'front-2.jpg' }, { name: 'front-3.jpg' }, { name: 'front-4.jpg' }, { name: 'kitchen.jpg' }],
+    {
+      'front-1.jpg': { label: 'street_view' },
+      'front-2.jpg': { label: 'street_view' },
+      'front-3.jpg': { label: 'street_view' },
+      'front-4.jpg': { label: 'street_view' },
+      'kitchen.jpg': { label: 'kitchen' },
+    },
+  );
+
+  assert.deepEqual(assignments, [
+    ['front-1.jpg', 'front-2.jpg', 'front-3.jpg'],
+    ['front-4.jpg'],
+    ['kitchen.jpg'],
+  ]);
+});
 
 test('preserves a saved image reused by a later scene', () => {
   const assignments = sanitizeSceneImageAssignments(

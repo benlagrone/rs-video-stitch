@@ -17,6 +17,23 @@ export function sanitizeSceneImageAssignments(assignments, availableNames) {
   ));
 }
 
+export function sceneAssignmentsFromRoomInfo(images, imageRoomInfo) {
+  const groups = new Map();
+  (Array.isArray(images) ? images : []).forEach((image) => {
+    const name = typeof image === 'string' ? image : image?.name;
+    if (!name) return;
+    const room = String(imageRoomInfo?.[name]?.label || 'unclassified').trim() || 'unclassified';
+    if (!groups.has(room)) groups.set(room, []);
+    groups.get(room).push(name);
+  });
+
+  return Array.from(groups.values()).flatMap((names) => {
+    const scenes = [];
+    for (let index = 0; index < names.length; index += 3) scenes.push(names.slice(index, index + 3));
+    return scenes;
+  });
+}
+
 export function leadLinesFromState(state, fallbackTitle = '') {
   const savedLines = Array.isArray(state.introLines) ? state.introLines : [];
   const sourceLines = savedLines.length
