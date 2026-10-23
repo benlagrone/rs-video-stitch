@@ -250,6 +250,10 @@ class HyperframesTransitionTitleResponse(BaseModel):
     model: str
 
 
+class ListingPipelineRequest(BaseModel):
+    projectIds: conlist(str, min_length=1, max_length=10)
+
+
 class YouTubeDescriptionRequest(BaseModel):
     title: str = ""
     script: str = ""

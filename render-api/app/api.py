@@ -13,7 +13,7 @@ import csv
 import html
 import re
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 import requests
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, Request
@@ -41,6 +41,7 @@ from app.schemas import (
     LeadCardGenerateResponse,
     HyperframesTransitionTitleRequest,
     HyperframesTransitionTitleResponse,
+    ListingPipelineRequest,
     RenderRequest,
     RoomAnnotationRequest,
     RoomCorrectionRequest,
@@ -134,6 +135,8 @@ EMOJI_PATTERN = re.compile(
 )
 _worker_thread: threading.Thread | None = None
 _worker_stop: threading.Event | None = None
+_listing_pipeline_runs: dict[str, dict[str, Any]] = {}
+_listing_pipeline_runs_lock = threading.Lock()
 
 app = FastAPI(title="Render API", version="1.0.0")
 app.add_middleware(
@@ -974,6 +977,42 @@ def _parse_hyperframes_transition_title(value: str) -> str:
     return title[:80].rstrip()
 
 
+def _hyperframes_transition_titles_prompt(
+    scenes: list[dict[str, Any]],
+    language: str,
+) -> str:
+    language_instruction = "Write in Simplified Chinese." if language.lower().startswith("zh") else "Write in English."
+    transitions = [
+        {
+            "outgoing": str(scene.get("title") or "").strip(),
+            "incoming": str(next_scene.get("title") or "").strip(),
+        }
+        for scene, next_scene in zip(scenes, scenes[1:])
+    ]
+    return (
+        "Write one elegant LeCrown Properties transition title for each supplied scene pair.\n"
+        f"{language_instruction}\n"
+        "Use 2 to 5 words per title, use only supplied facts, and never invent amenities, prices, addresses, or claims.\n"
+        "Return JSON only in exactly this shape: {\"titles\":[\"title 1\",\"title 2\"]}.\n\n"
+        f"Scene pairs:\n{json.dumps(transitions, ensure_ascii=False)}"
+    )
+
+
+def _parse_hyperframes_transition_titles(value: str, expected_count: int) -> list[str]:
+    match = re.search(r"\{.*\}", value.strip(), flags=re.DOTALL)
+    if match:
+        try:
+            payload = json.loads(match.group(0))
+            titles = payload.get("titles") if isinstance(payload, dict) else None
+            if isinstance(titles, list):
+                cleaned = [_parse_hyperframes_transition_title(str(title)) for title in titles]
+                if len(cleaned) == expected_count:
+                    return cleaned
+        except (TypeError, ValueError):
+            pass
+    raise HTTPException(status_code=502, detail="Ollama did not return one usable transition title for every scene pair")
+
+
 @app.post("/v1/hyperframes/transition-title/generate", response_model=HyperframesTransitionTitleResponse)
 async def generate_hyperframes_transition_title(
     req: HyperframesTransitionTitleRequest,
@@ -1321,6 +1360,203 @@ def _classify_saved_project(pid: str) -> dict:
         "results": persisted,
         "unresolved": unresolved,
     }
+
+
+def _listing_pipeline_scene_assignments(state: dict, pid: str) -> list[list[str]]:
+    groups: dict[str, list[str]] = {}
+    room_info = state.get("imageRoomInfo") or {}
+    for filename in _state_image_names(state, pid):
+        info = room_info.get(filename) or {}
+        label = str(info.get("label") or "unclassified").strip() or "unclassified"
+        groups.setdefault(label, []).append(filename)
+    return [names[index:index + 3] for names in groups.values() for index in range(0, len(names), 3)]
+
+
+def _split_script_for_pipeline(script: str, section_count: int) -> list[str]:
+    normalized = re.sub(r"\s+", " ", script).strip()
+    if section_count <= 1 or not normalized:
+        return [normalized]
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?。！？])\s+", normalized) if part.strip()]
+    if len(sentences) < section_count:
+        words = normalized.split()
+        return [
+            " ".join(words[(index * len(words)) // section_count:((index + 1) * len(words)) // section_count]).strip()
+            for index in range(section_count)
+        ]
+    sections: list[list[str]] = [[] for _ in range(section_count)]
+    for index, sentence in enumerate(sentences):
+        sections[min(section_count - 1, (index * section_count) // len(sentences))].append(sentence)
+    return [" ".join(section).strip() for section in sections]
+
+
+def _listing_pipeline_scenes(state: dict, pid: str, assignments: list[list[str]]) -> list[dict[str, Any]]:
+    descriptions = _split_script_for_pipeline(str(state.get("script") or ""), len(assignments))
+    image_headers = state.get("imageHeaders") or {}
+    room_info = state.get("imageRoomInfo") or {}
+    scenes = []
+    for index, image_names in enumerate(assignments):
+        scene_title = next((str(image_headers.get(name) or "").strip() for name in image_names if image_headers.get(name)), "")
+        if not scene_title:
+            scene_title = f"Scene {index + 1}"
+        description = descriptions[index] if index < len(descriptions) else ""
+        scenes.append(
+            {
+                "title": scene_title,
+                "description": description,
+                "VO": description,
+                "images": image_names,
+                "timeline": [
+                    {
+                        "image": filename,
+                        "header": str(image_headers.get(filename) or ""),
+                        "roomDescription": str((room_info.get(filename) or {}).get("roomDescription") or ""),
+                        "roomLabel": str((room_info.get(filename) or {}).get("label") or ""),
+                        "confidence": (room_info.get(filename) or {}).get("confidence"),
+                    }
+                    for filename in image_names
+                ],
+            }
+        )
+    return scenes
+
+
+def _listing_pipeline_project(pid: str) -> dict:
+    state = read_project_state(pid) or _state_from_scenes(pid, _load_scenes(pid))
+    if not state or not _state_image_names(state, pid):
+        raise ValueError("project has no saved images")
+    if not str(state.get("script") or "").strip():
+        raise ValueError("project has no saved script")
+
+    save_project_version(pid, state, label="before-listing-pipeline")
+    room_naming = _classify_saved_project(pid)
+    state = read_project_state(pid) or state
+    room_info = list((state.get("imageRoomInfo") or {}).values())
+    base_script = _ollama_generate(
+        _script_enhance_prompt(str(state.get("script") or ""), int(state.get("targetSeconds") or 45)),
+        temperature=0.55,
+    )
+    enhanced_script = _ollama_generate(
+        _script_enhance_prompt(base_script, int(state.get("targetSeconds") or 45), room_info),
+        temperature=0.55,
+    )
+    lead_lines = _parse_lead_card_lines(
+        _ollama_generate(
+            _lead_card_prompt(
+                LeadCardGenerateRequest(
+                    title=str(state.get("scriptTitle") or state.get("title") or pid),
+                    script=enhanced_script,
+                    currentLines=[],
+                )
+            ),
+            temperature=0.35,
+        )
+    )
+    state["script"] = enhanced_script
+    assignments = _listing_pipeline_scene_assignments(state, pid)
+    scenes = _listing_pipeline_scenes(state, pid, assignments)
+    transition_titles: dict[str, str] = {}
+    if len(scenes) > 1:
+        titles = _parse_hyperframes_transition_titles(
+            _ollama_generate(
+                _hyperframes_transition_titles_prompt(scenes, str(state.get("language") or "en-US")),
+                temperature=0.3,
+                num_predict=256,
+            ),
+            len(scenes) - 1,
+        )
+        transition_titles = {str(index): title for index, title in enumerate(titles)}
+
+    hyperframes = {
+        "projectId": "hyperframes-lecrown-preview",
+        "leadCard": "lecrown-lead-card",
+        "sceneTransition": "lecrown-scene-transition",
+        "transitionTitles": transition_titles,
+    }
+    state.update(
+        {
+            "sceneImageAssignments": assignments,
+            "introLines": lead_lines + [""] * max(0, 6 - len(lead_lines)),
+            "hyperframes": hyperframes,
+            "pipeline": {
+                "listingPreparation": {
+                    "completedAt": time.time(),
+                    "stages": ["room-renamer", "enhance", "enhance-with-room-info", "hyperframes"],
+                    "roomModel": room_naming.get("model") or "",
+                    "model": OLLAMA_MODEL,
+                }
+            },
+            "updatedAt": time.time(),
+        }
+    )
+    scenes_doc = {
+        "info": {"name": str(state.get("title") or pid), "source": "listing-pipeline"},
+        "vid": {
+            "voice": state.get("voice") or None,
+            "lang": state.get("language") or "en-US",
+            "api": state.get("ttsApi") or "voice-gateway",
+        },
+        "hyperframes": hyperframes,
+        "scenes": scenes,
+    }
+    save_scenes(pid, json.dumps(scenes_doc, indent=2, ensure_ascii=False), project_name=str(state.get("title") or pid))
+    save_project_state(pid, state, project_name=str(state.get("title") or pid))
+    save_project_version(pid, state, label="listing-pipeline")
+    return {
+        "projectId": pid,
+        "imageCount": len(_state_image_names(state, pid)),
+        "sceneCount": len(scenes),
+        "transitionCount": len(transition_titles),
+        "unresolvedRooms": room_naming.get("unresolved") or [],
+    }
+
+
+def _run_listing_pipeline(run_id: str, project_ids: list[str]) -> None:
+    for index, pid in enumerate(project_ids):
+        with _listing_pipeline_runs_lock:
+            run = _listing_pipeline_runs[run_id]
+            run.update({"status": "RUNNING", "currentProjectId": pid, "progress": index / len(project_ids)})
+        try:
+            result = _listing_pipeline_project(pid)
+            with _listing_pipeline_runs_lock:
+                _listing_pipeline_runs[run_id]["results"].append({"status": "SUCCEEDED", **result})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Listing pipeline failed for %s", pid)
+            with _listing_pipeline_runs_lock:
+                _listing_pipeline_runs[run_id]["results"].append({"projectId": pid, "status": "FAILED", "error": str(exc)})
+    with _listing_pipeline_runs_lock:
+        run = _listing_pipeline_runs[run_id]
+        run.update({"status": "COMPLETED", "currentProjectId": "", "progress": 1.0, "completedAt": time.time()})
+
+
+@app.post("/v1/listing-pipeline/runs", status_code=202)
+async def start_listing_pipeline(req: ListingPipelineRequest) -> dict:
+    project_ids = list(dict.fromkeys(req.projectIds))
+    known_ids = {project["projectId"] for project in list_projects()}
+    missing = [pid for pid in project_ids if pid not in known_ids]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"saved projects not found: {', '.join(missing)}")
+    run_id = uuid.uuid4().hex
+    with _listing_pipeline_runs_lock:
+        _listing_pipeline_runs[run_id] = {
+            "runId": run_id,
+            "status": "QUEUED",
+            "projectIds": project_ids,
+            "currentProjectId": "",
+            "progress": 0.0,
+            "results": [],
+            "createdAt": time.time(),
+        }
+    threading.Thread(target=_run_listing_pipeline, args=(run_id, project_ids), daemon=True, name=f"listing-pipeline-{run_id[:8]}").start()
+    return _listing_pipeline_runs[run_id]
+
+
+@app.get("/v1/listing-pipeline/runs/{run_id}")
+async def listing_pipeline_status(run_id: str) -> dict:
+    with _listing_pipeline_runs_lock:
+        run = _listing_pipeline_runs.get(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="listing pipeline run not found")
+        return json.loads(json.dumps(run))
 
 
 @app.post("/v1/projects/{pid}/room-annotations")

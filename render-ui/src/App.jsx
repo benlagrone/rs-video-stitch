@@ -391,6 +391,7 @@ export function App() {
   const [savedProjects, setSavedProjects] = useState([]);
   const [projectFilter, setProjectFilter] = useState('');
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
+  const [listingPipelineRun, setListingPipelineRun] = useState(null);
   const [soundCatalog, setSoundCatalog] = useState({ assets: [], count: 0, status: 'loading' });
   const [isLoadingSoundCatalog, setIsLoadingSoundCatalog] = useState(false);
   const [isLoadingProject, setIsLoadingProject] = useState(false);
@@ -413,6 +414,12 @@ export function App() {
       `${project.title || ''} ${project.projectId || ''}`.toLocaleLowerCase().includes(query)
     ));
   }, [projectFilter, savedProjects]);
+  const newestTenProjects = useMemo(
+    () => [...savedProjects]
+      .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))
+      .slice(0, 10),
+    [savedProjects],
+  );
   const recognizedScriptTitle = useMemo(() => titleFromScript(script, scriptTitle || title), [script, scriptTitle, title]);
   const recognizedTitleCard = useMemo(() => titleCardFromScript(script, scriptTitle || title), [script, scriptTitle, title]);
   const scriptSections = useMemo(() => splitScript(recognizedScriptTitle.narration), [recognizedScriptTitle]);
@@ -630,6 +637,33 @@ export function App() {
       setSavedProjects(result.projects || []);
     } finally {
       setIsLoadingProjects(false);
+    }
+  }
+
+  async function runNewestTenListingPipeline() {
+    if (!newestTenProjects.length || listingPipelineRun?.status === 'RUNNING' || listingPipelineRun?.status === 'QUEUED') return;
+    setError('');
+    setStatus(`Queueing listing pipeline for ${newestTenProjects.length} newest projects`);
+    try {
+      const run = await request('/v1/listing-pipeline/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectIds: newestTenProjects.map((project) => project.projectId) }),
+      });
+      setListingPipelineRun(run);
+      while (true) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const current = await request(`/v1/listing-pipeline/runs/${encodeURIComponent(run.runId)}`);
+        setListingPipelineRun(current);
+        setStatus(`${current.status}: ${current.results.length}/${current.projectIds.length} listing projects prepared`);
+        if (current.status === 'COMPLETED') {
+          await refreshProjects();
+          return;
+        }
+      }
+    } catch (err) {
+      setError(err.message || String(err));
+      setStatus('Listing pipeline failed to start');
     }
   }
 
@@ -1584,8 +1618,24 @@ export function App() {
               <button className="secondary-action" type="button" onClick={refreshProjects} disabled={isLoadingProjects}>
                 {isLoadingProjects ? 'Refreshing' : 'Refresh'}
               </button>
+              <button
+                className="primary-action"
+                type="button"
+                onClick={runNewestTenListingPipeline}
+                disabled={!newestTenProjects.length || listingPipelineRun?.status === 'RUNNING' || listingPipelineRun?.status === 'QUEUED'}
+              >
+                {listingPipelineRun?.status === 'RUNNING' || listingPipelineRun?.status === 'QUEUED'
+                  ? `Preparing ${listingPipelineRun.results.length}/${listingPipelineRun.projectIds.length}`
+                  : `Prepare newest ${newestTenProjects.length}`}
+              </button>
             </div>
           </div>
+          {listingPipelineRun && (
+            <p className="hint">
+              Listing pipeline {listingPipelineRun.status.toLowerCase()}: {listingPipelineRun.results.length}/{listingPipelineRun.projectIds.length} complete.
+              {listingPipelineRun.currentProjectId ? ` Working on ${listingPipelineRun.currentProjectId}.` : ''}
+            </p>
+          )}
           {error && <div className="error-box">{error}</div>}
           {savedProjects.length === 0 ? (
             <div className="empty-project-list">
