@@ -827,8 +827,18 @@ def _room_context(room_info: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _script_enhance_prompt(script: str, target_seconds: int, room_info: Optional[list[dict]] = None) -> str:
+def _script_enhance_prompt(
+    script: str,
+    target_seconds: int,
+    room_info: Optional[list[dict]] = None,
+    language: str = "en-US",
+) -> str:
     target_words = max(1, round(target_seconds * 2.45))
+    language_instruction = (
+        "Write the full narration in Simplified Chinese. Do not leave any English narration."
+        if language.lower().startswith("zh")
+        else "Write the full narration in English."
+    )
     room_context = _room_context(room_info or [])
     room_context_block = (
         "\nUse these image and room notes to make the narration specific without listing filenames:\n"
@@ -839,6 +849,7 @@ def _script_enhance_prompt(script: str, target_seconds: int, room_info: Optional
     return (
         "Rewrite the narration script for a real-estate or listing-style video.\n"
         f"Target spoken length: {target_seconds} seconds, about {target_words} words.\n"
+        f"{language_instruction}\n"
         "Keep the result suitable for text-to-speech narration.\n"
         "Preserve scene breaks with blank lines when the input has multiple scenes.\n"
         "When room notes are provided, weave the useful details naturally into the script.\n"
@@ -1443,11 +1454,20 @@ def _listing_pipeline_project(pid: str) -> dict:
     state = read_project_state(pid) or state
     room_info = list((state.get("imageRoomInfo") or {}).values())
     base_script = _ollama_generate(
-        _script_enhance_prompt(str(state.get("script") or ""), int(state.get("targetSeconds") or 45)),
+        _script_enhance_prompt(
+            str(state.get("script") or ""),
+            int(state.get("targetSeconds") or 45),
+            language=str(state.get("language") or "en-US"),
+        ),
         temperature=0.55,
     )
     enhanced_script = _ollama_generate(
-        _script_enhance_prompt(base_script, int(state.get("targetSeconds") or 45), room_info),
+        _script_enhance_prompt(
+            base_script,
+            int(state.get("targetSeconds") or 45),
+            room_info,
+            language=str(state.get("language") or "en-US"),
+        ),
         temperature=0.55,
     )
     lead_lines = _parse_lead_card_lines(

@@ -117,6 +117,16 @@ class ScriptEnhanceApiTest(TestCase):
         self.assertIn("kitchen", payload["prompt"])
         self.assertIn("Oversized island", payload["prompt"])
 
+    def test_listing_pipeline_prompt_requires_simplified_chinese_for_mandarin_projects(self):
+        prompt = api._script_enhance_prompt(
+            "Welcome to this home.",
+            45,
+            language="zh-CN",
+        )
+
+        self.assertIn("Simplified Chinese", prompt)
+        self.assertIn("Do not leave any English narration", prompt)
+
     def test_generate_lead_card_calls_ollama_and_returns_three_lines(self):
         with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(
             api,
