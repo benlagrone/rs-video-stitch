@@ -39,6 +39,8 @@ from app.schemas import (
     BibleTitleCardRequest,
     LeadCardGenerateRequest,
     LeadCardGenerateResponse,
+    HyperframesTransitionTitleRequest,
+    HyperframesTransitionTitleResponse,
     RenderRequest,
     RoomAnnotationRequest,
     RoomCorrectionRequest,
@@ -947,6 +949,40 @@ async def generate_lead_card(req: LeadCardGenerateRequest) -> LeadCardGenerateRe
         raise HTTPException(status_code=400, detail="Add a project title or script before generating a lead card")
     result = _ollama_generate(_lead_card_prompt(req), temperature=0.35)
     return LeadCardGenerateResponse(lines=_parse_lead_card_lines(result), model=OLLAMA_MODEL)
+
+
+def _hyperframes_transition_title_prompt(req: HyperframesTransitionTitleRequest) -> str:
+    language_instruction = "Write in Simplified Chinese." if req.language.lower().startswith("zh") else "Write in English."
+    return (
+        "Write a single, elegant title card for a LeCrown Properties real-estate video transition.\n"
+        f"{language_instruction}\n"
+        "Use 2 to 5 words only, in title case where applicable.\n"
+        "Bridge the outgoing scene to the incoming scene. Use only supplied facts; never invent amenities, prices, addresses, or claims.\n"
+        "Return only the title text, without quotes, labels, markdown, or punctuation at the end.\n\n"
+        f"Outgoing scene: {req.outgoingTitle.strip()}\n"
+        f"Incoming scene: {req.incomingTitle.strip()}\n"
+        f"Narration context: {req.narration.strip()[:1200]}"
+    )
+
+
+def _parse_hyperframes_transition_title(value: str) -> str:
+    title = value.strip().splitlines()[0].strip()
+    title = re.sub(r"^(?:title|transition)\s*:\s*", "", title, flags=re.IGNORECASE)
+    title = title.strip(" `\"'*-:;,.!")
+    if not title:
+        raise HTTPException(status_code=502, detail="Ollama did not return a usable transition title")
+    return title[:80].rstrip()
+
+
+@app.post("/v1/hyperframes/transition-title/generate", response_model=HyperframesTransitionTitleResponse)
+async def generate_hyperframes_transition_title(
+    req: HyperframesTransitionTitleRequest,
+) -> HyperframesTransitionTitleResponse:
+    result = _ollama_generate(_hyperframes_transition_title_prompt(req), temperature=0.3, num_predict=32)
+    return HyperframesTransitionTitleResponse(
+        title=_parse_hyperframes_transition_title(result),
+        model=OLLAMA_MODEL,
+    )
 
 
 @app.post("/v1/script/enhance", response_model=ScriptEnhanceResponse)

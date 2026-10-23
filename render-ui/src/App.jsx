@@ -68,11 +68,12 @@ function hyperframesEditUrl(compositionId, variables = {}) {
   return `${editorUrl}&selFile=${encodeURIComponent(composition.file)}&selId=${encodeURIComponent(composition.elementId)}&selSelector=${encodeURIComponent(`#${composition.elementId}`)}`;
 }
 
-function hyperframesBinding(leadCard, sceneTransition) {
+function hyperframesBinding(leadCard, sceneTransition, transitionTitles) {
   return {
     projectId: HYPERFRAMES_PROJECT_ID,
     leadCard,
     sceneTransition,
+    transitionTitles,
   };
 }
 
@@ -355,6 +356,8 @@ export function App() {
   const [ttsApi, setTtsApi] = useState('vibevoice-proxy');
   const [hyperframesLeadCard, setHyperframesLeadCard] = useState('lecrown-lead-card');
   const [hyperframesSceneTransition, setHyperframesSceneTransition] = useState('lecrown-scene-transition');
+  const [hyperframesTransitionTitles, setHyperframesTransitionTitles] = useState({});
+  const [generatingTransitionIndex, setGeneratingTransitionIndex] = useState(null);
   const [renderOptions, setRenderOptions] = useState({});
   const [voiceProviders, setVoiceProviders] = useState([]);
   const [outputName, setOutputName] = useState('video.mp4');
@@ -414,8 +417,8 @@ export function App() {
   const recognizedTitleCard = useMemo(() => titleCardFromScript(script, scriptTitle || title), [script, scriptTitle, title]);
   const scriptSections = useMemo(() => splitScript(recognizedScriptTitle.narration), [recognizedScriptTitle]);
   const selectedHyperframes = useMemo(
-    () => hyperframesBinding(hyperframesLeadCard, hyperframesSceneTransition),
-    [hyperframesLeadCard, hyperframesSceneTransition],
+    () => hyperframesBinding(hyperframesLeadCard, hyperframesSceneTransition, hyperframesTransitionTitles),
+    [hyperframesLeadCard, hyperframesSceneTransition, hyperframesTransitionTitles],
   );
 
   const scenesPayload = useMemo(
@@ -757,6 +760,7 @@ export function App() {
       const savedHyperframes = state.hyperframes || persistedScenes?.hyperframes || {};
       setHyperframesLeadCard(savedHyperframes.leadCard || 'lecrown-lead-card');
       setHyperframesSceneTransition(savedHyperframes.sceneTransition || 'lecrown-scene-transition');
+      setHyperframesTransitionTitles(savedHyperframes.transitionTitles || {});
       setRenderOptions(renderOptionsFromProject(state));
       setYoutubeTitle(state.youtubeTitle || '');
       setYoutubeDescription(state.youtubeDescription || '');
@@ -1334,6 +1338,39 @@ export function App() {
     }
   }
 
+  async function openGeneratedHyperframesTransition(index, scene, nextScene, variables) {
+    if (!nextScene || generatingTransitionIndex !== null) return;
+
+    const hyperframesWindow = window.open('', '_blank');
+    setError('');
+    setGeneratingTransitionIndex(index);
+    setStatus(`Generating transition title ${index + 1} with Fortress Ollama`);
+    try {
+      const result = await request('/v1/hyperframes/transition-title/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          outgoingTitle: scene?.title || `Scene ${index + 1}`,
+          incomingTitle: nextScene.title || `Scene ${index + 2}`,
+          narration: nextScene.narration || '',
+          language,
+        }),
+      });
+      const transitionTitle = result.title || nextScene.title || `Scene ${index + 2}`;
+      setHyperframesTransitionTitles((current) => ({ ...current, [index]: transitionTitle }));
+      const url = hyperframesEditUrl(hyperframesSceneTransition, { ...variables, transition_title: transitionTitle });
+      if (hyperframesWindow) hyperframesWindow.location.assign(url);
+      else window.open(url, '_blank', 'noopener,noreferrer');
+      setStatus(`Transition title generated with ${result.model || 'Fortress Ollama'}`);
+    } catch (err) {
+      if (hyperframesWindow && !hyperframesWindow.closed) hyperframesWindow.close();
+      setError(err.message || String(err));
+      setStatus('Transition title generation failed');
+    } finally {
+      setGeneratingTransitionIndex(null);
+    }
+  }
+
   async function enhanceScript({ withRoomInfo = false } = {}) {
     if (!canEnhance) return;
 
@@ -1808,7 +1845,7 @@ export function App() {
                     incoming_image: imagePreviewByName.get(nextSceneImages[0])?.url || '',
                     outgoing_title: scene?.title || `Scene ${index + 1}`,
                     incoming_title: nextScene?.title || '',
-                    transition_title: nextScene?.title || `Scene ${index + 2}`,
+                    transition_title: hyperframesTransitionTitles[index] || nextScene?.title || `Scene ${index + 2}`,
                   };
                   return (
                     <div className="script-section-card" key={`${index}-${assignedImages.join('-')}`}>
@@ -1819,14 +1856,14 @@ export function App() {
                         </span>
                         <span className="scene-card-controls">
                           {nextScene && (
-                            <a
+                            <button
+                              type="button"
                               className="secondary-action hyperframes-launch"
-                              href={hyperframesEditUrl(hyperframesSceneTransition, transitionVariables)}
-                              target="_blank"
-                              rel="noreferrer"
+                              onClick={() => openGeneratedHyperframesTransition(index, scene, nextScene, transitionVariables)}
+                              disabled={generatingTransitionIndex !== null}
                             >
-                              Edit transition to scene {index + 2}
-                            </a>
+                              {generatingTransitionIndex === index ? 'Generating Ollama title…' : `Generate & edit transition to scene ${index + 2}`}
+                            </button>
                           )}
                           <span className="scene-duration-control">
                             <span>Min length</span>

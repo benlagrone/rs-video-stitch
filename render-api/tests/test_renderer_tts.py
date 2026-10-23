@@ -49,6 +49,7 @@ class RendererTTSTest(TestCase):
                     "projectId": "hyperframes-lecrown-preview",
                     "leadCard": "lecrown-lead-card",
                     "sceneTransition": "lecrown-scene-transition",
+                    "transitionTitles": {"0": "From Entry to Living"},
                 },
             )
 
@@ -62,6 +63,7 @@ class RendererTTSTest(TestCase):
                         "intro": "lecrown-lead-card",
                         "betweenSceneSections": "lecrown-scene-transition",
                     },
+                    "transitionTitles": {"0": "From Entry to Living"},
                 },
             )
 

@@ -139,6 +139,28 @@ class ScriptEnhanceApiTest(TestCase):
         self.assertIn("three-line leader card", payload["prompt"])
         self.assertIn("Genesis 1 (KJV)", payload["prompt"])
 
+    def test_generate_hyperframes_transition_title_uses_scene_context(self):
+        with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(
+            api,
+            "OLLAMA_MODEL",
+            "mixtral:latest",
+        ), mock.patch.object(api.requests, "post", return_value=_FakeDescriptionResponse("Light-Filled Living")) as post:
+            response = asyncio.run(
+                api.generate_hyperframes_transition_title(
+                    api.HyperframesTransitionTitleRequest(
+                        outgoingTitle="Front Entry",
+                        incomingTitle="Living Room",
+                        narration="Step into the bright living space.",
+                    )
+                )
+            )
+
+        self.assertEqual(response.title, "Light-Filled Living")
+        self.assertEqual(response.model, "mixtral:latest")
+        payload = post.call_args.kwargs["json"]
+        self.assertIn("Outgoing scene: Front Entry", payload["prompt"])
+        self.assertIn("Incoming scene: Living Room", payload["prompt"])
+
     def test_enhance_youtube_description_calls_ollama_with_listing_prompt(self):
         complete_description = " ".join(["Property details and viewing information"] * 20)
         with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(

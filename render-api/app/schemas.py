@@ -238,6 +238,18 @@ class LeadCardGenerateResponse(BaseModel):
     model: str
 
 
+class HyperframesTransitionTitleRequest(BaseModel):
+    outgoingTitle: str = Field(min_length=1, max_length=160)
+    incomingTitle: str = Field(min_length=1, max_length=160)
+    narration: str = Field(default="", max_length=1200)
+    language: str = Field(default="en-US", min_length=2, max_length=32)
+
+
+class HyperframesTransitionTitleResponse(BaseModel):
+    title: str
+    model: str
+
+
 class YouTubeDescriptionRequest(BaseModel):
     title: str = ""
     script: str = ""

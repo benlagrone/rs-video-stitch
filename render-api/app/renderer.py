@@ -468,6 +468,7 @@ def _write_hyperframes_manifest(
                     "intro": binding.get("leadCard"),
                     "betweenSceneSections": binding.get("sceneTransition"),
                 },
+                "transitionTitles": binding.get("transitionTitles", {}),
             },
             indent=2,
             sort_keys=True,
