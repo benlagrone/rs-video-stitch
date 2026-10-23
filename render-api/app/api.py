@@ -1465,6 +1465,7 @@ def _listing_pipeline_project(pid: str) -> dict:
     state["script"] = enhanced_script
     assignments = _listing_pipeline_scene_assignments(state, pid)
     scenes = _listing_pipeline_scenes(state, pid, assignments)
+    state["script"] = "\n\n".join(str(scene.get("VO") or "").strip() for scene in scenes if str(scene.get("VO") or "").strip())
     transition_titles: dict[str, str] = {}
     if len(scenes) > 1:
         transition_prompt = _hyperframes_transition_titles_prompt(scenes, str(state.get("language") or "en-US"))

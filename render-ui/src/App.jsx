@@ -106,7 +106,10 @@ function splitScriptIntoSections(script, sectionCount) {
   if (!sentences.length || count === 1) return script.trim();
 
   if (sentences.length < count) {
-    const words = script.replace(/\s+/g, ' ').trim().split(/\s+/).filter(Boolean);
+    const normalized = script.replace(/\s+/g, ' ').trim();
+    const words = /[\u3400-\u9fff]/.test(normalized)
+      ? Array.from(normalized.replace(/\s+/g, ''))
+      : normalized.split(/\s+/).filter(Boolean);
     const sections = Array.from({ length: count }, (_, index) => {
       const start = Math.floor((index * words.length) / count);
       const end = Math.floor(((index + 1) * words.length) / count);
@@ -149,8 +152,11 @@ function splitScriptIntoSections(script, sectionCount) {
 function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations = [], sceneImageAssignments = [], voice, language, ttsApi, hyperframes }) {
   const imageNames = images.map((image) => image.name).filter(Boolean);
   const scriptContent = titleFromScript(script, scriptTitle || title);
-  const paragraphs = splitScript(scriptContent.narration);
   const assignments = sanitizeSceneImageAssignments(sceneImageAssignments, imageNames);
+  const existingParagraphs = splitScript(scriptContent.narration);
+  const paragraphs = assignments.length > existingParagraphs.length
+    ? splitScript(splitScriptIntoSections(scriptContent.narration, assignments.length))
+    : existingParagraphs;
   const scenes = paragraphs.map((paragraph, index) => {
     const assignedImages = assignments[index] || [];
     const sceneTitle = assignedImages.map((image) => imageHeaders[image]).find((header) => header && header.trim()) || '';
