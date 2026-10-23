@@ -57,10 +57,14 @@ const HYPERFRAMES_COMPOSITIONS = {
   },
 };
 
-function hyperframesEditUrl(compositionId) {
+function hyperframesEditUrl(compositionId, variables = {}) {
   const composition = HYPERFRAMES_COMPOSITIONS[compositionId];
   if (!composition) return HYPERFRAMES_EDITOR;
-  return `${HYPERFRAMES_EDITOR}&selFile=${encodeURIComponent(composition.file)}&selId=${encodeURIComponent(composition.elementId)}&selSelector=${encodeURIComponent(`#${composition.elementId}`)}`;
+  const variableParams = Object.entries(variables)
+    .filter(([, value]) => typeof value === 'string' && value.trim())
+    .map(([key, value]) => `&hf_${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('');
+  return `${HYPERFRAMES_EDITOR}&selFile=${encodeURIComponent(composition.file)}&selId=${encodeURIComponent(composition.elementId)}&selSelector=${encodeURIComponent(`#${composition.elementId}`)}${variableParams}`;
 }
 
 function hyperframesBinding(leadCard, sceneTransition) {
@@ -1795,7 +1799,16 @@ export function App() {
               <div className="script-section-list">
                 {scriptSections.map((section, index) => {
                   const scene = scenesPayload.scenes[index];
+                  const nextScene = scenesPayload.scenes[index + 1];
                   const assignedImages = scene?.images || [];
+                  const nextSceneImages = nextScene?.images || [];
+                  const transitionVariables = {
+                    outgoing_image: imagePreviewByName.get(assignedImages.at(-1))?.url || '',
+                    incoming_image: imagePreviewByName.get(nextSceneImages[0])?.url || '',
+                    outgoing_title: scene?.title || `Scene ${index + 1}`,
+                    incoming_title: nextScene?.title || '',
+                    transition_title: nextScene?.title || `Scene ${index + 2}`,
+                  };
                   return (
                     <div className="script-section-card" key={`${index}-${assignedImages.join('-')}`}>
                       <div className="script-section-meta">
@@ -1804,14 +1817,16 @@ export function App() {
                           {assignedImages.length ? ` - ${assignedImages.join(', ')}` : ''}
                         </span>
                         <span className="scene-card-controls">
-                          <a
-                            className="secondary-action hyperframes-launch"
-                            href={hyperframesEditUrl(hyperframesSceneTransition)}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Edit selected transition
-                          </a>
+                          {nextScene && (
+                            <a
+                              className="secondary-action hyperframes-launch"
+                              href={hyperframesEditUrl(hyperframesSceneTransition, transitionVariables)}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Edit transition to scene {index + 2}
+                            </a>
+                          )}
                           <span className="scene-duration-control">
                             <span>Min length</span>
                             <input
