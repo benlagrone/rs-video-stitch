@@ -1217,12 +1217,36 @@ export function App() {
     }
   }
 
+  async function startYoutubeAuthorization() {
+    const result = await request(`/v1/youtube/auth/start?profile=${encodeURIComponent(youtubeProfile)}`, { method: 'POST' });
+    setYoutubeAuth((current) => ({ ...(current || {}), ...result }));
+    return result;
+  }
+
+  async function copyYoutubeAuthorizationLink(authUrl) {
+    const copyUrl = authUrl || youtubeAuth?.authUrl;
+    if (!copyUrl) return;
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(copyUrl);
+      return;
+    }
+    const temporaryField = document.createElement('textarea');
+    temporaryField.value = copyUrl;
+    temporaryField.setAttribute('readonly', '');
+    temporaryField.style.position = 'fixed';
+    temporaryField.style.opacity = '0';
+    document.body.appendChild(temporaryField);
+    temporaryField.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(temporaryField);
+    if (!copied) throw new Error('Browser blocked clipboard access');
+  }
+
   async function connectYoutube() {
     setError('');
     setIsConnectingYoutube(true);
     try {
-      const result = await request(`/v1/youtube/auth/start?profile=${encodeURIComponent(youtubeProfile)}`, { method: 'POST' });
-      setYoutubeAuth((current) => ({ ...(current || {}), ...result }));
+      const result = await startYoutubeAuthorization();
       window.open(result.authUrl, '_blank', 'noopener,noreferrer');
       setStatus(result.manualCallback ? 'Authorize YouTube, then paste the callback URL' : 'Authorize YouTube in the new browser tab');
       if (!result.manualCallback) {
@@ -1246,13 +1270,17 @@ export function App() {
     }
   }
 
-  async function copyYoutubeAuthorizationLink() {
-    if (!youtubeAuth?.authUrl) return;
+  async function connectYoutubeInExternalBrowser() {
+    setError('');
+    setIsConnectingYoutube(true);
     try {
-      await navigator.clipboard.writeText(youtubeAuth.authUrl);
+      const result = await startYoutubeAuthorization();
+      await copyYoutubeAuthorizationLink(result.authUrl);
       setStatus('YouTube authorization link copied for your external browser');
     } catch (err) {
-      setError(`Could not copy the authorization link: ${err.message || String(err)}`);
+      setError(`Could not prepare the authorization link: ${err.message || String(err)}`);
+    } finally {
+      setIsConnectingYoutube(false);
     }
   }
 
@@ -2315,6 +2343,9 @@ export function App() {
                   <button type="button" onClick={connectYoutube} disabled={isConnectingYoutube}>
                     {isConnectingYoutube ? 'Connecting' : 'Connect YouTube'}
                   </button>
+                  <button type="button" onClick={connectYoutubeInExternalBrowser} disabled={isConnectingYoutube}>
+                    Connect in external browser
+                  </button>
                   <button type="button" onClick={uploadYoutube} disabled={isUploadingYoutube || !youtubeAuth?.authenticated}>
                     {isUploadingYoutube ? 'Uploading' : 'Upload to YouTube'}
                   </button>
@@ -2328,7 +2359,7 @@ export function App() {
                 {youtubeAuth?.authUrl && !youtubeAuth?.authenticated && (
                   <div className="youtube-auth-link">
                     <p>Use your external browser profile if the in-app Google tab cannot sign in.</p>
-                    <button type="button" onClick={copyYoutubeAuthorizationLink}>Copy authorization link</button>
+                    <button type="button" onClick={() => copyYoutubeAuthorizationLink().then(() => setStatus('YouTube authorization link copied for your external browser')).catch((err) => setError(`Could not copy the authorization link: ${err.message || String(err)}`))}>Copy authorization link</button>
                   </div>
                 )}
                 {youtubeAuth?.manualCallback && !youtubeAuth?.authenticated && (
