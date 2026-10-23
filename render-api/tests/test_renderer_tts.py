@@ -118,6 +118,37 @@ class RendererTTSTest(TestCase):
             self.assertIn("lecrown-lead-card.html", commands[0][commands[0].index("--composition") + 1])
             self.assertIn("anullsrc=channel_layout=stereo:sample_rate=48000", commands[1])
 
+    def test_hyperframes_clip_stages_file_images_as_root_relative_assets(self):
+        commands = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_dir = root / "hyperframes"
+            executable = project_dir / "node_modules/.bin/hyperframes"
+            executable.parent.mkdir(parents=True)
+            executable.write_text("", encoding="utf-8")
+            image = root / "listing.jpg"
+            image.write_bytes(b"image")
+            output = root / "intro.mp4"
+
+            def fake_run(command, log=None):
+                commands.append(command)
+                Path(command[command.index("--output") + 1] if "--output" in command else command[-1]).write_bytes(b"video")
+
+            with mock.patch.object(renderer, "HYPERFRAMES_PROJECT_DIR", project_dir), mock.patch.object(renderer, "run", side_effect=fake_run):
+                renderer._render_hyperframes_clip(
+                    "lecrown-lead-card",
+                    {"image": image.as_uri()},
+                    output,
+                    30,
+                    "medium",
+                    18,
+                    None,
+                )
+
+            variables = json.loads(commands[0][commands[0].index("--variables") + 1])
+            self.assertRegex(variables["image"], r"^assets/render/[0-9a-f]+/image\.jpg$")
+            self.assertFalse((project_dir / variables["image"]).exists())
+
     def test_bundled_font_picker_resolves_exact_selected_face(self):
         renderer._find_font_by_family.cache_clear()
         bold = renderer._find_font_by_family("EB Garamond Bold")

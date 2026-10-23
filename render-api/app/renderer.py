@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import textwrap
 import time
 import unicodedata
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import unquote, urlparse
 
 import requests
 
@@ -49,6 +52,7 @@ HYPERFRAMES_COMPOSITIONS = {
     "lecrown-lead-card": "compositions/lecrown-lead-card.html",
     "lecrown-scene-transition": "compositions/lecrown-scene-transition.html",
 }
+_HYPERFRAMES_IMAGE_VARIABLES = {"image", "outgoing_image", "incoming_image"}
 
 _FONT_ENV_VAR = "TITLE_FONT_FILE"
 _DEFAULT_FONT_RELATIVE = Path("media") / "EB_Garamond" / "EBGaramond-VariableFont_wght.ttf"
@@ -490,6 +494,26 @@ def _write_hyperframes_manifest(
     return manifest_path
 
 
+def _stage_hyperframes_image_variables(variables: Dict[str, str]) -> tuple[Dict[str, str], Optional[Path]]:
+    """Expose project images as root-relative HyperFrames assets for headless Chromium."""
+    staged_variables = dict(variables)
+    staging_dir: Optional[Path] = None
+    for name in _HYPERFRAMES_IMAGE_VARIABLES:
+        value = str(staged_variables.get(name) or "")
+        if not value.startswith("file://"):
+            continue
+        source = Path(unquote(urlparse(value).path))
+        if not source.is_file():
+            raise FileNotFoundError(f"HyperFrames image source is missing: {source}")
+        if staging_dir is None:
+            staging_dir = HYPERFRAMES_PROJECT_DIR / "assets" / "render" / uuid.uuid4().hex
+            staging_dir.mkdir(parents=True, exist_ok=True)
+        destination = staging_dir / f"{name}{source.suffix.lower() or '.jpg'}"
+        shutil.copy2(source, destination)
+        staged_variables[name] = destination.relative_to(HYPERFRAMES_PROJECT_DIR).as_posix()
+    return staged_variables, staging_dir
+
+
 def _render_hyperframes_clip(
     composition_id: str,
     variables: Dict[str, str],
@@ -508,6 +532,7 @@ def _render_hyperframes_clip(
             "HyperFrames renderer is unavailable: the packaged composition project is missing"
         )
 
+    render_variables, staging_dir = _stage_hyperframes_image_variables(variables)
     silent_destination = destination.with_name(f"{destination.stem}.silent.mp4")
     command = [
         str(HYPERFRAMES_PROJECT_DIR / "node_modules/.bin/hyperframes"),
@@ -526,36 +551,40 @@ def _render_hyperframes_clip(
         "--low-memory-mode",
         "--no-browser-gpu",
         "--variables",
-        json.dumps(variables, ensure_ascii=False),
+        json.dumps(render_variables, ensure_ascii=False),
     ]
-    _log(log, f"Rendering HyperFrames composition {composition_id}")
-    run(command, log)
-    if not silent_destination.exists():
-        raise RuntimeError(f"HyperFrames did not produce {silent_destination.name}")
+    try:
+        _log(log, f"Rendering HyperFrames composition {composition_id}")
+        run(command, log)
+        if not silent_destination.exists():
+            raise RuntimeError(f"HyperFrames did not produce {silent_destination.name}")
 
-    run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(silent_destination),
-            "-f",
-            "lavfi",
-            "-i",
-            "anullsrc=channel_layout=stereo:sample_rate=48000",
-            "-c:v",
-            "libx264",
-            "-preset",
-            preset,
-            "-crf",
-            str(crf),
-            "-c:a",
-            "aac",
-            "-shortest",
-            str(destination),
-        ],
-        log,
-    )
+        run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(silent_destination),
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=channel_layout=stereo:sample_rate=48000",
+                "-c:v",
+                "libx264",
+                "-preset",
+                preset,
+                "-crf",
+                str(crf),
+                "-c:a",
+                "aac",
+                "-shortest",
+                str(destination),
+            ],
+            log,
+        )
+    finally:
+        if staging_dir:
+            shutil.rmtree(staging_dir, ignore_errors=True)
     return destination
 
 
