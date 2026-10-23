@@ -396,6 +396,7 @@ def list_projects() -> List[Dict[str, Any]]:
             {
                 "projectId": pid,
                 "title": title,
+                "propertyAddress": state.get("propertyAddress") or "",
                 "directory": root.name,
                 "updatedAt": updated_at,
                 "imageCount": len(list_asset_files(pid, "images")),

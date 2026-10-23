@@ -232,6 +232,7 @@ function projectStateFromValues(values) {
   return {
     schemaVersion: 1,
     title: values.title,
+    propertyAddress: values.propertyAddress,
     projectId: values.resolvedProjectId,
     script: values.script,
     targetSeconds: Number(values.targetSeconds) || 60,
@@ -280,6 +281,7 @@ export function App() {
   const [apiBase, setApiBase] = useState(localStorage.getItem('renderUi.apiBase') || defaultApiBase);
   const [authToken, setAuthToken] = useState(localStorage.getItem('renderUi.authToken') || '');
   const [title, setTitle] = useState('Listing video');
+  const [propertyAddress, setPropertyAddress] = useState('');
   const [projectId, setProjectId] = useState('');
   const [script, setScript] = useState('Welcome to this property. The opening view should establish the home and the neighborhood.\n\nStep inside to highlight the living spaces, natural light, and everyday comfort.\n\nFinish with the strongest selling points and a clear invitation to schedule a showing.');
   const [targetSeconds, setTargetSeconds] = useState(60);
@@ -591,6 +593,7 @@ export function App() {
 
   function resetEditor() {
     setTitle('Listing video');
+    setPropertyAddress('');
     setProjectId('');
     setScript('Welcome to this property. The opening view should establish the home and the neighborhood.\n\nStep inside to highlight the living spaces, natural light, and everyday comfort.\n\nFinish with the strongest selling points and a clear invitation to schedule a showing.');
     setTargetSeconds(60);
@@ -671,6 +674,7 @@ export function App() {
         .filter(Boolean)
 
       setTitle(state.title || pid);
+      setPropertyAddress(state.propertyAddress || '');
       setProjectId(pid);
       setScript(scriptFromProject(state, persistedScenes));
       setTargetSeconds(state.targetSeconds || 60);
@@ -985,6 +989,7 @@ export function App() {
         body: JSON.stringify({
           state: projectStateFromValues({
             title,
+            propertyAddress,
             resolvedProjectId,
             script,
             targetSeconds,
@@ -1482,7 +1487,8 @@ export function App() {
               {filteredProjects.map((project) => (
                 <article className="project-card" key={project.projectId}>
                   <div>
-                    <h3>{project.title || project.projectId}</h3>
+                    <h3>{project.propertyAddress || project.title || project.projectId}</h3>
+                    {project.propertyAddress && project.title && <p className="project-video-title">Video: {project.title}</p>}
                     <p>{project.projectId}</p>
                   </div>
                   <dl>
@@ -1590,7 +1596,8 @@ export function App() {
           <label>Bearer token<input value={authToken} onChange={(event) => setAuthToken(event.target.value)} placeholder="optional for local development" type="password" /></label>
 
           <h2>Project</h2>
-          <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+          <label>Property address<input value={propertyAddress} onChange={(event) => setPropertyAddress(event.target.value)} placeholder="Street address, city, state ZIP" /></label>
+          <label>Video title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Editable video title" /></label>
           <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder={resolvedProjectId} /></label>
           <label>Output file<input value={outputName} onChange={(event) => setOutputName(event.target.value)} /></label>
           <div className="project-save-meta">
