@@ -7,6 +7,7 @@ import {
   sceneAssignmentsFromRoomInfo,
   sanitizeSceneImageAssignments,
   sceneImageAssignmentsFromProject,
+  titleCardFromScript,
   titleFromScript,
 } from './projectState.js';
 
@@ -29,6 +30,22 @@ test('recognizes an explicit mixed-case title from intake metadata', () => {
 
   assert.equal(parsed.title, 'Heights Home | No HOA');
   assert.equal(parsed.narration, 'Welcome to the property.');
+});
+
+test('does not consume Mandarin narration after an explicit title', () => {
+  const parsed = titleFromScript('休斯顿 Heights 稀缺大地块 | 无 HOA\n\n欢迎来到这套房产。', '休斯顿 Heights 稀缺大地块 | 无 HOA');
+
+  assert.equal(parsed.narration, '欢迎来到这套房产。');
+});
+
+test('uses text before the first pipe as the video title and later segments as title-card lines', () => {
+  const script = 'RARE OVERSIZED LOT IN THE HEIGHTS | 16,281 SQ.\n\nFT.\n\n| NO HOA | GARAGE APARTMENT\n\nWelcome to the property.';
+
+  assert.deepEqual(titleCardFromScript(script), {
+    mainTitle: 'RARE OVERSIZED LOT IN THE HEIGHTS',
+    lines: ['16,281 SQ. FT.', 'NO HOA', 'GARAGE APARTMENT'],
+  });
+  assert.equal(titleFromScript(script).narration, 'Welcome to the property.');
 });
 
 test('groups Room Renamer labels into three-image scene assignments', () => {
@@ -77,12 +94,12 @@ test('keeps complete saved scene assignments', () => {
   assert.deepEqual(assignments, [['saved-front.jpg'], ['saved-kitchen.jpg']]);
 });
 
-test('preserves up to five saved intro lines', () => {
+test('preserves up to six saved intro lines', () => {
   const lines = leadLinesFromState({
-    introLines: ['7131 Harmony Cove', 'LeCrown Properties', 'Jie Huang', '经纪人'],
+    introLines: ['7131 Harmony Cove', 'LeCrown Properties', 'Jie Huang', '经纪人', '832-798-3991', '预约看房'],
   });
 
-  assert.deepEqual(lines, ['7131 Harmony Cove', 'LeCrown Properties', 'Jie Huang', '经纪人', '']);
+  assert.deepEqual(lines, ['7131 Harmony Cove', 'LeCrown Properties', 'Jie Huang', '经纪人', '832-798-3991', '预约看房']);
 });
 
 test('restores the Mandarin title font when saved render options are missing', () => {

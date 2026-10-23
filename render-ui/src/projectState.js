@@ -1,4 +1,4 @@
-const MAX_INTRO_LINES = 5;
+const MAX_INTRO_LINES = 6;
 
 const MANDARIN_TITLE_STYLE = {
   fill: '#ffffff',
@@ -19,9 +19,33 @@ export function titleFromScript(script, explicitTitle = '') {
     && letters.some((letter) => letter !== letter.toLowerCase())
     && letters.every((letter) => letter === letter.toUpperCase());
   const isExplicitTitle = candidate === String(explicitTitle || '').trim();
+  const titleSections = [];
+
+  if (isAllCapsTitle || isExplicitTitle) {
+    titleSections.push(candidate);
+    for (let index = 1; index < sections.length; index += 1) {
+      const sectionLetters = sections[index].match(/\p{L}/gu) || [];
+      const isAllCapsContinuation = sectionLetters.length > 0
+        && sectionLetters.some((letter) => letter !== letter.toLowerCase())
+        && sectionLetters.every((letter) => letter === letter.toUpperCase());
+      if (!isAllCapsContinuation) break;
+      titleSections.push(sections[index]);
+    }
+  }
+
+  const title = titleSections.join(' ').replace(/\s+/g, ' ').trim();
   return {
-    title: (isAllCapsTitle || isExplicitTitle) ? candidate : '',
-    narration: (isAllCapsTitle || isExplicitTitle) ? sections.slice(1).join('\n\n') : sections.join('\n\n'),
+    title,
+    narration: titleSections.length ? sections.slice(titleSections.length).join('\n\n') : sections.join('\n\n'),
+  };
+}
+
+export function titleCardFromScript(script, explicitTitle = '') {
+  const { title } = titleFromScript(script, explicitTitle);
+  const segments = title.split('|').map((segment) => segment.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  return {
+    mainTitle: segments[0] || title,
+    lines: segments.slice(1),
   };
 }
 

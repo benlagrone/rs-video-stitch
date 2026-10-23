@@ -6,6 +6,7 @@ import {
   sceneAssignmentsFromRoomInfo,
   sanitizeSceneImageAssignments,
   sceneImageAssignmentsFromProject,
+  titleCardFromScript,
   titleFromScript,
 } from './projectState.js';
 import {
@@ -115,9 +116,9 @@ function splitScriptIntoSections(script, sectionCount) {
   return sections.filter(Boolean).join('\n\n');
 }
 
-function buildScenes({ title, script, images, imageHeaders, imageRoomInfo, sceneDurations = [], sceneImageAssignments = [], voice, language, ttsApi }) {
+function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations = [], sceneImageAssignments = [], voice, language, ttsApi }) {
   const imageNames = images.map((image) => image.name).filter(Boolean);
-  const scriptContent = titleFromScript(script, title);
+  const scriptContent = titleFromScript(script, scriptTitle || title);
   const paragraphs = splitScript(scriptContent.narration);
   const assignments = sanitizeSceneImageAssignments(sceneImageAssignments, imageNames);
   const scenes = paragraphs.map((paragraph, index) => {
@@ -141,7 +142,7 @@ function buildScenes({ title, script, images, imageHeaders, imageRoomInfo, scene
   });
 
   return {
-    info: { name: title || scriptContent.title || 'MediaStudio upload', source: 'render-ui' },
+    info: { name: title || titleCardFromScript(script, scriptTitle || title).mainTitle || 'MediaStudio upload', source: 'render-ui' },
     vid: { voice: voice || null, lang: language || 'en-US', api: ttsApi || 'azure' },
     scenes,
   };
@@ -241,6 +242,7 @@ function projectStateFromValues(values) {
   return {
     schemaVersion: 1,
     title: values.title,
+    scriptTitle: values.scriptTitle,
     propertyAddress: values.propertyAddress,
     projectId: values.resolvedProjectId,
     script: values.script,
@@ -290,6 +292,7 @@ export function App() {
   const [apiBase, setApiBase] = useState(localStorage.getItem('renderUi.apiBase') || defaultApiBase);
   const [authToken, setAuthToken] = useState(localStorage.getItem('renderUi.authToken') || '');
   const [title, setTitle] = useState('Listing video');
+  const [scriptTitle, setScriptTitle] = useState('');
   const [propertyAddress, setPropertyAddress] = useState('');
   const [projectId, setProjectId] = useState('');
   const [script, setScript] = useState('Welcome to this property. The opening view should establish the home and the neighborhood.\n\nStep inside to highlight the living spaces, natural light, and everyday comfort.\n\nFinish with the strongest selling points and a clear invitation to schedule a showing.');
@@ -307,7 +310,7 @@ export function App() {
   const [isClassifyingRooms, setIsClassifyingRooms] = useState(false);
   const [correctingRoomName, setCorrectingRoomName] = useState('');
   const [useIntro, setUseIntro] = useState(true);
-  const [introLines, setIntroLines] = useState(['', '', '', '', '']);
+  const [introLines, setIntroLines] = useState(['', '', '', '', '', '']);
   const [isGeneratingIntro, setIsGeneratingIntro] = useState(false);
   const [leaderImage, setLeaderImage] = useState(null);
   const [brandAssets, setBrandAssets] = useState([]);
@@ -374,12 +377,13 @@ export function App() {
       `${project.title || ''} ${project.projectId || ''}`.toLocaleLowerCase().includes(query)
     ));
   }, [projectFilter, savedProjects]);
-  const recognizedScriptTitle = useMemo(() => titleFromScript(script, title), [script, title]);
+  const recognizedScriptTitle = useMemo(() => titleFromScript(script, scriptTitle || title), [script, scriptTitle, title]);
+  const recognizedTitleCard = useMemo(() => titleCardFromScript(script, scriptTitle || title), [script, scriptTitle, title]);
   const scriptSections = useMemo(() => splitScript(recognizedScriptTitle.narration), [recognizedScriptTitle]);
 
   const scenesPayload = useMemo(
-    () => buildScenes({ title, script, images, imageHeaders, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi }),
-    [title, script, images, imageHeaders, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi],
+    () => buildScenes({ title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi }),
+    [title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi],
   );
   const unassignedImageCount = useMemo(() => {
     const assigned = new Set(scenesPayload.scenes.flatMap((scene) => scene.images || []));
@@ -603,6 +607,7 @@ export function App() {
 
   function resetEditor() {
     setTitle('Listing video');
+    setScriptTitle('');
     setPropertyAddress('');
     setProjectId('');
     setScript('Welcome to this property. The opening view should establish the home and the neighborhood.\n\nStep inside to highlight the living spaces, natural light, and everyday comfort.\n\nFinish with the strongest selling points and a clear invitation to schedule a showing.');
@@ -616,7 +621,7 @@ export function App() {
     setDraggedImageName('');
     setSelectedImageName('');
     setUseIntro(true);
-    setIntroLines(['', '', '', '', '']);
+    setIntroLines(['', '', '', '', '', '']);
     setLeaderImage(null);
     setUseLogo(true);
     setLogoImage(null);
@@ -684,6 +689,7 @@ export function App() {
         .filter(Boolean)
 
       setTitle(state.title || pid);
+      setScriptTitle(state.scriptTitle || '');
       setPropertyAddress(state.propertyAddress || '');
       setProjectId(pid);
       setScript(scriptFromProject(state, persistedScenes));
@@ -696,7 +702,11 @@ export function App() {
       setImageHeaders(imageHeadersFromProject(state, persistedScenes));
       setImageRoomInfo(state.imageRoomInfo || {});
       setUseIntro(state.useIntro ?? true);
-      setIntroLines(leadLinesFromState(state, ''));
+      const parsedTitleCard = titleCardFromScript(scriptFromProject(state, persistedScenes), state.scriptTitle || state.title);
+      const savedLeadLines = leadLinesFromState(state, '');
+      setIntroLines(savedLeadLines.some(Boolean)
+        ? savedLeadLines
+        : Array.from({ length: 6 }, (_, index) => [parsedTitleCard.mainTitle, ...parsedTitleCard.lines][index] || ''));
       setLeaderImage(leaderAsset ? persistedItem(leaderAsset, apiBase) : null);
       setUseLogo(state.useLogo ?? true);
       setLogoChoice(state.logoChoice || 'logophone.png');
@@ -999,6 +1009,7 @@ export function App() {
         body: JSON.stringify({
           state: projectStateFromValues({
             title,
+            scriptTitle,
             propertyAddress,
             resolvedProjectId,
             script,
@@ -1270,8 +1281,8 @@ export function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, script, currentLines: introLines }),
       });
-      const lines = Array.isArray(result.lines) ? result.lines.slice(0, 5) : [];
-      setIntroLines(Array.from({ length: 5 }, (_, index) => lines[index] || ''));
+      const lines = Array.isArray(result.lines) ? result.lines.slice(0, 6) : [];
+      setIntroLines(Array.from({ length: 6 }, (_, index) => lines[index] || ''));
       setUseIntro(true);
       setStatus(`Lead card generated with ${result.model || 'Fortress Ollama'}`);
     } catch (err) {
@@ -1621,7 +1632,7 @@ export function App() {
           <h2>Project</h2>
           <label>Property address<input value={propertyAddress} onChange={(event) => setPropertyAddress(event.target.value)} placeholder="Street address, city, state ZIP" /></label>
           <label>Video title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Editable video title" /></label>
-          {recognizedScriptTitle.title && <p className="hint">Script title detected: <strong>{recognizedScriptTitle.title}</strong>. It is used on the title card and excluded from narration.</p>}
+          {recognizedScriptTitle.title && <p className="hint">Title detected: <strong>{recognizedTitleCard.mainTitle}</strong>. Each segment after <strong>|</strong> becomes a title-card line and is excluded from narration.</p>}
           <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder={resolvedProjectId} /></label>
           <label>Output file<input value={outputName} onChange={(event) => setOutputName(event.target.value)} /></label>
           <div className="project-save-meta">
@@ -1669,6 +1680,7 @@ export function App() {
           <label>Lead card line 3<input value={introLines[2] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 2, event.target.value))} placeholder="Location, offer, or callout" /></label>
           <label>Lead card line 4<input value={introLines[3] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 3, event.target.value))} placeholder="Optional additional line" /></label>
           <label>Lead card line 5<input value={introLines[4] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 4, event.target.value))} placeholder="Optional additional line" /></label>
+          <label>Lead card line 6<input value={introLines[5] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 5, event.target.value))} placeholder="Optional additional line" /></label>
           <div className="compact-upload">
             <input id="leader-upload" type="file" accept="image/*" onChange={(event) => handleLeaderSelection(event.target.files)} />
             <label htmlFor="leader-upload">Leader Image</label>
