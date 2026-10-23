@@ -449,6 +449,34 @@ LogFunc = Callable[[str], None]
 ProgressFunc = Callable[[str, float], None]
 
 
+def _write_hyperframes_manifest(
+    output_dir: Path,
+    output_name: str,
+    binding: Any,
+) -> Optional[Path]:
+    """Persist the composition-to-video binding alongside its rendered output."""
+    if not isinstance(binding, dict) or not binding:
+        return None
+
+    manifest_path = output_dir / f"{Path(output_name).stem}.hyperframes.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "compositionProject": binding.get("projectId"),
+                "output": output_name,
+                "slots": {
+                    "intro": binding.get("leadCard"),
+                    "betweenSceneSections": binding.get("sceneTransition"),
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
 def _log(log: Optional[LogFunc], message: str) -> None:
     if log:
         log(message)
@@ -1703,6 +1731,11 @@ def render_project(
         # Sample the finished output so the thumbnail contains the same branding
         # overlay and layout as the published video.
         _generate_youtube_thumbnail(final_path, thumbnail_file, log)
+
+    hyperframes_binding = opts.get("hyperframes") or scenes_doc.get("hyperframes")
+    hyperframes_manifest = _write_hyperframes_manifest(output_dir, output_name, hyperframes_binding)
+    if hyperframes_manifest:
+        _log(log, f"HyperFrames render map: {hyperframes_manifest.name}")
 
     update("FINALIZE", 0.98)
     return final_path

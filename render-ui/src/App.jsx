@@ -43,8 +43,32 @@ const DEFAULT_RENDER_OPTIONS = {
 
 const HYPERFRAMES_EDITOR = 'http://localhost:3002/#project/hyperframes-lecrown-preview?v=1&t=7.2&tab=design';
 
-function hyperframesEditUrl(file, elementId) {
-  return `${HYPERFRAMES_EDITOR}&selFile=${encodeURIComponent(file)}&selId=${encodeURIComponent(elementId)}&selSelector=${encodeURIComponent(`#${elementId}`)}`;
+const HYPERFRAMES_PROJECT_ID = 'hyperframes-lecrown-preview';
+const HYPERFRAMES_COMPOSITIONS = {
+  'lecrown-lead-card': {
+    file: 'compositions/lead-card.html',
+    elementId: 'lead-headline',
+    label: 'Opening title card',
+  },
+  'lecrown-scene-transition': {
+    file: 'compositions/lecrown-scene-transition.html',
+    elementId: 'transition-title',
+    label: 'Between scene sections',
+  },
+};
+
+function hyperframesEditUrl(compositionId) {
+  const composition = HYPERFRAMES_COMPOSITIONS[compositionId];
+  if (!composition) return HYPERFRAMES_EDITOR;
+  return `${HYPERFRAMES_EDITOR}&selFile=${encodeURIComponent(composition.file)}&selId=${encodeURIComponent(composition.elementId)}&selSelector=${encodeURIComponent(`#${composition.elementId}`)}`;
+}
+
+function hyperframesBinding(leadCard, sceneTransition) {
+  return {
+    projectId: HYPERFRAMES_PROJECT_ID,
+    leadCard,
+    sceneTransition,
+  };
 }
 
 function slugify(value) {
@@ -116,7 +140,7 @@ function splitScriptIntoSections(script, sectionCount) {
   return sections.filter(Boolean).join('\n\n');
 }
 
-function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations = [], sceneImageAssignments = [], voice, language, ttsApi }) {
+function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations = [], sceneImageAssignments = [], voice, language, ttsApi, hyperframes }) {
   const imageNames = images.map((image) => image.name).filter(Boolean);
   const scriptContent = titleFromScript(script, scriptTitle || title);
   const paragraphs = splitScript(scriptContent.narration);
@@ -144,6 +168,7 @@ function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageRo
   return {
     info: { name: title || titleCardFromScript(script, scriptTitle || title).mainTitle || 'MediaStudio upload', source: 'render-ui' },
     vid: { voice: voice || null, lang: language || 'en-US', api: ttsApi || 'azure' },
+    hyperframes,
     scenes,
   };
 }
@@ -266,6 +291,7 @@ function projectStateFromValues(values) {
     voice: values.voice,
     language: values.language,
     ttsApi: values.ttsApi,
+    hyperframes: values.hyperframes,
     renderOptions: values.renderOptions,
     youtubeTitle: values.youtubeTitle,
     youtubeDescription: values.youtubeDescription,
@@ -322,6 +348,8 @@ export function App() {
   const [voice, setVoice] = useState('Carter');
   const [language, setLanguage] = useState('en-US');
   const [ttsApi, setTtsApi] = useState('vibevoice-proxy');
+  const [hyperframesLeadCard, setHyperframesLeadCard] = useState('lecrown-lead-card');
+  const [hyperframesSceneTransition, setHyperframesSceneTransition] = useState('lecrown-scene-transition');
   const [renderOptions, setRenderOptions] = useState({});
   const [voiceProviders, setVoiceProviders] = useState([]);
   const [outputName, setOutputName] = useState('video.mp4');
@@ -380,10 +408,14 @@ export function App() {
   const recognizedScriptTitle = useMemo(() => titleFromScript(script, scriptTitle || title), [script, scriptTitle, title]);
   const recognizedTitleCard = useMemo(() => titleCardFromScript(script, scriptTitle || title), [script, scriptTitle, title]);
   const scriptSections = useMemo(() => splitScript(recognizedScriptTitle.narration), [recognizedScriptTitle]);
+  const selectedHyperframes = useMemo(
+    () => hyperframesBinding(hyperframesLeadCard, hyperframesSceneTransition),
+    [hyperframesLeadCard, hyperframesSceneTransition],
+  );
 
   const scenesPayload = useMemo(
-    () => buildScenes({ title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi }),
-    [title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi],
+    () => buildScenes({ title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi, hyperframes: selectedHyperframes }),
+    [title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi, selectedHyperframes],
   );
   const unassignedImageCount = useMemo(() => {
     const assigned = new Set(scenesPayload.scenes.flatMap((scene) => scene.images || []));
@@ -717,6 +749,9 @@ export function App() {
       const savedLanguage = state.language || language;
       setLanguage(savedLanguage);
       setTtsApi(state.ttsApi || ttsApi);
+      const savedHyperframes = state.hyperframes || persistedScenes?.hyperframes || {};
+      setHyperframesLeadCard(savedHyperframes.leadCard || 'lecrown-lead-card');
+      setHyperframesSceneTransition(savedHyperframes.sceneTransition || 'lecrown-scene-transition');
       setRenderOptions(renderOptionsFromProject(state));
       setYoutubeTitle(state.youtubeTitle || '');
       setYoutubeDescription(state.youtubeDescription || '');
@@ -1032,6 +1067,7 @@ export function App() {
             voice,
             language,
             ttsApi,
+            hyperframes: selectedHyperframes,
             renderOptions,
             youtubeTitle,
             youtubeDescription: overrides.youtubeDescription ?? youtubeDescription,
@@ -1407,6 +1443,7 @@ export function App() {
             tts: voice || null,
             ttsLanguage: language || null,
             ttsApi,
+            hyperframes: selectedHyperframes,
             introEnabled: useIntro,
             introTitle: resolvedIntroTitle,
             introLeaderImage: leaderImage ? leaderImage.name : null,
@@ -1673,7 +1710,21 @@ export function App() {
               {isGeneratingIntro ? 'Generating' : 'Generate with Ollama'}
             </button>
           </div>
-          <a className="secondary-action hyperframes-launch" href={hyperframesEditUrl('compositions/lead-card.html', 'lead-headline')} target="_blank" rel="noreferrer">Edit title card in HyperFrames</a>
+          <div className="hyperframes-binding">
+            <strong>HyperFrames render map</strong>
+            <label>Opening title card
+              <select value={hyperframesLeadCard} onChange={(event) => setHyperframesLeadCard(event.target.value)}>
+                <option value="lecrown-lead-card">lecrown-lead-card</option>
+              </select>
+            </label>
+            <label>Between scene sections
+              <select value={hyperframesSceneTransition} onChange={(event) => setHyperframesSceneTransition(event.target.value)}>
+                <option value="lecrown-scene-transition">lecrown-scene-transition</option>
+              </select>
+            </label>
+            <p>These IDs are saved with the project and recorded in every render manifest.</p>
+            <a className="secondary-action hyperframes-launch" href={hyperframesEditUrl(hyperframesLeadCard)} target="_blank" rel="noreferrer">Edit selected title card</a>
+          </div>
           <label className="check-row"><input type="checkbox" checked={useIntro} onChange={(event) => setUseIntro(event.target.checked)} />Use 1 second leader card</label>
           <label>Lead card line 1<input value={introLines[0] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 0, event.target.value))} placeholder="Primary title line" /></label>
           <label>Lead card line 2<input value={introLines[1] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 1, event.target.value))} placeholder="Subtitle or property detail" /></label>
@@ -1755,11 +1806,11 @@ export function App() {
                         <span className="scene-card-controls">
                           <a
                             className="secondary-action hyperframes-launch"
-                            href={hyperframesEditUrl('compositions/lecrown-scene-transition.html', 'transition-title')}
+                            href={hyperframesEditUrl(hyperframesSceneTransition)}
                             target="_blank"
                             rel="noreferrer"
                           >
-                            Edit transition
+                            Edit selected transition
                           </a>
                           <span className="scene-duration-control">
                             <span>Min length</span>

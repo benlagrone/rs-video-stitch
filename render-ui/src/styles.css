@@ -1385,6 +1385,27 @@ textarea {
   white-space: nowrap;
 }
 
+.hyperframes-binding {
+  background: var(--accent-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.hyperframes-binding strong {
+  color: var(--accent-strong);
+  font-size: 13px;
+}
+
+.hyperframes-binding p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+}
+
 .primary-action:hover:not(:disabled),
 .secondary-action:hover:not(:disabled) {
   background: var(--accent-strong);

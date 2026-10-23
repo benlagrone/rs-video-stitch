@@ -39,6 +39,32 @@ def _setup_project(tmpdir: Path, api_value: str, voice: str = "custom-voice") ->
 
 
 class RendererTTSTest(TestCase):
+    def test_hyperframes_manifest_maps_compositions_to_video_slots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            manifest = renderer._write_hyperframes_manifest(
+                output_dir,
+                "listing.mp4",
+                {
+                    "projectId": "hyperframes-lecrown-preview",
+                    "leadCard": "lecrown-lead-card",
+                    "sceneTransition": "lecrown-scene-transition",
+                },
+            )
+
+            self.assertEqual(manifest, output_dir / "listing.hyperframes.json")
+            self.assertEqual(
+                json.loads(manifest.read_text(encoding="utf-8")),
+                {
+                    "compositionProject": "hyperframes-lecrown-preview",
+                    "output": "listing.mp4",
+                    "slots": {
+                        "intro": "lecrown-lead-card",
+                        "betweenSceneSections": "lecrown-scene-transition",
+                    },
+                },
+            )
+
     def test_bundled_font_picker_resolves_exact_selected_face(self):
         renderer._find_font_by_family.cache_clear()
         bold = renderer._find_font_by_family("EB Garamond Bold")
