@@ -4,7 +4,8 @@ from __future__ import annotations
 import datetime as dt
 import time
 import traceback
-from threading import Event
+import uuid
+from threading import Event, Thread
 from sqlalchemy import select
 from app.db import SessionLocal
 from app.models import Artifact, Job
@@ -19,6 +20,8 @@ from app.bible_workflow import (
 from app.storage import ROOT as STORAGE_ROOT, job_log_path, p_input
 
 POLL_INTERVAL = 1.0
+JOB_LEASE_SECONDS = 120
+JOB_HEARTBEAT_SECONDS = 15
 
 
 def _timestamp() -> str:
@@ -51,11 +54,76 @@ def _sleep(stop_event: Event | None, seconds: float) -> bool:
     return stop_event.wait(seconds)
 
 
+def _lease_expiry(now: dt.datetime | None = None) -> dt.datetime:
+    return (now or dt.datetime.utcnow()) + dt.timedelta(seconds=JOB_LEASE_SECONDS)
+
+
+def recover_orphaned_jobs(session, worker_id: str, now: dt.datetime | None = None) -> list[str]:
+    """Return only jobs whose prior worker has stopped heartbeating to the queue."""
+    now = now or dt.datetime.utcnow()
+    recovered = session.execute(
+        select(Job).where(
+            Job.status == "RUNNING",
+            Job.lease_expires_at.is_not(None),
+            Job.lease_expires_at < now,
+        )
+    ).scalars().all()
+    for job in recovered:
+        _update_job(
+            session,
+            job,
+            status="QUEUED",
+            stage="RECOVERING",
+            progress=0.0,
+            error=None,
+            worker_id=None,
+            lease_expires_at=None,
+        )
+        log_file, log = _open_log(job.id)
+        log(f"Recovered orphaned job after worker lease expired; requeued by {worker_id}")
+        log_file.close()
+    return [job.id for job in recovered]
+
+
+def recover_unleased_jobs_on_startup(session, worker_id: str) -> list[str]:
+    """Recover jobs left by pre-lease workers during an upgrade or restart."""
+    recovered = session.execute(
+        select(Job).where(Job.status == "RUNNING", Job.lease_expires_at.is_(None))
+    ).scalars().all()
+    for job in recovered:
+        _update_job(
+            session,
+            job,
+            status="QUEUED",
+            stage="RECOVERING",
+            progress=0.0,
+            error=None,
+            worker_id=None,
+        )
+        log_file, log = _open_log(job.id)
+        log(f"Recovered unleased job during worker startup; requeued by {worker_id}")
+        log_file.close()
+    return [job.id for job in recovered]
+
+
+def _heartbeat(job_id: str, worker_id: str, stop_event: Event) -> None:
+    while not stop_event.wait(JOB_HEARTBEAT_SECONDS):
+        with SessionLocal() as session:
+            job = session.get(Job, job_id)
+            if job is None or job.status != "RUNNING" or job.worker_id != worker_id:
+                return
+            _update_job(session, job, lease_expires_at=_lease_expiry())
+
+
 def loop(stop_event: Event | None = None) -> None:
+    worker_id = f"worker-{uuid.uuid4().hex}"
+    with SessionLocal() as session:
+        recover_unleased_jobs_on_startup(session, worker_id)
     while True:
         if stop_event and stop_event.is_set():
             break
         with SessionLocal() as session:
+            recover_orphaned_jobs(session, worker_id)
             job = (
                 session.execute(
                     select(Job).where(Job.status == "QUEUED").order_by(Job.created_at)
@@ -69,13 +137,24 @@ def loop(stop_event: Event | None = None) -> None:
                 continue
 
             job_id = job.id
-            _update_job(session, job, status="RUNNING", stage="VALIDATE", progress=0.02)
+            _update_job(
+                session,
+                job,
+                status="RUNNING",
+                stage="VALIDATE",
+                progress=0.02,
+                worker_id=worker_id,
+                lease_expires_at=_lease_expiry(),
+            )
             payload = job.payload or {}
             options = payload.get("renderOptions", {})
             output_name = payload.get("outputName", "video.mp4")
 
             log_file, log = _open_log(job_id)
             log(f"Starting job for project {job.project_id}")
+            heartbeat_stop = Event()
+            heartbeat = Thread(target=_heartbeat, args=(job_id, worker_id, heartbeat_stop), daemon=True)
+            heartbeat.start()
 
             def progress(stage: str, value: float) -> None:
                 _update_job(session, job, stage=stage, progress=min(1.0, value))
@@ -191,6 +270,8 @@ def loop(stop_event: Event | None = None) -> None:
                     error=str(exc)[:2000],
                 )
             finally:
+                heartbeat_stop.set()
+                heartbeat.join(timeout=JOB_HEARTBEAT_SECONDS + 1)
                 log_file.close()
         if _sleep(stop_event, 0.3):
             break

@@ -55,7 +55,8 @@ def init_db() -> None:
 
 def _ensure_project_columns() -> None:
     inspector = inspect(engine)
-    if "projects" not in inspector.get_table_names():
+    table_names = inspector.get_table_names()
+    if "projects" not in table_names:
         return
 
     existing = {column["name"] for column in inspector.get_columns("projects")}
@@ -66,11 +67,23 @@ def _ensure_project_columns() -> None:
     if "language" not in existing:
         statements.append("ALTER TABLE projects ADD COLUMN language VARCHAR")
 
-    if not statements:
+    if statements:
+        with engine.begin() as conn:
+            for stmt in statements:
+                conn.execute(text(stmt))
+
+    if "jobs" not in table_names:
         return
 
+    job_columns = {column["name"] for column in inspector.get_columns("jobs")}
+    job_statements = []
+    if "worker_id" not in job_columns:
+        job_statements.append("ALTER TABLE jobs ADD COLUMN worker_id VARCHAR")
+    if "lease_expires_at" not in job_columns:
+        job_statements.append("ALTER TABLE jobs ADD COLUMN lease_expires_at DATETIME")
+
     with engine.begin() as conn:
-        for stmt in statements:
+        for stmt in job_statements:
             conn.execute(text(stmt))
 
 

@@ -38,6 +38,8 @@ class Job(Base):
     progress = Column(Float, default=0.0, nullable=False)
     stage = Column(String, default="", nullable=False)
     error = Column(Text, nullable=True)
+    worker_id = Column(String, nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,
