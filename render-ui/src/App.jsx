@@ -151,7 +151,7 @@ function splitScriptIntoSections(script, sectionCount) {
   return sections.filter(Boolean).join('\n\n');
 }
 
-function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations = [], sceneImageAssignments = [], voice, language, ttsApi, hyperframes }) {
+function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageLabelEnabled, imageRoomInfo, sceneDurations = [], sceneImageAssignments = [], voice, language, ttsApi, hyperframes }) {
   const imageNames = images.map((image) => image.name).filter(Boolean);
   const scriptContent = titleFromScript(script, scriptTitle || title);
   const assignments = sanitizeSceneImageAssignments(sceneImageAssignments, imageNames);
@@ -171,7 +171,7 @@ function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageRo
       ...(Number.isFinite(requestedDuration) && requestedDuration > 0 ? { duration: requestedDuration } : {}),
       timeline: assignedImages.map((image) => ({
         image,
-        header: imageHeaders[image] || '',
+        header: imageLabelEnabled[image] ? (imageHeaders[image] || '') : '',
         roomDescription: imageRoomInfo[image]?.roomDescription || '',
         roomLabel: imageRoomInfo[image]?.label || '',
         confidence: imageRoomInfo[image]?.confidence ?? null,
@@ -293,6 +293,7 @@ function projectStateFromValues(values) {
     images: values.images.map((image) => ({ name: image.name })),
     removedImages: values.removedImages.map((image) => ({ name: image.name })),
     imageHeaders: values.imageHeaders,
+    imageLabelEnabled: values.imageLabelEnabled,
     imageRoomInfo: values.imageRoomInfo,
     useIntro: values.useIntro,
     introTitle: joinLeadLines(values.introLines),
@@ -345,6 +346,7 @@ export function App() {
   const [images, setImages] = useState([]);
   const [removedImages, setRemovedImages] = useState([]);
   const [imageHeaders, setImageHeaders] = useState({});
+  const [imageLabelEnabled, setImageLabelEnabled] = useState({});
   const [imageRoomInfo, setImageRoomInfo] = useState({});
   const [imagePreviews, setImagePreviews] = useState([]);
   const [draggedImageName, setDraggedImageName] = useState('');
@@ -447,8 +449,8 @@ export function App() {
   );
 
   const scenesPayload = useMemo(
-    () => buildScenes({ title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi, hyperframes: selectedHyperframes }),
-    [title, scriptTitle, script, images, imageHeaders, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi, selectedHyperframes],
+    () => buildScenes({ title, scriptTitle, script, images, imageHeaders, imageLabelEnabled, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi, hyperframes: selectedHyperframes }),
+    [title, scriptTitle, script, images, imageHeaders, imageLabelEnabled, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi, selectedHyperframes],
   );
   const unassignedImageCount = useMemo(() => {
     const assigned = new Set(scenesPayload.scenes.flatMap((scene) => scene.images || []));
@@ -710,6 +712,7 @@ export function App() {
     setImages([]);
     setRemovedImages([]);
     setImageHeaders({});
+    setImageLabelEnabled({});
     setImageRoomInfo({});
     setDraggedImageName('');
     setSelectedImageName('');
@@ -796,6 +799,7 @@ export function App() {
       setImages(projectImages);
       setRemovedImages(removedProjectImages);
       setImageHeaders(imageHeadersFromProject(state, persistedScenes));
+      setImageLabelEnabled(state.imageLabelEnabled || {});
       setImageRoomInfo(state.imageRoomInfo || {});
       setUseIntro(state.useIntro ?? true);
       const parsedTitleCard = titleCardFromScript(scriptFromProject(state, persistedScenes), state.scriptTitle || state.title);
@@ -881,6 +885,10 @@ export function App() {
 
   function updateImageHeader(imageName, header) {
     setImageHeaders((current) => ({ ...current, [imageName]: header }));
+  }
+
+  function setImageLabelVisibility(imageName, enabled) {
+    setImageLabelEnabled((current) => ({ ...current, [imageName]: enabled }));
   }
 
   function updateImageRoomInfo(imageName, values) {
@@ -1127,6 +1135,7 @@ export function App() {
             images,
             removedImages,
             imageHeaders,
+            imageLabelEnabled,
             imageRoomInfo,
             useIntro,
             introLines,
@@ -2130,6 +2139,7 @@ export function App() {
                         <span>Expand</span>
                       </button>
                       <div className="image-card-fields">
+                        <label className="check-row"><input type="checkbox" checked={Boolean(imageLabelEnabled[preview.name])} onChange={(event) => setImageLabelVisibility(preview.name, event.target.checked)} />Show label in video</label>
                         <label>Header
                           <input
                             value={imageHeaders[preview.name] || ''}
@@ -2371,6 +2381,7 @@ export function App() {
                 <img src={selectedImagePreview.url} alt="" />
               </div>
               <div className="image-modal-fields">
+                <label className="check-row"><input type="checkbox" checked={Boolean(imageLabelEnabled[selectedImagePreview.name])} onChange={(event) => setImageLabelVisibility(selectedImagePreview.name, event.target.checked)} />Show label in video</label>
                 <label>Header
                   <input
                     value={imageHeaders[selectedImagePreview.name] || ''}
