@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 import requests
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -43,6 +43,7 @@ from app.schemas import (
     HyperframesTransitionTitleResponse,
     ListingPipelineRequest,
     RenderRequest,
+    VoiceSampleRequest,
     RoomAnnotationRequest,
     RoomCorrectionRequest,
     ScriptEnhanceRequest,
@@ -56,6 +57,12 @@ from app.schemas import (
     YouTubeThumbnailResponse,
     YouTubeUploadRequest,
     YouTubeUploadResponse,
+)
+from app.renderer import (
+    TTSConfigurationError,
+    _synthesize_azure_voice_proxy,
+    _synthesize_flite,
+    _synthesize_voice_gateway,
 )
 from app.storage import (
     ensure_dirs,
@@ -268,8 +275,7 @@ async def readyz() -> dict:
     return {"ok": True}
 
 
-@app.get("/v1/voice-options")
-async def voice_options() -> dict:
+def _voice_options_payload() -> dict:
     try:
         response = requests.get(f"{VOICE_GATEWAY_URL.rstrip('/')}/control/api/voice", timeout=10)
         response.raise_for_status()
@@ -319,6 +325,80 @@ async def voice_options() -> dict:
         ]
     )
     return {"providers": providers, "gateway": "fortress-lan:voice-gateway"}
+
+
+@app.get("/v1/voice-options")
+async def voice_options() -> dict:
+    return _voice_options_payload()
+
+
+def _remove_voice_sample_files(sample_path: Path) -> None:
+    for path in (sample_path, sample_path.with_suffix(".txt")):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Unable to remove temporary voice sample %s", path)
+
+
+@app.post("/v1/voice-samples")
+async def create_voice_sample(request: VoiceSampleRequest, background_tasks: BackgroundTasks) -> FileResponse:
+    catalog = _voice_options_payload()
+    selected_provider = next(
+        (
+            provider
+            for provider in catalog["providers"]
+            if provider["ttsApi"] == request.ttsApi
+            and provider["selectable"]
+            and request.voice in provider["voices"]
+        ),
+        None,
+    )
+    if selected_provider is None:
+        raise HTTPException(status_code=422, detail="Select an available narration voice before sampling.")
+    if request.ttsApi == "none":
+        raise HTTPException(status_code=422, detail="Timed silence cannot produce an audible sample.")
+
+    with tempfile.NamedTemporaryFile(prefix="mediastudio-voice-sample-", suffix=".wav", delete=False) as sample_file:
+        sample_path = Path(sample_file.name)
+
+    try:
+        if request.ttsApi == "voice-gateway":
+            await run_in_threadpool(
+                _synthesize_voice_gateway,
+                request.text,
+                sample_path,
+                project_id="voice-sample",
+                voice=request.voice,
+                language=request.language,
+                log=None,
+            )
+        elif request.ttsApi == "azure-proxy":
+            await run_in_threadpool(
+                _synthesize_azure_voice_proxy,
+                request.text,
+                sample_path,
+                project_id="voice-sample",
+                voice=request.voice,
+                language=request.language,
+                log=None,
+            )
+        elif request.ttsApi == "flite":
+            await run_in_threadpool(_synthesize_flite, request.text, sample_path, request.voice, None)
+        else:
+            raise HTTPException(status_code=422, detail="This narration route does not support samples.")
+    except TTSConfigurationError as exc:
+        _remove_voice_sample_files(sample_path)
+        raise HTTPException(status_code=502, detail=f"Voice sample could not be generated: {exc}") from exc
+    except OSError as exc:
+        _remove_voice_sample_files(sample_path)
+        raise HTTPException(status_code=502, detail=f"Voice sample could not be prepared: {exc}") from exc
+
+    if not sample_path.exists() or sample_path.stat().st_size == 0:
+        _remove_voice_sample_files(sample_path)
+        raise HTTPException(status_code=502, detail="Voice sample generation returned no audio.")
+
+    background_tasks.add_task(_remove_voice_sample_files, sample_path)
+    return FileResponse(sample_path, media_type="audio/wav", filename="voice-sample.wav", background=background_tasks)
 
 
 @app.get("/v1/sfx/catalog")

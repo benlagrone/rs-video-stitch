@@ -214,6 +214,9 @@ button { font: inherit; }
   .motion-plan-heading { align-items: stretch; flex-direction: column; }
   .motion-region { grid-template-columns: 1fr; }
   .bible-top-actions span { display: none; }
+  .voice-samples-content { grid-template-columns: 1fr; }
+  .voice-card { align-items: stretch; flex-direction: column; }
+  .voice-card button { width: 100%; }
 }
 
 .studio-shell {
@@ -588,6 +591,101 @@ label {
   font-size: 11px;
   font-weight: 800;
   margin-top: -6px;
+}
+
+.voice-samples-content {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  margin: 24px auto;
+  max-width: 1320px;
+  width: 100%;
+}
+
+.voice-sample-copy,
+.voice-provider {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.voice-sample-copy textarea {
+  line-height: 1.5;
+  min-height: 150px;
+  resize: vertical;
+}
+
+.voice-sample-copy > p,
+.voice-provider header p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.voice-sample-copy-meta,
+.voice-provider header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
+.voice-sample-copy-meta span,
+.voice-provider header > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.voice-sample-player {
+  margin-top: 14px;
+  width: 100%;
+}
+
+.voice-provider-list {
+  display: grid;
+  gap: 14px;
+}
+
+.voice-provider h2 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.voice-provider header p {
+  margin: 4px 0 0;
+}
+
+.voice-card-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  margin-top: 16px;
+}
+
+.voice-card {
+  align-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 11px;
+}
+
+.voice-card strong {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-card button {
+  flex: 0 0 auto;
 }
 
 .caption-font-note {

@@ -16,6 +16,7 @@ import {
   renderTrackerProgress,
 } from './renderProgress.js';
 import { YouTubeChannelSelector } from './YouTubeChannelSelector.jsx';
+import { VoiceSamples } from './VoiceSamples.jsx';
 
 const DEFAULT_RENDER_OPTIONS = {
   fps: 30,
@@ -1622,6 +1623,10 @@ export function App() {
     return <BibleStudio authToken={authToken} theme={theme} initialProjectId={bibleProjectId} onBack={() => setView('projects')} onOpenProjects={() => setView('projects')} />;
   }
 
+  if (view === 'voice-samples') {
+    return <VoiceSamples apiBase={apiBase} authToken={authToken} theme={theme} onOpenProjects={() => setView('projects')} />;
+  }
+
   if (view === 'projects') {
     return (
       <main className="studio-shell" data-theme={theme}>
@@ -1632,6 +1637,7 @@ export function App() {
           </div>
           <div className="header-actions">
             <button className="primary-action" type="button" onClick={() => { setBibleProjectId(''); setView('bible'); }}>Bible Video Studio</button>
+            <button className="theme-toggle" type="button" onClick={() => setView('voice-samples')}>Voice samples</button>
             <button className="theme-toggle" type="button" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
               {theme === 'dark' ? 'Light mode' : 'Dark mode'}
             </button>
@@ -1784,6 +1790,7 @@ export function App() {
         </div>
         <div className="header-actions">
           <button className="primary-action" type="button" onClick={() => { setBibleProjectId(''); setView('bible'); }}>Bible Studio</button>
+          <button className="theme-toggle" type="button" onClick={() => setView('voice-samples')}>Voice samples</button>
           <button className="theme-toggle" type="button" onClick={() => { setView('projects'); refreshProjects().catch(() => {}); }}>
             Projects
           </button>

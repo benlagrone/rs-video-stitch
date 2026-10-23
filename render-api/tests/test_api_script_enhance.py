@@ -3,10 +3,12 @@ import sys
 from pathlib import Path
 from unittest import TestCase, mock
 
+from fastapi import BackgroundTasks, HTTPException
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import api
-from app.schemas import LeadCardGenerateRequest, ScriptEnhanceRequest, YouTubeDescriptionRequest
+from app.schemas import LeadCardGenerateRequest, ScriptEnhanceRequest, VoiceSampleRequest, YouTubeDescriptionRequest
 
 
 class _FakeOllamaResponse:
@@ -67,6 +69,55 @@ class ScriptEnhanceApiTest(TestCase):
         self.assertEqual(providers["azure_voice"]["ttsApi"], "azure-proxy")
         self.assertEqual(providers["azure_voice"]["label"], "Azure Speech · Fortress proxy")
         self.assertEqual(providers["flite"]["voices"], ["kal", "awb", "rms", "slt"])
+
+    def test_voice_sample_uses_selected_gateway_voice_without_creating_a_project(self):
+        async def create_sample():
+            with mock.patch.object(
+                api,
+                "_voice_options_payload",
+                return_value={
+                    "providers": [
+                        {
+                            "id": "vibevoice",
+                            "ttsApi": "voice-gateway",
+                            "selectable": True,
+                            "voices": ["Carter"],
+                        }
+                    ]
+                },
+            ), mock.patch.object(api, "_synthesize_voice_gateway") as synthesize:
+                def write_audio(text, destination, **kwargs):
+                    destination.write_bytes(b"RIFFsampleWAVE")
+
+                synthesize.side_effect = write_audio
+                response = await api.create_voice_sample(
+                    VoiceSampleRequest(text="A short sample.", voice="Carter", ttsApi="voice-gateway"),
+                    BackgroundTasks(),
+                )
+                return response, synthesize
+
+        response, synthesize = asyncio.run(create_sample())
+        sample_path = Path(response.path)
+        try:
+            self.assertEqual(response.media_type, "audio/wav")
+            self.assertTrue(sample_path.exists())
+            synthesize.assert_called_once()
+            self.assertEqual(synthesize.call_args.kwargs["project_id"], "voice-sample")
+            self.assertEqual(synthesize.call_args.kwargs["voice"], "Carter")
+        finally:
+            api._remove_voice_sample_files(sample_path)
+
+    def test_voice_sample_rejects_voice_outside_live_catalog(self):
+        async def request_sample():
+            with mock.patch.object(api, "_voice_options_payload", return_value={"providers": []}):
+                await api.create_voice_sample(
+                    VoiceSampleRequest(text="A short sample.", voice="Unknown", ttsApi="voice-gateway"),
+                    BackgroundTasks(),
+                )
+
+        with self.assertRaises(HTTPException) as error:
+            asyncio.run(request_sample())
+        self.assertEqual(error.exception.status_code, 422)
 
     def test_enhance_script_calls_ollama_model(self):
         with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(

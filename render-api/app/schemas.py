@@ -161,6 +161,13 @@ class RenderRequest(BaseModel):
     renderOptions: RenderOptions
 
 
+class VoiceSampleRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    voice: str = Field(min_length=1, max_length=160)
+    ttsApi: str = Field(min_length=1, max_length=64)
+    language: Optional[str] = Field(default="en-US", min_length=2, max_length=32)
+
+
 class BibleVideoRequest(BaseModel):
     passage: str = Field(min_length=3, max_length=120)
     themeInterpretation: str = Field(default="", max_length=2000)
