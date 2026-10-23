@@ -55,6 +55,19 @@ function voicePresentation(provider, voice) {
   return { name: voice, detail: 'Voice details supplied by provider' };
 }
 
+function providerPresentation(provider) {
+  if (provider.id === 'vibevoice') {
+    return { label: 'VibeVoice', detail: 'GPU narration voices' };
+  }
+  if (provider.id === 'azure_voice') {
+    return { label: 'Azure Speech', detail: 'Neural narration voices' };
+  }
+  if (provider.id === 'flite') {
+    return { label: 'Built-in voices', detail: 'Local fallback voices' };
+  }
+  return { label: provider.label, detail: provider.detail || 'Available for narration' };
+}
+
 export function VoiceSamples({ apiBase, authToken, onOpenProjects, theme }) {
   const [providers, setProviders] = useState([]);
   const [text, setText] = useState('Welcome to MediaStudio. This is a narration voice sample.');
@@ -121,7 +134,7 @@ export function VoiceSamples({ apiBase, authToken, onOpenProjects, theme }) {
       <section className="studio-header">
         <div>
           <h1>Voice samples</h1>
-          <p>Compare the narration voices currently available through the Fortress gateway before assigning one to a video.</p>
+          <p>Listen first, then choose a voice for your video.</p>
         </div>
         <div className="header-actions">
           <button className="theme-toggle" type="button" onClick={onOpenProjects}>Projects</button>
@@ -129,7 +142,7 @@ export function VoiceSamples({ apiBase, authToken, onOpenProjects, theme }) {
       </section>
 
       <section className="voice-samples-content">
-        <div className="voice-sample-copy">
+        <aside className="voice-sample-copy">
           <label htmlFor="voice-sample-text">Sample script</label>
           <textarea
             id="voice-sample-text"
@@ -141,20 +154,20 @@ export function VoiceSamples({ apiBase, authToken, onOpenProjects, theme }) {
             <span>{text.length}/500 characters</span>
             <button className="secondary-action" type="button" onClick={refreshCatalog}>Refresh voices</button>
           </div>
-          <p>Samples are temporary and are not saved to a project or render queue.</p>
+          <p>Previews are temporary. Nothing is saved to a project or render queue.</p>
           {audioUrl && <audio className="voice-sample-player" controls autoPlay src={audioUrl}>Your browser cannot play this audio sample.</audio>}
           {error && <div className="error-box">{error}</div>}
-        </div>
+        </aside>
 
         <div className="voice-provider-list">
           {selectableProviders.map((provider) => (
-            <section className="voice-provider" key={provider.id}>
+            <section className="voice-provider" key={provider.id} data-provider={provider.id}>
               <header>
                 <div>
-                  <h2>{provider.label}</h2>
-                  <p>{provider.detail || 'Available for narration'}</p>
+                  <h2>{providerPresentation(provider).label}</h2>
+                  <p>{providerPresentation(provider).detail}</p>
                 </div>
-                <span>{provider.voices.length} voice{provider.voices.length === 1 ? '' : 's'}</span>
+                <span>{provider.voices.length} available</span>
               </header>
               <div className="voice-card-grid">
                 {provider.voices.map((voice) => {
@@ -168,12 +181,12 @@ export function VoiceSamples({ apiBase, authToken, onOpenProjects, theme }) {
                         <small>Provider ID: {voice}</small>
                       </div>
                       <button
-                        className="primary-action"
+                        className="voice-play-button"
                         type="button"
                         onClick={() => sampleVoice(provider, voice)}
                         disabled={!text.trim() || Boolean(playingVoice)}
                       >
-                        {playingVoice === voiceKey ? 'Generating sample…' : 'Play sample'}
+                        {playingVoice === voiceKey ? 'Loading…' : 'Preview'}
                       </button>
                     </article>
                   );
