@@ -43,7 +43,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
   const [visualStyles, setVisualStyles] = useState(FALLBACK_STYLES);
   const [styleQuery, setStyleQuery] = useState('');
   const [voice, setVoice] = useState('Carter');
-  const [ttsApi, setTtsApi] = useState('vibevoice-proxy');
+  const [ttsApi, setTtsApi] = useState('voice-gateway');
   const [voiceProviders, setVoiceProviders] = useState([]);
   const [captionFont, setCaptionFont] = useState('EB Garamond');
   const [captionFonts, setCaptionFonts] = useState(FALLBACK_FONTS);
@@ -99,7 +99,8 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     setMode(state.mode || 'still');
     setVisualStyle(state.visualStyle || FALLBACK_STYLES[0].id);
     setVoice(state.voice || state.renderOptions?.tts || 'Carter');
-    setTtsApi(state.ttsApi || state.renderOptions?.ttsApi || 'vibevoice-proxy');
+    const savedTtsApi = state.ttsApi || state.renderOptions?.ttsApi || 'voice-gateway';
+    setTtsApi(savedTtsApi === 'vibevoice-proxy' ? 'voice-gateway' : savedTtsApi);
     setCaptionFont(state.renderOptions?.titleStyle?.fontFamily || 'EB Garamond');
     setYoutubeTitle(state.youtubeTitle || state.title || state.passage || projectId);
     setYoutubeDescription(state.youtubeDescription || `A narrated visual presentation of ${state.passage || state.title || projectId}.`);

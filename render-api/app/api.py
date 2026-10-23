@@ -291,7 +291,7 @@ async def voice_options() -> dict:
             {
                 "id": provider_id,
                 "label": "VibeVoice · Fortress GPU" if is_vibevoice else "Azure Speech · Fortress proxy",
-                "ttsApi": "vibevoice-proxy" if is_vibevoice else "azure-proxy",
+                "ttsApi": "voice-gateway" if is_vibevoice else "azure-proxy",
                 "selectable": (is_vibevoice or is_azure_voice) and backend.get("ok") is not False,
                 "voices": voices,
                 "detail": str(backend.get("detail") or ""),

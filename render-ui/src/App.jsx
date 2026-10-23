@@ -363,7 +363,7 @@ export function App() {
   const [logoMargin, setLogoMargin] = useState(24);
   const [voice, setVoice] = useState('Carter');
   const [language, setLanguage] = useState('en-US');
-  const [ttsApi, setTtsApi] = useState('vibevoice-proxy');
+  const [ttsApi, setTtsApi] = useState('voice-gateway');
   const [hyperframesLeadCard, setHyperframesLeadCard] = useState('lecrown-lead-card');
   const [hyperframesSceneTransition, setHyperframesSceneTransition] = useState('lecrown-scene-transition');
   const [hyperframesTransitionTitles, setHyperframesTransitionTitles] = useState({});
@@ -519,7 +519,7 @@ export function App() {
   useEffect(() => localStorage.setItem('renderUi.authToken', authToken), [authToken]);
   useEffect(() => localStorage.setItem('renderUi.theme', theme), [theme]);
   useEffect(() => {
-    if (ttsApi === 'vibevoice-proxy' && /neural$/i.test(voice)) {
+    if ((ttsApi === 'voice-gateway' || ttsApi === 'vibevoice-proxy') && /neural$/i.test(voice)) {
       setVoice('Carter');
     } else if (ttsApi === 'azure-proxy' && (!voice || !/neural$/i.test(voice))) {
       setVoice('en-US-AdamMultilingualNeural');
@@ -812,7 +812,7 @@ export function App() {
       setVoice(state.voice || voice);
       const savedLanguage = state.language || language;
       setLanguage(savedLanguage);
-      setTtsApi(state.ttsApi || ttsApi);
+      setTtsApi(state.ttsApi === 'vibevoice-proxy' ? 'voice-gateway' : (state.ttsApi || ttsApi));
       const savedHyperframes = state.hyperframes || persistedScenes?.hyperframes || {};
       setHyperframesLeadCard(savedHyperframes.leadCard || 'lecrown-lead-card');
       setHyperframesSceneTransition(savedHyperframes.sceneTransition || 'lecrown-scene-transition');

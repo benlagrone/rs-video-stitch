@@ -61,7 +61,7 @@ class ScriptEnhanceApiTest(TestCase):
         get.assert_called_once_with("http://voice-gateway.local/control/api/voice", timeout=10)
         providers = {provider["id"]: provider for provider in response["providers"]}
         self.assertTrue(providers["vibevoice"]["selectable"])
-        self.assertEqual(providers["vibevoice"]["ttsApi"], "vibevoice-proxy")
+        self.assertEqual(providers["vibevoice"]["ttsApi"], "voice-gateway")
         self.assertEqual(providers["vibevoice"]["voices"], ["Carter", "en-Emma_woman"])
         self.assertTrue(providers["azure_voice"]["selectable"])
         self.assertEqual(providers["azure_voice"]["ttsApi"], "azure-proxy")
