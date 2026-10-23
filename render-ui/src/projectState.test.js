@@ -7,7 +7,29 @@ import {
   sceneAssignmentsFromRoomInfo,
   sanitizeSceneImageAssignments,
   sceneImageAssignmentsFromProject,
+  titleFromScript,
 } from './projectState.js';
+
+test('recognizes an all-caps opening script line as the video title', () => {
+  const parsed = titleFromScript('RARE OVERSIZED LOT | NO HOA\n\nWelcome to the property.');
+
+  assert.equal(parsed.title, 'RARE OVERSIZED LOT | NO HOA');
+  assert.equal(parsed.narration, 'Welcome to the property.');
+});
+
+test('keeps ordinary mixed-case script openings in narration', () => {
+  const parsed = titleFromScript('Welcome to this Heights property.\n\nEnjoy the outdoor space.');
+
+  assert.equal(parsed.title, '');
+  assert.equal(parsed.narration, 'Welcome to this Heights property.\n\nEnjoy the outdoor space.');
+});
+
+test('recognizes an explicit mixed-case title from intake metadata', () => {
+  const parsed = titleFromScript('Heights Home | No HOA\n\nWelcome to the property.', 'Heights Home | No HOA');
+
+  assert.equal(parsed.title, 'Heights Home | No HOA');
+  assert.equal(parsed.narration, 'Welcome to the property.');
+});
 
 test('groups Room Renamer labels into three-image scene assignments', () => {
   const assignments = sceneAssignmentsFromRoomInfo(

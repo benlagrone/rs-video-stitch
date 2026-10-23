@@ -8,6 +8,23 @@ const MANDARIN_TITLE_STYLE = {
   position: 'top-center',
 };
 
+export function titleFromScript(script, explicitTitle = '') {
+  const sections = String(script || '')
+    .split(/\n{2,}/)
+    .map((section) => section.trim())
+    .filter(Boolean);
+  const candidate = sections[0] || '';
+  const letters = candidate.match(/\p{L}/gu) || [];
+  const isAllCapsTitle = letters.length >= 8
+    && letters.some((letter) => letter !== letter.toLowerCase())
+    && letters.every((letter) => letter === letter.toUpperCase());
+  const isExplicitTitle = candidate === String(explicitTitle || '').trim();
+  return {
+    title: (isAllCapsTitle || isExplicitTitle) ? candidate : '',
+    narration: (isAllCapsTitle || isExplicitTitle) ? sections.slice(1).join('\n\n') : sections.join('\n\n'),
+  };
+}
+
 export function sanitizeSceneImageAssignments(assignments, availableNames) {
   const available = new Set(availableNames);
   return (Array.isArray(assignments) ? assignments : []).map((sceneImages) => (

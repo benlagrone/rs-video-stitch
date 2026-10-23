@@ -6,6 +6,7 @@ import {
   sceneAssignmentsFromRoomInfo,
   sanitizeSceneImageAssignments,
   sceneImageAssignmentsFromProject,
+  titleFromScript,
 } from './projectState.js';
 import {
   EMPTY_RENDER_TRACKER,
@@ -116,7 +117,8 @@ function splitScriptIntoSections(script, sectionCount) {
 
 function buildScenes({ title, script, images, imageHeaders, imageRoomInfo, sceneDurations = [], sceneImageAssignments = [], voice, language, ttsApi }) {
   const imageNames = images.map((image) => image.name).filter(Boolean);
-  const paragraphs = splitScript(script);
+  const scriptContent = titleFromScript(script, title);
+  const paragraphs = splitScript(scriptContent.narration);
   const assignments = sanitizeSceneImageAssignments(sceneImageAssignments, imageNames);
   const scenes = paragraphs.map((paragraph, index) => {
     const assignedImages = assignments[index] || [];
@@ -139,7 +141,7 @@ function buildScenes({ title, script, images, imageHeaders, imageRoomInfo, scene
   });
 
   return {
-    info: { name: title || 'MediaStudio upload', source: 'render-ui' },
+    info: { name: title || scriptContent.title || 'MediaStudio upload', source: 'render-ui' },
     vid: { voice: voice || null, lang: language || 'en-US', api: ttsApi || 'azure' },
     scenes,
   };
@@ -372,7 +374,8 @@ export function App() {
       `${project.title || ''} ${project.projectId || ''}`.toLocaleLowerCase().includes(query)
     ));
   }, [projectFilter, savedProjects]);
-  const scriptSections = useMemo(() => splitScript(script), [script]);
+  const recognizedScriptTitle = useMemo(() => titleFromScript(script, title), [script, title]);
+  const scriptSections = useMemo(() => splitScript(recognizedScriptTitle.narration), [recognizedScriptTitle]);
 
   const scenesPayload = useMemo(
     () => buildScenes({ title, script, images, imageHeaders, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi }),
@@ -1618,6 +1621,7 @@ export function App() {
           <h2>Project</h2>
           <label>Property address<input value={propertyAddress} onChange={(event) => setPropertyAddress(event.target.value)} placeholder="Street address, city, state ZIP" /></label>
           <label>Video title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Editable video title" /></label>
+          {recognizedScriptTitle.title && <p className="hint">Script title detected: <strong>{recognizedScriptTitle.title}</strong>. It is used on the title card and excluded from narration.</p>}
           <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder={resolvedProjectId} /></label>
           <label>Output file<input value={outputName} onChange={(event) => setOutputName(event.target.value)} /></label>
           <div className="project-save-meta">
