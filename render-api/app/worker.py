@@ -22,6 +22,7 @@ from app.storage import ROOT as STORAGE_ROOT, job_log_path, p_input
 POLL_INTERVAL = 1.0
 JOB_LEASE_SECONDS = 120
 JOB_HEARTBEAT_SECONDS = 15
+LEGACY_RECOVERY_MAX_AGE_SECONDS = 6 * 60 * 60
 
 
 def _timestamp() -> str:
@@ -85,10 +86,20 @@ def recover_orphaned_jobs(session, worker_id: str, now: dt.datetime | None = Non
     return [job.id for job in recovered]
 
 
-def recover_unleased_jobs_on_startup(session, worker_id: str) -> list[str]:
-    """Recover jobs left by pre-lease workers during an upgrade or restart."""
+def recover_unleased_jobs_on_startup(
+    session,
+    worker_id: str,
+    now: dt.datetime | None = None,
+) -> list[str]:
+    """Recover only recent jobs left by pre-lease workers during an upgrade."""
+    now = now or dt.datetime.utcnow()
+    cutoff = now - dt.timedelta(seconds=LEGACY_RECOVERY_MAX_AGE_SECONDS)
     recovered = session.execute(
-        select(Job).where(Job.status == "RUNNING", Job.lease_expires_at.is_(None))
+        select(Job).where(
+            Job.status == "RUNNING",
+            Job.lease_expires_at.is_(None),
+            Job.updated_at >= cutoff,
+        )
     ).scalars().all()
     for job in recovered:
         _update_job(

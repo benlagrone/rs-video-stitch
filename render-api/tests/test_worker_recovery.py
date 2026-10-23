@@ -42,15 +42,28 @@ class WorkerRecoveryTests(unittest.TestCase):
             self.assertEqual(session.get(Job, "expired").status, "QUEUED")
             self.assertEqual(session.get(Job, "current").status, "RUNNING")
 
-    def test_startup_recovers_legacy_unleased_job(self):
+    def test_startup_recovers_recent_legacy_unleased_job_only(self):
+        now = dt.datetime(2026, 10, 23, 14, 0, 0)
         with self.Session() as session, patch.object(worker, "_open_log") as open_log:
             open_log.return_value = (MagicMock(), lambda _: None)
-            self._job(session, "legacy")
+            self._job(session, "legacy", updated_at=now - dt.timedelta(minutes=30))
+            historical = Job(
+                id="historical",
+                project_id="project-1",
+                status="RUNNING",
+                payload={},
+                progress=0.5,
+                stage="SCRIPTURE_LOOKUP",
+                updated_at=now - dt.timedelta(days=1),
+            )
+            session.add(historical)
+            session.commit()
 
-            self.assertEqual(worker.recover_unleased_jobs_on_startup(session, "new"), ["legacy"])
+            self.assertEqual(worker.recover_unleased_jobs_on_startup(session, "new", now), ["legacy"])
             job = session.get(Job, "legacy")
             self.assertEqual(job.status, "QUEUED")
             self.assertEqual(job.stage, "RECOVERING")
+            self.assertEqual(session.get(Job, "historical").status, "RUNNING")
 
 
 if __name__ == "__main__":
