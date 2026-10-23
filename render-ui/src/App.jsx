@@ -1018,7 +1018,9 @@ export function App() {
     setImageHeaders((current) => {
       const next = { ...current };
       results.forEach((item) => {
-        if (item.displayLabel) next[item.filename] = item.displayLabel;
+        if (item.displayLabel && !String(next[item.filename] || '').trim()) {
+          next[item.filename] = item.displayLabel;
+        }
       });
       return next;
     });
