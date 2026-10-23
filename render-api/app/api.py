@@ -1509,6 +1509,8 @@ def _listing_pipeline_project(pid: str) -> dict:
         "projectId": "hyperframes-lecrown-preview",
         "leadCard": "lecrown-lead-card",
         "sceneTransition": "lecrown-scene-transition",
+        "leadCardMode": "hyperframes",
+        "sceneTransitionMode": "hyperframes",
         "transitionTitles": transition_titles,
     }
     state.update(
