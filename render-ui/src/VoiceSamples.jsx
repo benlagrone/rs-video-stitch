@@ -4,6 +4,15 @@ function apiUrl(baseUrl, path) {
   return `${baseUrl.replace(/\/+$/, '')}${path}`;
 }
 
+async function responseError(response) {
+  const body = await response.text();
+  try {
+    return JSON.parse(body).detail || body;
+  } catch {
+    return body || `Request failed (${response.status})`;
+  }
+}
+
 const languageNames = {
   de: 'German',
   en: 'English',
@@ -86,7 +95,7 @@ export function VoiceSamples({ apiBase, authToken, onOpenProjects, theme }) {
       const response = await fetch(apiUrl(apiBase, '/v1/voice-options'), {
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseError(response));
       const catalog = await response.json();
       setProviders(catalog.providers || []);
     } catch (err) {
@@ -116,7 +125,7 @@ export function VoiceSamples({ apiBase, authToken, onOpenProjects, theme }) {
         },
         body: JSON.stringify({ text: text.trim(), voice, ttsApi: provider.ttsApi, language: 'en-US' }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseError(response));
       const nextAudioUrl = URL.createObjectURL(await response.blob());
       setAudioUrl((previous) => {
         if (previous) URL.revokeObjectURL(previous);

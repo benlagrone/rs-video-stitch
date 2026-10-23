@@ -70,6 +70,22 @@ class ScriptEnhanceApiTest(TestCase):
         self.assertEqual(providers["azure_voice"]["label"], "Azure Speech · Fortress proxy")
         self.assertEqual(providers["flite"]["voices"], ["kal", "awb", "rms", "slt"])
 
+    def test_voice_options_uses_recent_catalog_after_transient_gateway_timeout(self):
+        cached_catalog = {"providers": [{"id": "vibevoice", "voices": ["Carter"]}], "gateway": "fortress-lan:voice-gateway"}
+        with api._voice_catalog_lock:
+            previous_cache = api._voice_catalog_cache
+            previous_cached_at = api._voice_catalog_cached_at
+            api._voice_catalog_cache = cached_catalog
+            api._voice_catalog_cached_at = api.time.monotonic()
+        try:
+            with mock.patch.object(api.requests, "get", side_effect=api.requests.Timeout("timed out")):
+                response = api._voice_options_payload()
+            self.assertEqual(response, cached_catalog)
+        finally:
+            with api._voice_catalog_lock:
+                api._voice_catalog_cache = previous_cache
+                api._voice_catalog_cached_at = previous_cached_at
+
     def test_voice_sample_uses_selected_gateway_voice_without_creating_a_project(self):
         async def create_sample():
             with mock.patch.object(

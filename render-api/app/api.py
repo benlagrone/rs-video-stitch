@@ -12,6 +12,7 @@ import time
 import csv
 import html
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
@@ -128,6 +129,7 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mixtral:latest")
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
 OLLAMA_CONNECT_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_CONNECT_TIMEOUT_SECONDS", "10"))
 VOICE_GATEWAY_URL = os.getenv("VOICE_GATEWAY_URL", "http://100.100.97.30:8133")
+VOICE_CATALOG_MAX_STALE_SECONDS = float(os.getenv("VOICE_CATALOG_MAX_STALE_SECONDS", "300"))
 ROOM_RENAMER_API_URL = os.getenv("ROOM_RENAMER_API_URL", "http://100.100.97.30:8014")
 ROOM_RENAMER_API_TOKEN = os.getenv("ROOM_RENAMER_API_TOKEN", "")
 ROOM_RENAMER_TIMEOUT_SECONDS = float(os.getenv("ROOM_RENAMER_TIMEOUT_SECONDS", "90"))
@@ -144,6 +146,9 @@ _worker_thread: threading.Thread | None = None
 _worker_stop: threading.Event | None = None
 _listing_pipeline_runs: dict[str, dict[str, Any]] = {}
 _listing_pipeline_runs_lock = threading.Lock()
+_voice_catalog_cache: dict | None = None
+_voice_catalog_cached_at = 0.0
+_voice_catalog_lock = threading.Lock()
 
 app = FastAPI(title="Render API", version="1.0.0")
 app.add_middleware(
@@ -276,11 +281,22 @@ async def readyz() -> dict:
 
 
 def _voice_options_payload() -> dict:
+    global _voice_catalog_cache, _voice_catalog_cached_at
     try:
         response = requests.get(f"{VOICE_GATEWAY_URL.rstrip('/')}/control/api/voice", timeout=10)
         response.raise_for_status()
         snapshot = response.json()
     except (requests.RequestException, ValueError) as exc:
+        with _voice_catalog_lock:
+            cached = deepcopy(_voice_catalog_cache) if _voice_catalog_cache else None
+            age_seconds = time.monotonic() - _voice_catalog_cached_at
+        if cached and age_seconds <= VOICE_CATALOG_MAX_STALE_SECONDS:
+            logger.warning(
+                "Voice gateway catalog request failed; using a %.0fs-old catalog: %s",
+                age_seconds,
+                exc,
+            )
+            return cached
         raise HTTPException(status_code=502, detail=f"Fortress Voice Gateway catalog request failed: {exc}") from exc
 
     providers = []
@@ -324,7 +340,11 @@ def _voice_options_payload() -> dict:
             },
         ]
     )
-    return {"providers": providers, "gateway": "fortress-lan:voice-gateway"}
+    payload = {"providers": providers, "gateway": "fortress-lan:voice-gateway"}
+    with _voice_catalog_lock:
+        _voice_catalog_cache = deepcopy(payload)
+        _voice_catalog_cached_at = time.monotonic()
+    return payload
 
 
 @app.get("/v1/voice-options")
