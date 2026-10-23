@@ -1076,7 +1076,7 @@ export function App() {
             voice,
             language,
             ttsApi,
-            hyperframes: selectedHyperframes,
+            hyperframes: overrides.hyperframes ?? selectedHyperframes,
             renderOptions,
             youtubeTitle,
             youtubeDescription: overrides.youtubeDescription ?? youtubeDescription,
@@ -1357,7 +1357,11 @@ export function App() {
         }),
       });
       const transitionTitle = result.title || nextScene.title || `Scene ${index + 2}`;
-      setHyperframesTransitionTitles((current) => ({ ...current, [index]: transitionTitle }));
+      const nextTransitionTitles = { ...hyperframesTransitionTitles, [index]: transitionTitle };
+      setHyperframesTransitionTitles(nextTransitionTitles);
+      await saveProject({
+        hyperframes: hyperframesBinding(hyperframesLeadCard, hyperframesSceneTransition, nextTransitionTitles),
+      });
       const url = hyperframesEditUrl(hyperframesSceneTransition, { ...variables, transition_title: transitionTitle });
       if (hyperframesWindow) hyperframesWindow.location.assign(url);
       else window.open(url, '_blank', 'noopener,noreferrer');
