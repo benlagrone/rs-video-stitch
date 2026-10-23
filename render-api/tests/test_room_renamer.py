@@ -99,6 +99,7 @@ class RoomRenamerTests(unittest.TestCase):
             "language": "zh-CN",
             "images": [{"name": "front.jpg"}],
             "imageHeaders": {"front.jpg": "Property Photo 1"},
+            "imageLabelEnabled": {"front.jpg": False},
             "imageRoomInfo": {},
         }
         scenes = {
@@ -126,6 +127,8 @@ class RoomRenamerTests(unittest.TestCase):
         self.assertEqual(state["imageHeaders"]["front.jpg"], "住宅正面")
         saved_payload = save_scenes.call_args.args[1]
         self.assertIn('"title": "住宅正面"', saved_payload)
+        self.assertIn('"showLabel": false', saved_payload)
+        self.assertIn('"showTitle": false', saved_payload)
         self.assertNotIn("Property Photo 1", saved_payload)
 
     def test_required_classification_rejects_partial_provider_response(self):

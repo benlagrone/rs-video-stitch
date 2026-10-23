@@ -1345,6 +1345,7 @@ def _state_image_names(state: dict, pid: str) -> list[str]:
 def _persist_room_results(pid: str, state: dict, results: list[dict], *, model: str = "") -> list[dict]:
     language = str(state.get("language") or "en-US")
     headers = dict(state.get("imageHeaders") or {})
+    label_visibility = state.get("imageLabelEnabled")
     room_info = dict(state.get("imageRoomInfo") or {})
     normalized_results = []
 
@@ -1398,6 +1399,8 @@ def _persist_room_results(pid: str, state: dict, results: list[dict], *, model: 
                 info = room_info.get(filename) or {}
                 if filename in headers:
                     entry["header"] = headers[filename]
+                if isinstance(label_visibility, dict):
+                    entry["showLabel"] = bool(label_visibility.get(filename))
                 if info:
                     entry["roomLabel"] = info.get("label") or ""
                     entry["confidence"] = info.get("confidence")
@@ -1405,6 +1408,8 @@ def _persist_room_results(pid: str, state: dict, results: list[dict], *, model: 
             first_header = next((headers.get(name) for name in assigned if headers.get(name)), "")
             if first_header and is_generic_header(scene.get("title")):
                 scene["title"] = first_header
+            if isinstance(label_visibility, dict):
+                scene["showTitle"] = False
         save_scenes(
             pid,
             json.dumps(scenes, indent=2, ensure_ascii=False),

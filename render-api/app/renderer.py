@@ -356,10 +356,12 @@ def _timeline_headers(scene: Dict[str, Any], images: List[str]) -> Dict[str, str
         if isinstance(raw, dict):
             image_name = raw.get("image")
             header = raw.get("header")
+            show_label = raw.get("showLabel")
         else:
             image_name = getattr(raw, "image", None)
             header = getattr(raw, "header", None)
-        if image_name in image_set and header is not None:
+            show_label = getattr(raw, "showLabel", None)
+        if image_name in image_set and header is not None and show_label is not False:
             cleaned = str(header).strip()
             if cleaned:
                 headers[str(image_name)] = cleaned
@@ -1721,7 +1723,7 @@ def render_project(
         scene_file = work_dir / f"scene_{idx}.mp4"
         title_text = str(scene.get("title", "")).strip()
         titled_scene_source = silent_scene
-        if title_text and not image_headers:
+        if title_text and not image_headers and _truthy(scene.get("showTitle", True)):
             title_file = temp_dir / "title.txt"
             titled_scene = temp_dir / "scene_titled.mp4"
             _log(log, f"Scene {idx}: overlaying title '{title_text}'")

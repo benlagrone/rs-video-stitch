@@ -39,6 +39,19 @@ def _setup_project(tmpdir: Path, api_value: str, voice: str = "custom-voice") ->
 
 
 class RendererTTSTest(TestCase):
+    def test_timeline_headers_respects_explicit_label_visibility(self):
+        headers = renderer._timeline_headers(
+            {
+                "timeline": [
+                    {"image": "foyer.jpg", "header": "Foyer", "showLabel": False},
+                    {"image": "kitchen.jpg", "header": "Kitchen", "showLabel": True},
+                ]
+            },
+            ["foyer.jpg", "kitchen.jpg"],
+        )
+
+        self.assertEqual(headers, {"kitchen.jpg": "Kitchen"})
+
     def test_hyperframes_manifest_maps_compositions_to_video_slots(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)

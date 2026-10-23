@@ -166,13 +166,16 @@ function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageLa
     const requestedDuration = Number(sceneDurations[index]);
     return {
       title: sceneTitle,
+      // Listing scene names organize the editor; render titles only when explicitly requested.
+      showTitle: false,
       description: paragraph,
       VO: paragraph,
       images: assignedImages,
       ...(Number.isFinite(requestedDuration) && requestedDuration > 0 ? { duration: requestedDuration } : {}),
       timeline: assignedImages.map((image) => ({
         image,
-        header: imageLabelEnabled[image] ? (imageHeaders[image] || '') : '',
+        header: imageHeaders[image] || '',
+        showLabel: Boolean(imageLabelEnabled[image]),
         roomDescription: imageRoomInfo[image]?.roomDescription || '',
         roomLabel: imageRoomInfo[image]?.label || '',
         confidence: imageRoomInfo[image]?.confidence ?? null,
