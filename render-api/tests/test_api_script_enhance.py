@@ -127,6 +127,18 @@ class ScriptEnhanceApiTest(TestCase):
         self.assertIn("Simplified Chinese", prompt)
         self.assertIn("Do not leave any English narration", prompt)
 
+    def test_listing_pipeline_splits_chinese_sentences_without_spaces(self):
+        sections = api._split_script_for_pipeline(
+            "欢迎来到这处住宅。宽敞的空间适合日常生活。请联系 LeCrown Properties 预约看房。",
+            3,
+        )
+
+        self.assertEqual(sections, [
+            "欢迎来到这处住宅。",
+            "宽敞的空间适合日常生活。",
+            "请联系 LeCrown Properties 预约看房。",
+        ])
+
     def test_generate_lead_card_calls_ollama_and_returns_three_lines(self):
         with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(
             api,

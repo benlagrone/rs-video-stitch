@@ -1398,7 +1398,7 @@ def _split_script_for_pipeline(script: str, section_count: int) -> list[str]:
     normalized = re.sub(r"\s+", " ", script).strip()
     if section_count <= 1 or not normalized:
         return [normalized]
-    sentences = [part.strip() for part in re.split(r"(?<=[.!?。！？])\s+", normalized) if part.strip()]
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?。！？])\s*", normalized) if part.strip()]
     if len(sentences) < section_count:
         words = normalized.split()
         return [
