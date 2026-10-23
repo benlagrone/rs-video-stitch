@@ -4,6 +4,57 @@ function apiUrl(baseUrl, path) {
   return `${baseUrl.replace(/\/+$/, '')}${path}`;
 }
 
+const languageNames = {
+  de: 'German',
+  en: 'English',
+  fr: 'French',
+  in: 'Indian English',
+  it: 'Italian',
+  jp: 'Japanese',
+  kr: 'Korean',
+  nl: 'Dutch',
+  pl: 'Polish',
+  pt: 'Portuguese',
+  sp: 'Spanish',
+};
+
+const fliteVoiceNames = {
+  kal: { name: 'Kal', detail: 'US English · Male' },
+  awb: { name: 'Alan', detail: 'Scottish English · Male' },
+  rms: { name: 'Roger', detail: 'US English · Male' },
+  slt: { name: 'Sally', detail: 'US English · Female' },
+};
+
+function voicePresentation(provider, voice) {
+  if (provider.id === 'flite') {
+    return fliteVoiceNames[voice] || { name: voice, detail: 'Built-in voice' };
+  }
+
+  const gatewayVoice = voice.match(/^([a-z]{2})-(.+)_(man|woman)$/i);
+  if (gatewayVoice) {
+    const [, languageCode, suppliedName, gender] = gatewayVoice;
+    const name = /^Spk\d+$/i.test(suppliedName)
+      ? `Voice ${Number(suppliedName.slice(3)) + 1}`
+      : suppliedName;
+    return {
+      name,
+      detail: `${languageNames[languageCode.toLowerCase()] || languageCode.toUpperCase()} · ${gender === 'woman' ? 'Female' : 'Male'}`,
+    };
+  }
+
+  const azureVoice = voice.match(/^([a-z]{2})-([A-Z]{2})-([A-Za-z]+?)(Multilingual)?Neural$/);
+  if (azureVoice) {
+    const [, languageCode, region, suppliedName, multilingual] = azureVoice;
+    return {
+      name: suppliedName,
+      detail: `${languageNames[languageCode] || languageCode.toUpperCase()} (${region}) · ${multilingual ? 'Multilingual ' : ''}Neural`,
+    };
+  }
+
+  if (voice === 'Carter') return { name: 'Carter', detail: 'English · Male' };
+  return { name: voice, detail: 'Voice details supplied by provider' };
+}
+
 export function VoiceSamples({ apiBase, authToken, onOpenProjects, theme }) {
   const [providers, setProviders] = useState([]);
   const [text, setText] = useState('Welcome to MediaStudio. This is a narration voice sample.');
@@ -108,9 +159,14 @@ export function VoiceSamples({ apiBase, authToken, onOpenProjects, theme }) {
               <div className="voice-card-grid">
                 {provider.voices.map((voice) => {
                   const voiceKey = `${provider.ttsApi}:${voice}`;
+                  const presentation = voicePresentation(provider, voice);
                   return (
                     <article className="voice-card" key={voiceKey}>
-                      <strong>{voice}</strong>
+                      <div className="voice-card-copy">
+                        <strong>{presentation.name}</strong>
+                        <span>{presentation.detail}</span>
+                        <small>Provider ID: {voice}</small>
+                      </div>
                       <button
                         className="primary-action"
                         type="button"
