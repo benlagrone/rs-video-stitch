@@ -294,6 +294,42 @@ button { font: inherit; }
   margin-bottom: 18px;
 }
 
+.project-list-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.project-filter input {
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  font: inherit;
+  min-height: 40px;
+  padding: 0 12px;
+  width: min(280px, 42vw);
+}
+
+.project-filter input:focus {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 1px;
+}
+
+.sr-only {
+  clip: rect(0, 0, 0, 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
 .project-list-toolbar h2,
 .empty-project-list h3,
 .project-card h3 {
@@ -1736,6 +1772,7 @@ progress {
 
   .studio-header,
   .header-actions,
+  .project-list-toolbar,
   .upload-box,
   .script-actions {
     align-items: stretch;
@@ -1744,6 +1781,14 @@ progress {
 
   .script-actions {
     grid-template-columns: 1fr;
+  }
+
+  .project-list-controls {
+    align-items: stretch;
+  }
+
+  .project-filter input {
+    width: 100%;
   }
 
   .script-section-meta {

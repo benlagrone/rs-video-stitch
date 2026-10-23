@@ -339,6 +339,7 @@ export function App() {
   const [view, setView] = useState('projects');
   const [bibleProjectId, setBibleProjectId] = useState('');
   const [savedProjects, setSavedProjects] = useState([]);
+  const [projectFilter, setProjectFilter] = useState('');
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [soundCatalog, setSoundCatalog] = useState({ assets: [], count: 0, status: 'loading' });
   const [isLoadingSoundCatalog, setIsLoadingSoundCatalog] = useState(false);
@@ -355,6 +356,13 @@ export function App() {
     if (projectId.trim()) return slugify(projectId.trim());
     return `p_${slugify(title || 'mediastudio-project')}`;
   }, [projectId, title]);
+  const filteredProjects = useMemo(() => {
+    const query = projectFilter.trim().toLocaleLowerCase();
+    if (!query) return savedProjects;
+    return savedProjects.filter((project) => (
+      `${project.title || ''} ${project.projectId || ''}`.toLocaleLowerCase().includes(query)
+    ));
+  }, [projectFilter, savedProjects]);
   const scriptSections = useMemo(() => splitScript(script), [script]);
 
   const scenesPayload = useMemo(
@@ -1436,11 +1444,25 @@ export function App() {
           <div className="project-list-toolbar">
             <div>
               <h2>Saved Projects</h2>
-              <p>{savedProjects.length} project{savedProjects.length === 1 ? '' : 's'} on this server</p>
+              <p>{filteredProjects.length} of {savedProjects.length} project{savedProjects.length === 1 ? '' : 's'} on this server</p>
             </div>
-            <button className="secondary-action" type="button" onClick={refreshProjects} disabled={isLoadingProjects}>
-              {isLoadingProjects ? 'Refreshing' : 'Refresh'}
-            </button>
+            <div className="project-list-controls">
+              <label className="project-filter">
+                <span className="sr-only">Filter projects</span>
+                <input
+                  type="search"
+                  value={projectFilter}
+                  onChange={(event) => setProjectFilter(event.target.value)}
+                  placeholder="Filter projects"
+                />
+              </label>
+              {projectFilter && (
+                <button className="secondary-action" type="button" onClick={() => setProjectFilter('')}>Clear</button>
+              )}
+              <button className="secondary-action" type="button" onClick={refreshProjects} disabled={isLoadingProjects}>
+                {isLoadingProjects ? 'Refreshing' : 'Refresh'}
+              </button>
+            </div>
           </div>
           {error && <div className="error-box">{error}</div>}
           {savedProjects.length === 0 ? (
@@ -1449,9 +1471,15 @@ export function App() {
               <p>Create a project, add images and script text, then Save Project or Start Render.</p>
               <button className="primary-action" type="button" onClick={resetEditor}>Create Project</button>
             </div>
+          ) : filteredProjects.length === 0 ? (
+            <div className="empty-project-list">
+              <h3>No matching projects</h3>
+              <p>Try a title or project ID, such as “LeCrown”.</p>
+              <button className="secondary-action" type="button" onClick={() => setProjectFilter('')}>Clear filter</button>
+            </div>
           ) : (
             <div className="project-card-grid">
-              {savedProjects.map((project) => (
+              {filteredProjects.map((project) => (
                 <article className="project-card" key={project.projectId}>
                   <div>
                     <h3>{project.title || project.projectId}</h3>
