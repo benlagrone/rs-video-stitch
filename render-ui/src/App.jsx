@@ -38,6 +38,12 @@ const DEFAULT_RENDER_OPTIONS = {
   logoMargin: 24,
 };
 
+const HYPERFRAMES_EDITOR = 'http://localhost:3002/#project/hyperframes-lecrown-preview?v=1&t=7.2&tab=design';
+
+function hyperframesEditUrl(file, elementId) {
+  return `${HYPERFRAMES_EDITOR}&selFile=${encodeURIComponent(file)}&selId=${encodeURIComponent(elementId)}&selSelector=${encodeURIComponent(`#${elementId}`)}`;
+}
+
 function slugify(value) {
   return value
     .toString()
@@ -1638,6 +1644,7 @@ export function App() {
               {isGeneratingIntro ? 'Generating' : 'Generate with Ollama'}
             </button>
           </div>
+          <a className="secondary-action hyperframes-launch" href={hyperframesEditUrl('compositions/lead-card.html', 'lead-headline')} target="_blank" rel="noreferrer">Edit title card in HyperFrames</a>
           <label className="check-row"><input type="checkbox" checked={useIntro} onChange={(event) => setUseIntro(event.target.checked)} />Use 1 second leader card</label>
           <label>Lead card line 1<input value={introLines[0] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 0, event.target.value))} placeholder="Primary title line" /></label>
           <label>Lead card line 2<input value={introLines[1] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 1, event.target.value))} placeholder="Subtitle or property detail" /></label>
@@ -1706,13 +1713,21 @@ export function App() {
                   const scene = scenesPayload.scenes[index];
                   const assignedImages = scene?.images || [];
                   return (
-                    <label className="script-section-card" key={`${index}-${assignedImages.join('-')}`}>
+                    <div className="script-section-card" key={`${index}-${assignedImages.join('-')}`}>
                       <div className="script-section-meta">
                         <span>
                           Scene {index + 1}
                           {assignedImages.length ? ` - ${assignedImages.join(', ')}` : ''}
                         </span>
                         <span className="scene-card-controls">
+                          <a
+                            className="secondary-action hyperframes-launch"
+                            href={hyperframesEditUrl('compositions/lecrown-scene-transition.html', 'transition-title')}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Edit transition
+                          </a>
                           <span className="scene-duration-control">
                             <span>Min length</span>
                             <input
@@ -1771,7 +1786,7 @@ export function App() {
                         value={section}
                         onChange={(event) => setScript((current) => replaceScriptSection(current, index, event.target.value))}
                       />
-                    </label>
+                    </div>
                   );
                 })}
               </div>
