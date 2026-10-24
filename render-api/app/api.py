@@ -960,6 +960,47 @@ def _script_enhance_prompt(
     )
 
 
+def _scene_copy_prompt(
+    script: str,
+    target_seconds: int,
+    scene_plan: list[dict],
+    language: str = "en-US",
+) -> str:
+    language_instruction = (
+        "Write every narration line in Simplified Chinese. Do not leave any English narration."
+        if language.lower().startswith("zh")
+        else "Write every narration line in English."
+    )
+    scene_count = len(scene_plan)
+    seconds_per_scene = max(1, round(target_seconds / max(1, scene_count)))
+    return (
+        "Write short, image-specific narration for a LeCrown Properties real-estate video.\n"
+        f"{language_instruction}\n"
+        f"There are exactly {scene_count} ordered image scenes, about {seconds_per_scene} seconds each.\n"
+        "Use only the supplied listing script and scene details. Never invent amenities, measurements, prices, addresses, or facts.\n"
+        "Each line must describe its own scene naturally; do not mention filenames, labels, or image numbers.\n"
+        "Return JSON only in exactly this shape: {\"sceneTexts\":[\"scene 1 narration\",\"scene 2 narration\"]}.\n"
+        "Return exactly one non-empty string for every supplied scene, in order.\n\n"
+        f"Listing script:\n{script.strip()}\n\n"
+        f"Ordered image scenes:\n{json.dumps(scene_plan, ensure_ascii=False)}"
+    )
+
+
+def _parse_scene_texts(value: str, expected_count: int) -> list[str]:
+    match = re.search(r"\{.*\}", value.strip(), flags=re.DOTALL)
+    if match:
+        try:
+            payload = json.loads(match.group(0))
+            scene_texts = payload.get("sceneTexts") if isinstance(payload, dict) else None
+            if isinstance(scene_texts, list):
+                cleaned = [str(item).strip() for item in scene_texts]
+                if len(cleaned) == expected_count and all(cleaned):
+                    return cleaned
+        except (TypeError, ValueError):
+            pass
+    raise HTTPException(status_code=502, detail="Ollama did not return one narration line for every image scene")
+
+
 def _extract_ollama_response(payload: dict) -> str:
     response = str(payload.get("response") or "").strip()
     if not response:
@@ -1148,13 +1189,20 @@ async def generate_hyperframes_transition_title(
 
 @app.post("/v1/script/enhance", response_model=ScriptEnhanceResponse)
 async def enhance_script(req: ScriptEnhanceRequest) -> ScriptEnhanceResponse:
-    prompt = _script_enhance_prompt(req.script, req.targetSeconds, req.roomInfo)
+    scene_plan = req.scenePlan or []
+    prompt = (
+        _scene_copy_prompt(req.script, req.targetSeconds, scene_plan)
+        if scene_plan
+        else _script_enhance_prompt(req.script, req.targetSeconds, req.roomInfo)
+    )
     enhanced = _ollama_generate(prompt, temperature=0.55)
+    scene_texts = _parse_scene_texts(enhanced, len(scene_plan)) if scene_plan else []
 
     return ScriptEnhanceResponse(
-        script=enhanced,
+        script="\n\n".join(scene_texts) if scene_texts else enhanced,
         targetSeconds=req.targetSeconds,
         model=OLLAMA_MODEL,
+        sceneTexts=scene_texts,
     )
 
 

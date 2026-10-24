@@ -1548,10 +1548,18 @@ export function App() {
           script: recognizedScriptTitle.narration,
           targetSeconds: Number(targetSeconds),
           roomInfo: roomInfoPayload,
+          scenePlan: roomInfoPayload.map((room) => ({
+            filename: room.filename,
+            room: room.header || room.label || 'Property detail',
+            notes: room.roomDescription || '',
+          })),
         }),
       });
-      const rewrittenNarration = result.script || recognizedScriptTitle.narration;
-      const nextNarration = splitScriptIntoSections(rewrittenNarration, images.length);
+      const sceneTexts = Array.isArray(result.sceneTexts) ? result.sceneTexts.filter(Boolean) : [];
+      if (sceneTexts.length !== images.length) {
+        throw new Error('Ollama did not return narration for every image scene.');
+      }
+      const nextNarration = sceneTexts.join('\n\n');
       const titlePrefix = recognizedScriptTitle.title ? `${recognizedScriptTitle.title}\n\n` : '';
       const nextScript = `${titlePrefix}${nextNarration}`.trim();
       setScript(nextScript);

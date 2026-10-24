@@ -226,12 +226,14 @@ class ScriptEnhanceRequest(BaseModel):
     script: str = Field(min_length=1)
     targetSeconds: int = Field(ge=5, le=3600)
     roomInfo: List[Dict[str, Any]] = Field(default_factory=list)
+    scenePlan: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ScriptEnhanceResponse(BaseModel):
     script: str
     targetSeconds: int
     model: str
+    sceneTexts: List[str] = Field(default_factory=list)
 
 
 class LeadCardGenerateRequest(BaseModel):

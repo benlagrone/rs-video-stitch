@@ -184,6 +184,32 @@ class ScriptEnhanceApiTest(TestCase):
         self.assertIn("kitchen", payload["prompt"])
         self.assertIn("Oversized island", payload["prompt"])
 
+    def test_enhance_script_returns_one_scene_text_per_requested_image_scene(self):
+        scene_texts = ["A bright foyer welcomes you in.", "The private deck extends the living space."]
+        with mock.patch.object(
+            api.requests,
+            "post",
+            return_value=_FakeDescriptionResponse('{"sceneTexts":["A bright foyer welcomes you in.","The private deck extends the living space."]}'),
+        ) as post:
+            response = asyncio.run(
+                api.enhance_script(
+                    ScriptEnhanceRequest(
+                        script="Original narration.",
+                        targetSeconds=30,
+                        scenePlan=[
+                            {"filename": "GK-1.jpg", "room": "Foyer", "notes": "Natural light"},
+                            {"filename": "GK-2.jpg", "room": "Garage apartment", "notes": "Private deck"},
+                        ],
+                    )
+                )
+            )
+
+        self.assertEqual(response.sceneTexts, scene_texts)
+        self.assertEqual(response.script, "\n\n".join(scene_texts))
+        prompt = post.call_args.kwargs["json"]["prompt"]
+        self.assertIn('"sceneTexts"', prompt)
+        self.assertIn("Garage apartment", prompt)
+
     def test_listing_pipeline_prompt_requires_simplified_chinese_for_mandarin_projects(self):
         prompt = api._script_enhance_prompt(
             "Welcome to this home.",
