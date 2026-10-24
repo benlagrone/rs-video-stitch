@@ -988,11 +988,13 @@ def _scene_copy_prompt(
 
 
 def _parse_scene_texts(value: str, expected_count: int) -> list[str]:
-    match = re.search(r"\{.*\}", value.strip(), flags=re.DOTALL)
+    raw_value = value.strip()
+    raw_value = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_value, flags=re.IGNORECASE)
+    match = re.search(r"(?:\{.*\}|\[.*\])", raw_value, flags=re.DOTALL)
     if match:
         try:
             payload = json.loads(match.group(0))
-            scene_texts = payload.get("sceneTexts") if isinstance(payload, dict) else None
+            scene_texts = payload.get("sceneTexts") if isinstance(payload, dict) else payload
             if isinstance(scene_texts, list):
                 cleaned = [str(item).strip() for item in scene_texts]
                 if (
@@ -1020,6 +1022,7 @@ def _ollama_generate(
     *,
     temperature: float = 0.55,
     num_predict: Optional[int] = None,
+    json_output: bool = False,
 ) -> str:
     url = OLLAMA_BASE_URL.rstrip("/") + "/api/generate"
     options = {
@@ -1027,7 +1030,6 @@ def _ollama_generate(
     }
     if num_predict is not None:
         options["num_predict"] = num_predict
-
     payload = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
@@ -1035,6 +1037,8 @@ def _ollama_generate(
         "keep_alive": 0,
         "options": options,
     }
+    if json_output:
+        payload["format"] = "json"
 
     try:
         response = governed_post(
@@ -1200,7 +1204,7 @@ async def enhance_script(req: ScriptEnhanceRequest) -> ScriptEnhanceResponse:
         if scene_plan
         else _script_enhance_prompt(req.script, req.targetSeconds, req.roomInfo)
     )
-    enhanced = _ollama_generate(prompt, temperature=0.55)
+    enhanced = _ollama_generate(prompt, temperature=0.55, json_output=bool(scene_plan))
     scene_texts = []
     if scene_plan:
         try:
@@ -1209,6 +1213,7 @@ async def enhance_script(req: ScriptEnhanceRequest) -> ScriptEnhanceResponse:
             enhanced = _ollama_generate(
                 f"{prompt}\n\nYour prior response was invalid. Return exactly {len(scene_plan)} complete sentences, one per image scene, with each string ending in sentence punctuation.",
                 temperature=0.25,
+                json_output=True,
             )
             scene_texts = _parse_scene_texts(enhanced, len(scene_plan))
 

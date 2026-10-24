@@ -216,6 +216,32 @@ class ScriptEnhanceApiTest(TestCase):
 
         self.assertEqual(error.exception.status_code, 502)
 
+    def test_scene_text_parser_accepts_a_json_array(self):
+        scene_texts = api._parse_scene_texts(
+            '["A bright foyer welcomes you home.", "The private deck extends the living space."]',
+            2,
+        )
+
+        self.assertEqual(scene_texts[0], "A bright foyer welcomes you home.")
+
+    def test_enhance_scene_copy_requests_json_from_ollama(self):
+        with mock.patch.object(
+            api.requests,
+            "post",
+            return_value=_FakeDescriptionResponse('{"sceneTexts":["A bright foyer welcomes you home."]}'),
+        ) as post:
+            asyncio.run(
+                api.enhance_script(
+                    ScriptEnhanceRequest(
+                        script="Original narration.",
+                        targetSeconds=15,
+                        scenePlan=[{"room": "Foyer", "notes": "Natural light"}],
+                    )
+                )
+            )
+
+        self.assertEqual(post.call_args.kwargs["json"]["format"], "json")
+
     def test_listing_pipeline_prompt_requires_simplified_chinese_for_mandarin_projects(self):
         prompt = api._script_enhance_prompt(
             "Welcome to this home.",
