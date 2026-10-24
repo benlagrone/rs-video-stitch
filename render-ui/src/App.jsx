@@ -1535,12 +1535,34 @@ export function App() {
     }
   }
 
-  function splitScriptForImages() {
+  async function splitScriptForImages() {
     if (!script.trim() || images.length < 1) return;
-    const nextScript = splitScriptIntoSections(script, images.length);
-    setScript(nextScript);
-    setSceneImageAssignments(images.map((image) => [image.name]));
-    setStatus(`Split script into ${splitScript(nextScript).length} scene sections`);
+    setError('');
+    setIsEnhancing(true);
+    setStatus('Rewriting scene copy with room information');
+    try {
+      const result = await request('/v1/script/enhance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          script: recognizedScriptTitle.narration,
+          targetSeconds: Number(targetSeconds),
+          roomInfo: roomInfoPayload,
+        }),
+      });
+      const rewrittenNarration = result.script || recognizedScriptTitle.narration;
+      const nextNarration = splitScriptIntoSections(rewrittenNarration, images.length);
+      const titlePrefix = recognizedScriptTitle.title ? `${recognizedScriptTitle.title}\n\n` : '';
+      const nextScript = `${titlePrefix}${nextNarration}`.trim();
+      setScript(nextScript);
+      setSceneImageAssignments(images.map((image) => [image.name]));
+      setStatus(`Rewrote and split the script into ${splitScript(nextNarration).length} image scenes with ${result.model || 'Ollama'}`);
+    } catch (err) {
+      setStatus('Image scene rewrite failed');
+      setError(err.message || String(err));
+    } finally {
+      setIsEnhancing(false);
+    }
   }
 
   function buildScenesFromRoomLabels() {
@@ -1991,8 +2013,8 @@ export function App() {
             <button className="secondary-action" type="button" onClick={() => enhanceScript({ withRoomInfo: true })} disabled={!canEnhance || !hasRoomInfo}>
               {isEnhancing ? 'Enhancing' : 'Enhance with room info'}
             </button>
-            <button className="secondary-action" type="button" onClick={splitScriptForImages} disabled={!script.trim() || images.length < 1}>
-              Split into image scenes
+            <button className="secondary-action" type="button" onClick={splitScriptForImages} disabled={!script.trim() || images.length < 1 || isEnhancing}>
+              {isEnhancing ? 'Rewriting image scenes' : 'Rewrite & split into image scenes'}
             </button>
             <button className="secondary-action" type="button" onClick={buildScenesFromRoomLabels} disabled={!script.trim() || images.length < 1}>
               Build scenes from room labels
