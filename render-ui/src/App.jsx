@@ -440,7 +440,16 @@ export function App() {
   );
   const recognizedScriptTitle = useMemo(() => titleFromScript(script, scriptTitle || title), [script, scriptTitle, title]);
   const recognizedTitleCard = useMemo(() => titleCardFromScript(script, scriptTitle || title), [script, scriptTitle, title]);
-  const scriptSections = useMemo(() => splitScript(recognizedScriptTitle.narration), [recognizedScriptTitle]);
+  const scriptSections = useMemo(() => {
+    const paragraphs = splitScript(recognizedScriptTitle.narration);
+    const assignmentCount = sanitizeSceneImageAssignments(
+      sceneImageAssignments,
+      images.map((image) => image.name),
+    ).length;
+    return assignmentCount > paragraphs.length
+      ? splitScript(splitScriptIntoSections(recognizedScriptTitle.narration, assignmentCount))
+      : paragraphs;
+  }, [images, recognizedScriptTitle, sceneImageAssignments]);
   const selectedHyperframes = useMemo(
     () => hyperframesBinding(
       hyperframesLeadCard,
@@ -2098,7 +2107,7 @@ export function App() {
                       <textarea
                         className="script-section-textarea"
                         value={section}
-                        onChange={(event) => setScript((current) => replaceScriptSection(current, index, event.target.value))}
+                        onChange={(event) => setScript(replaceScriptSection(scriptSections.join('\n\n'), index, event.target.value))}
                       />
                     </div>
                   );
