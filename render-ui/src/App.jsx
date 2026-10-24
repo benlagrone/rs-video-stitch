@@ -1537,6 +1537,14 @@ export function App() {
 
   async function splitScriptForImages() {
     if (!script.trim() || images.length < 1) return;
+    const existingAssignments = sanitizeSceneImageAssignments(
+      sceneImageAssignments,
+      images.map((image) => image.name),
+    ).filter((sceneImages) => sceneImages.length);
+    const imageSceneAssignments = existingAssignments.length
+      ? existingAssignments
+      : images.map((image) => [image.name]);
+    const roomByFilename = new Map(roomInfoPayload.map((room) => [room.filename, room]));
     setError('');
     setIsEnhancing(true);
     setStatus('Rewriting scene copy with room information');
@@ -1548,23 +1556,27 @@ export function App() {
           script: recognizedScriptTitle.narration,
           targetSeconds: Number(targetSeconds),
           roomInfo: roomInfoPayload,
-          scenePlan: roomInfoPayload.map((room) => ({
-            filename: room.filename,
-            room: room.header || room.label || 'Property detail',
-            notes: room.roomDescription || '',
+          scenePlan: imageSceneAssignments.map((imageNames) => ({
+            rooms: imageNames.map((filename) => {
+              const room = roomByFilename.get(filename) || {};
+              return {
+                room: room.header || room.label || 'Property detail',
+                notes: room.roomDescription || '',
+              };
+            }),
           })),
         }),
       });
       const sceneTexts = Array.isArray(result.sceneTexts) ? result.sceneTexts.filter(Boolean) : [];
-      if (sceneTexts.length !== images.length) {
-        throw new Error('Ollama did not return narration for every image scene.');
+      if (sceneTexts.length !== imageSceneAssignments.length) {
+        throw new Error('Ollama did not return narration for every image-scene group.');
       }
       const nextNarration = sceneTexts.join('\n\n');
       const titlePrefix = recognizedScriptTitle.title ? `${recognizedScriptTitle.title}\n\n` : '';
       const nextScript = `${titlePrefix}${nextNarration}`.trim();
       setScript(nextScript);
-      setSceneImageAssignments(images.map((image) => [image.name]));
-      setStatus(`Rewrote and split the script into ${splitScript(nextNarration).length} image scenes with ${result.model || 'Ollama'}`);
+      setSceneImageAssignments(imageSceneAssignments);
+      setStatus(`Rewrote ${imageSceneAssignments.length} image-scene sections with ${result.model || 'Ollama'}`);
     } catch (err) {
       setStatus('Image scene rewrite failed');
       setError(err.message || String(err));
@@ -2022,7 +2034,7 @@ export function App() {
               {isEnhancing ? 'Enhancing' : 'Enhance with room info'}
             </button>
             <button className="secondary-action" type="button" onClick={splitScriptForImages} disabled={!script.trim() || images.length < 1 || isEnhancing}>
-              {isEnhancing ? 'Rewriting image scenes' : 'Rewrite & split into image scenes'}
+              {isEnhancing ? 'Rewriting image scenes' : 'Rewrite image-scene copy'}
             </button>
             <button className="secondary-action" type="button" onClick={buildScenesFromRoomLabels} disabled={!script.trim() || images.length < 1}>
               Build scenes from room labels
