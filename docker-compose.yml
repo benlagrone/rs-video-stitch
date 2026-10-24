@@ -5,6 +5,8 @@ services:
       dockerfile: render-api/Dockerfile
     image: render-api:latest
     container_name: mediastudio-api
+    dns:
+      - 192.168.0.126
     networks:
       - mediastudio-sextant-net
       - fortress-workload-control-net
@@ -54,6 +56,8 @@ services:
   render-worker:
     image: render-api:latest
     container_name: mediastudio-worker
+    dns:
+      - 192.168.0.126
     entrypoint: ["/usr/bin/tini","--"]
     command: ["python","-m","app.worker"]
     networks:
