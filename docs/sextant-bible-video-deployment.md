@@ -56,9 +56,9 @@ and keep YouTube publishing behind a separate confirmation dialog.
 - SFX MCP: `python3 mcp/sfx_mcp.py` with `SFX_LIBRARY_ROOT` set to that library
 
 The host must pass the Colima/Docker preflight before deployment. Stable
-Diffusion, Ollama, Wan/ComfyUI, and the central voice gateway are reached at
-the Phronesis Tailscale address (`100.100.97.30`), which preserves the model
-firewall instead of opening model ports to the general LAN. Voice provider
+Diffusion, Ollama, and Wan/ComfyUI are reached over the protected Phronesis
+Tailscale route. The central voice gateway is resolved through the LAN service
+name `fortress.lan:8133`; it is not hard-coded to a Tailscale address. Voice provider
 tokens and provider-selection policy stay inside the Fortress voice gateway;
 YouTube credentials stay in the Sextant server environment. No credential is
 returned to the browser.

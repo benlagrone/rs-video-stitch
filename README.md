@@ -101,6 +101,7 @@ mkdir -p ~/Videos/MediaStudio/{logs,projects}
 | `XTTS_API_KEY` | — | Optional bearer token for the xTTS service. |
 | `XTTS_LANGUAGE` | — | Optional language code passed to xTTS (default depends on service). |
 | `ROOM_RENAMER_API_URL` | `http://100.100.97.30:8014` | Protected Phronesis Room Renamer service called only by the server. |
+| `VOICE_GATEWAY_URL` | `http://fortress.lan:8133` | Central LAN voice gateway called only by the server. |
 | `ROOM_RENAMER_API_TOKEN` | — | Optional bearer token shared only between Sextant and Room Renamer. |
 | `ROOM_RENAMER_REQUIRED` | `1` | Fail the render before queueing if automatic room naming cannot run. |
 | `FORTRESS_OPTIMIZATION_MCP_URL` | — | Internal Sextant URL for Timefold-backed Phronesis GPU admission. Required in the locked runtime. |
