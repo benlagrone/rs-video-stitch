@@ -979,6 +979,7 @@ def _scene_copy_prompt(
         f"There are exactly {scene_count} ordered image scenes, about {seconds_per_scene} seconds each.\n"
         "Use only the supplied listing script and scene details. Never invent amenities, measurements, prices, addresses, or facts.\n"
         "Each line must describe its own scene naturally; do not mention filenames, labels, or image numbers.\n"
+        "Every line must be one complete grammatical sentence and end with sentence punctuation. Never split a sentence, clause, or phrase across entries.\n"
         "Return JSON only in exactly this shape: {\"sceneTexts\":[\"scene 1 narration\",\"scene 2 narration\"]}.\n"
         "Return exactly one non-empty string for every supplied scene, in order.\n\n"
         f"Listing script:\n{script.strip()}\n\n"
@@ -994,7 +995,11 @@ def _parse_scene_texts(value: str, expected_count: int) -> list[str]:
             scene_texts = payload.get("sceneTexts") if isinstance(payload, dict) else None
             if isinstance(scene_texts, list):
                 cleaned = [str(item).strip() for item in scene_texts]
-                if len(cleaned) == expected_count and all(cleaned):
+                if (
+                    len(cleaned) == expected_count
+                    and all(cleaned)
+                    and all(re.search(r"[.!?。！？][\"')\]]*$", item) for item in cleaned)
+                ):
                     return cleaned
         except (TypeError, ValueError):
             pass
@@ -1196,7 +1201,16 @@ async def enhance_script(req: ScriptEnhanceRequest) -> ScriptEnhanceResponse:
         else _script_enhance_prompt(req.script, req.targetSeconds, req.roomInfo)
     )
     enhanced = _ollama_generate(prompt, temperature=0.55)
-    scene_texts = _parse_scene_texts(enhanced, len(scene_plan)) if scene_plan else []
+    scene_texts = []
+    if scene_plan:
+        try:
+            scene_texts = _parse_scene_texts(enhanced, len(scene_plan))
+        except HTTPException:
+            enhanced = _ollama_generate(
+                f"{prompt}\n\nYour prior response was invalid. Return exactly {len(scene_plan)} complete sentences, one per image scene, with each string ending in sentence punctuation.",
+                temperature=0.25,
+            )
+            scene_texts = _parse_scene_texts(enhanced, len(scene_plan))
 
     return ScriptEnhanceResponse(
         script="\n\n".join(scene_texts) if scene_texts else enhanced,

@@ -210,6 +210,12 @@ class ScriptEnhanceApiTest(TestCase):
         self.assertIn('"sceneTexts"', prompt)
         self.assertIn("Garage apartment", prompt)
 
+    def test_scene_text_parser_rejects_incomplete_sentences(self):
+        with self.assertRaises(HTTPException) as error:
+            api._parse_scene_texts('{"sceneTexts":["A bright foyer", "welcomes you home."]}', 2)
+
+        self.assertEqual(error.exception.status_code, 502)
+
     def test_listing_pipeline_prompt_requires_simplified_chinese_for_mandarin_projects(self):
         prompt = api._script_enhance_prompt(
             "Welcome to this home.",
