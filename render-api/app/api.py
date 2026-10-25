@@ -927,6 +927,16 @@ def _room_context(room_info: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _enhancement_language(script: str, requested_language: str) -> str:
+    """Preserve Mandarin narration for legacy projects that lack a saved language."""
+    if requested_language.lower().startswith("zh"):
+        return requested_language
+    opening_text = script.lstrip()[:160]
+    if len(re.findall(r"[\u4e00-\u9fff]", opening_text)) >= 2:
+        return "zh-CN"
+    return requested_language
+
+
 def _script_enhance_prompt(
     script: str,
     target_seconds: int,
@@ -1199,10 +1209,11 @@ async def generate_hyperframes_transition_title(
 @app.post("/v1/script/enhance", response_model=ScriptEnhanceResponse)
 async def enhance_script(req: ScriptEnhanceRequest) -> ScriptEnhanceResponse:
     scene_plan = req.scenePlan or []
+    language = _enhancement_language(req.script, req.language)
     prompt = (
-        _scene_copy_prompt(req.script, req.targetSeconds, scene_plan)
+        _scene_copy_prompt(req.script, req.targetSeconds, scene_plan, language=language)
         if scene_plan
-        else _script_enhance_prompt(req.script, req.targetSeconds, req.roomInfo)
+        else _script_enhance_prompt(req.script, req.targetSeconds, req.roomInfo, language=language)
     )
     enhanced = _ollama_generate(prompt, temperature=0.55, json_output=bool(scene_plan))
     scene_texts = []

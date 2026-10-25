@@ -225,6 +225,7 @@ class BibleTitleCardRequest(BaseModel):
 class ScriptEnhanceRequest(BaseModel):
     script: str = Field(min_length=1)
     targetSeconds: int = Field(ge=5, le=3600)
+    language: str = Field(default="en-US", min_length=2, max_length=32)
     roomInfo: List[Dict[str, Any]] = Field(default_factory=list)
     scenePlan: List[Dict[str, Any]] = Field(default_factory=list)
 

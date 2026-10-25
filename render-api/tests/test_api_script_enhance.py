@@ -252,6 +252,45 @@ class ScriptEnhanceApiTest(TestCase):
         self.assertIn("Simplified Chinese", prompt)
         self.assertIn("Do not leave any English narration", prompt)
 
+    def test_enhance_script_infers_chinese_from_a_legacy_project_script(self):
+        with mock.patch.object(
+            api.requests,
+            "post",
+            return_value=_FakeOllamaResponse(),
+        ) as post:
+            asyncio.run(
+                api.enhance_script(
+                    ScriptEnhanceRequest(
+                        script="欢迎来到这处住宅。宽敞的空间适合日常生活。",
+                        targetSeconds=30,
+                    )
+                )
+            )
+
+        prompt = post.call_args.kwargs["json"]["prompt"]
+        self.assertIn("Simplified Chinese", prompt)
+        self.assertIn("Do not leave any English narration", prompt)
+
+    def test_enhance_scene_copy_preserves_requested_chinese_language(self):
+        with mock.patch.object(
+            api.requests,
+            "post",
+            return_value=_FakeDescriptionResponse('{"sceneTexts":["宽敞的客厅自然延伸到户外空间。"]}'),
+        ) as post:
+            asyncio.run(
+                api.enhance_script(
+                    ScriptEnhanceRequest(
+                        script="欢迎来到这处住宅。",
+                        targetSeconds=15,
+                        language="zh-CN",
+                        scenePlan=[{"room": "客厅", "notes": "明亮空间"}],
+                    )
+                )
+            )
+
+        prompt = post.call_args.kwargs["json"]["prompt"]
+        self.assertIn("Simplified Chinese", prompt)
+
     def test_listing_pipeline_splits_chinese_sentences_without_spaces(self):
         sections = api._split_script_for_pipeline(
             "欢迎来到这处住宅。宽敞的空间适合日常生活。请联系 LeCrown Properties 预约看房。",

@@ -1522,6 +1522,7 @@ export function App() {
         body: JSON.stringify({
           script,
           targetSeconds: Number(targetSeconds),
+          language,
           roomInfo: withRoomInfo ? roomInfoPayload : [],
         }),
       });
@@ -1555,6 +1556,7 @@ export function App() {
         body: JSON.stringify({
           script: recognizedScriptTitle.narration,
           targetSeconds: Number(targetSeconds),
+          language,
           roomInfo: roomInfoPayload,
           scenePlan: imageSceneAssignments.map((imageNames) => ({
             rooms: imageNames.map((filename) => {
