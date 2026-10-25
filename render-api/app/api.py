@@ -937,6 +937,18 @@ def _enhancement_language(script: str, requested_language: str) -> str:
     return requested_language
 
 
+def _unexpected_latin_terms(output: str, source_script: str) -> set[str]:
+    allowed_terms = {
+        term.lower()
+        for term in re.findall(r"[A-Za-z]{3,}", source_script)
+    }
+    return {
+        term
+        for term in re.findall(r"[A-Za-z]{3,}", output)
+        if term.lower() not in allowed_terms
+    }
+
+
 def _script_enhance_prompt(
     script: str,
     target_seconds: int,
@@ -945,7 +957,8 @@ def _script_enhance_prompt(
 ) -> str:
     target_words = max(1, round(target_seconds * 2.45))
     language_instruction = (
-        "Write the full narration in Simplified Chinese. Do not leave any English narration."
+        "Write the full narration only in Simplified Chinese. Translate every descriptive word and sentence into Chinese. "
+        "Do not add English narration; keep an English word only when it appears verbatim in the input as a proper name, URL, email address, or phone number."
         if language.lower().startswith("zh")
         else "Write the full narration in English."
     )
@@ -977,7 +990,8 @@ def _scene_copy_prompt(
     language: str = "en-US",
 ) -> str:
     language_instruction = (
-        "Write every narration line in Simplified Chinese. Do not leave any English narration."
+        "Write every narration line only in Simplified Chinese. Translate every descriptive word and sentence into Chinese. "
+        "Do not add English narration; keep an English word only when it appears verbatim in the input as a proper name, URL, email address, or phone number."
         if language.lower().startswith("zh")
         else "Write every narration line in English."
     )
@@ -1227,6 +1241,19 @@ async def enhance_script(req: ScriptEnhanceRequest) -> ScriptEnhanceResponse:
                 json_output=True,
             )
             scene_texts = _parse_scene_texts(enhanced, len(scene_plan))
+
+    enhanced_text = "\n".join(scene_texts) if scene_texts else enhanced
+    if language.lower().startswith("zh") and _unexpected_latin_terms(enhanced_text, req.script):
+        retry_prompt = (
+            f"{prompt}\n\n"
+            "Your prior response introduced English descriptive narration. Rewrite it now in Simplified Chinese only. "
+            "Translate every English descriptive phrase. Preserve only exact proper names, URLs, email addresses, and phone numbers that already appear in the input."
+        )
+        enhanced = _ollama_generate(retry_prompt, temperature=0.25, json_output=bool(scene_plan))
+        scene_texts = _parse_scene_texts(enhanced, len(scene_plan)) if scene_plan else []
+        enhanced_text = "\n".join(scene_texts) if scene_texts else enhanced
+        if _unexpected_latin_terms(enhanced_text, req.script):
+            raise HTTPException(status_code=502, detail="Ollama could not return the enhancement entirely in Simplified Chinese")
 
     return ScriptEnhanceResponse(
         script="\n\n".join(scene_texts) if scene_texts else enhanced,

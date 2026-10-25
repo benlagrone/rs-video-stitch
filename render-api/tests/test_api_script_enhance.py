@@ -250,13 +250,13 @@ class ScriptEnhanceApiTest(TestCase):
         )
 
         self.assertIn("Simplified Chinese", prompt)
-        self.assertIn("Do not leave any English narration", prompt)
+        self.assertIn("Do not add English narration", prompt)
 
     def test_enhance_script_infers_chinese_from_a_legacy_project_script(self):
         with mock.patch.object(
             api.requests,
             "post",
-            return_value=_FakeOllamaResponse(),
+            return_value=_FakeDescriptionResponse("欢迎来到这处精心设计的住宅。"),
         ) as post:
             asyncio.run(
                 api.enhance_script(
@@ -269,7 +269,29 @@ class ScriptEnhanceApiTest(TestCase):
 
         prompt = post.call_args.kwargs["json"]["prompt"]
         self.assertIn("Simplified Chinese", prompt)
-        self.assertIn("Do not leave any English narration", prompt)
+        self.assertIn("Do not add English narration", prompt)
+
+    def test_enhance_script_retries_mixed_language_mandarin_output(self):
+        with mock.patch.object(
+            api.requests,
+            "post",
+            side_effect=[
+                _FakeDescriptionResponse("欢迎来到这处 elegant property。"),
+                _FakeDescriptionResponse("欢迎来到这处优雅的住宅。"),
+            ],
+        ) as post:
+            response = asyncio.run(
+                api.enhance_script(
+                    ScriptEnhanceRequest(
+                        script="欢迎来到这处住宅。",
+                        targetSeconds=15,
+                    )
+                )
+            )
+
+        self.assertEqual(response.script, "欢迎来到这处优雅的住宅。")
+        self.assertEqual(post.call_count, 2)
+        self.assertIn("introduced English descriptive narration", post.call_args.kwargs["json"]["prompt"])
 
     def test_enhance_scene_copy_preserves_requested_chinese_language(self):
         with mock.patch.object(
