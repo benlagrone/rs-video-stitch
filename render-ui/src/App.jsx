@@ -2,10 +2,12 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { BibleStudio } from './BibleStudio.jsx';
 import {
   leadLinesFromState,
+  fitSceneAssignmentsToNarration,
   renderOptionsFromProject,
   sceneAssignmentsFromRoomInfo,
   sanitizeSceneImageAssignments,
   sceneImageAssignmentsFromProject,
+  scriptWithNarrationSections,
   titleCardFromScript,
   titleFromScript,
 } from './projectState.js';
@@ -96,70 +98,15 @@ function splitScript(script) {
     .filter(Boolean);
 }
 
-function sentenceChunks(text) {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (!normalized) return [];
-  const sentences = normalized.match(/[^.!?。！？]+[.!?。！？]+(?:\s+|$)|[^.!?。！？]+$/g) || [normalized];
-  return sentences.map((sentence) => sentence.trim()).filter(Boolean);
-}
-
-function splitScriptIntoSections(script, sectionCount) {
-  const count = Math.max(1, Number(sectionCount) || 1);
-  const sentences = sentenceChunks(script);
-  if (!sentences.length || count === 1) return script.trim();
-
-  if (sentences.length < count) {
-    const normalized = script.replace(/\s+/g, ' ').trim();
-    const words = /[\u3400-\u9fff]/.test(normalized)
-      ? Array.from(normalized.replace(/\s+/g, ''))
-      : normalized.split(/\s+/).filter(Boolean);
-    const sections = Array.from({ length: count }, (_, index) => {
-      const start = Math.floor((index * words.length) / count);
-      const end = Math.floor(((index + 1) * words.length) / count);
-      return words.slice(start, end).join(' ').trim();
-    }).filter(Boolean);
-    return sections.join('\n\n');
-  }
-
-  const sentenceWeights = sentences.map((sentence) => sentence.split(/\s+/).filter(Boolean).length);
-  const totalWeight = sentenceWeights.reduce((sum, weight) => sum + weight, 0);
-  const sections = [];
-  let section = [];
-  let sectionWeight = 0;
-  let sentenceIndex = 0;
-
-  for (let targetIndex = 0; targetIndex < count; targetIndex += 1) {
-    const remainingSections = count - targetIndex;
-    const remainingSentences = sentences.length - sentenceIndex;
-    const targetWeight = totalWeight / count;
-    section = [];
-    sectionWeight = 0;
-
-    while (sentenceIndex < sentences.length && remainingSentences - section.length > remainingSections - 1) {
-      section.push(sentences[sentenceIndex]);
-      sectionWeight += sentenceWeights[sentenceIndex];
-      sentenceIndex += 1;
-      if (sectionWeight >= targetWeight) break;
-    }
-
-    sections.push(section.join(' ').trim());
-  }
-
-  if (sentenceIndex < sentences.length) {
-    sections[sections.length - 1] = `${sections[sections.length - 1]} ${sentences.slice(sentenceIndex).join(' ')}`.trim();
-  }
-
-  return sections.filter(Boolean).join('\n\n');
-}
-
 function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageLabelEnabled, imageRoomInfo, sceneDurations = [], sceneImageAssignments = [], voice, language, ttsApi, hyperframes }) {
   const imageNames = images.map((image) => image.name).filter(Boolean);
   const scriptContent = titleFromScript(script, scriptTitle || title);
-  const assignments = sanitizeSceneImageAssignments(sceneImageAssignments, imageNames);
   const existingParagraphs = splitScript(scriptContent.narration);
-  const paragraphs = assignments.length > existingParagraphs.length
-    ? splitScript(splitScriptIntoSections(scriptContent.narration, assignments.length))
-    : existingParagraphs;
+  const assignments = fitSceneAssignmentsToNarration(
+    sanitizeSceneImageAssignments(sceneImageAssignments, imageNames),
+    existingParagraphs.length,
+  );
+  const paragraphs = existingParagraphs;
   const scenes = paragraphs.map((paragraph, index) => {
     const assignedImages = assignments[index] || [];
     const sceneTitle = assignedImages.map((image) => imageHeaders[image]).find((header) => header && header.trim()) || '';
@@ -346,6 +293,7 @@ export function App() {
   const [targetSeconds, setTargetSeconds] = useState(60);
   const [sceneDurations, setSceneDurations] = useState([]);
   const [sceneImageAssignments, setSceneImageAssignments] = useState([]);
+  const [sceneTextDrafts, setSceneTextDrafts] = useState(null);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [images, setImages] = useState([]);
   const [removedImages, setRemovedImages] = useState([]);
@@ -441,15 +389,9 @@ export function App() {
   const recognizedScriptTitle = useMemo(() => titleFromScript(script, scriptTitle || title), [script, scriptTitle, title]);
   const recognizedTitleCard = useMemo(() => titleCardFromScript(script, scriptTitle || title), [script, scriptTitle, title]);
   const scriptSections = useMemo(() => {
-    const paragraphs = splitScript(recognizedScriptTitle.narration);
-    const assignmentCount = sanitizeSceneImageAssignments(
-      sceneImageAssignments,
-      images.map((image) => image.name),
-    ).length;
-    return assignmentCount > paragraphs.length
-      ? splitScript(splitScriptIntoSections(recognizedScriptTitle.narration, assignmentCount))
-      : paragraphs;
-  }, [images, recognizedScriptTitle, sceneImageAssignments]);
+    return splitScript(recognizedScriptTitle.narration);
+  }, [recognizedScriptTitle]);
+  const editableScriptSections = sceneTextDrafts || scriptSections;
   const selectedHyperframes = useMemo(
     () => hyperframesBinding(
       hyperframesLeadCard,
@@ -718,6 +660,7 @@ export function App() {
     setPropertyAddress('');
     setProjectId('');
     setScript('Welcome to this property. The opening view should establish the home and the neighborhood.\n\nStep inside to highlight the living spaces, natural light, and everyday comfort.\n\nFinish with the strongest selling points and a clear invitation to schedule a showing.');
+    setSceneTextDrafts(null);
     setOriginalScriptText('');
     setTargetSeconds(60);
     setSceneDurations([]);
@@ -804,6 +747,7 @@ export function App() {
       const loadedScript = scriptFromProject(state, persistedScenes);
       const savedOriginalScript = String(state.originalScriptText || loadedScript).trim();
       setScript(loadedScript);
+      setSceneTextDrafts(null);
       setOriginalScriptText(savedOriginalScript);
       setTargetSeconds(state.targetSeconds || 60);
       setSceneDurations(savedSceneDurations);
@@ -916,6 +860,20 @@ export function App() {
         ...values,
       },
     }));
+  }
+
+  function updateSceneTextDraft(index, value) {
+    setSceneTextDrafts((current) => {
+      const next = [...(current || scriptSections)];
+      next[index] = value;
+      return next;
+    });
+  }
+
+  function commitSceneTextDrafts() {
+    if (!sceneTextDrafts) return;
+    setScript(scriptWithNarrationSections(script, scriptTitle, sceneTextDrafts));
+    setSceneTextDrafts(null);
   }
 
   function addImageToScene(sceneIndex, imageName) {
@@ -1527,6 +1485,7 @@ export function App() {
         }),
       });
       setScript(result.script || script);
+      setSceneTextDrafts(null);
       setStatus(`Enhanced with ${result.model || 'Ollama'}`);
     } catch (err) {
       setStatus('Enhance failed');
@@ -1577,6 +1536,7 @@ export function App() {
       const titlePrefix = recognizedScriptTitle.title ? `${recognizedScriptTitle.title}\n\n` : '';
       const nextScript = `${titlePrefix}${nextNarration}`.trim();
       setScript(nextScript);
+      setSceneTextDrafts(null);
       setSceneImageAssignments(imageSceneAssignments);
       setStatus(`Rewrote ${imageSceneAssignments.length} image-scene sections with ${result.model || 'Ollama'}`);
     } catch (err) {
@@ -1594,10 +1554,14 @@ export function App() {
       setError('Run Auto-name rooms before building scenes from room labels.');
       return;
     }
-    const nextScript = splitScriptIntoSections(script, assignments.length);
-    setScript(nextScript);
-    setSceneImageAssignments(assignments);
-    setStatus(`Built ${assignments.length} room-based scenes from ${images.length} images`);
+    const narrationSections = splitScript(recognizedScriptTitle.narration);
+    if (!narrationSections.length) {
+      setError('Add one narration paragraph per scene before building scenes.');
+      return;
+    }
+    setSceneTextDrafts(null);
+    setSceneImageAssignments(fitSceneAssignmentsToNarration(assignments, narrationSections.length));
+    setStatus(`Built ${narrationSections.length} room-based scenes from ${images.length} images`);
   }
 
   async function submitRender() {
@@ -2015,7 +1979,7 @@ export function App() {
 
         <section className="editor-panel">
           <div className="panel-heading"><h2>Script</h2><span>{scenesPayload.scenes.length} scene{scenesPayload.scenes.length === 1 ? '' : 's'}</span></div>
-          <textarea value={script} onChange={(event) => setScript(event.target.value)} spellCheck="true" />
+          <textarea value={script} onChange={(event) => { setSceneTextDrafts(null); setScript(event.target.value); }} spellCheck="true" />
           <div className="script-actions">
             <label>Spoken length
               <span className="inline-input">
@@ -2048,14 +2012,14 @@ export function App() {
               {unassignedImageCount} image{unassignedImageCount === 1 ? ' is' : 's are'} still in the loading zone. Add them to scene sections before rendering.
             </p>
           )}
-          {scriptSections.length > 0 && (
+          {editableScriptSections.length > 0 && (
             <div className="script-section-panel">
               <div className="output-heading compact-heading">
                 <h3>Script Scene Sections</h3>
-                <span>{scriptSections.length} section{scriptSections.length === 1 ? '' : 's'}</span>
+                <span>{editableScriptSections.length} section{editableScriptSections.length === 1 ? '' : 's'}</span>
               </div>
               <div className="script-section-list">
-                {scriptSections.map((section, index) => {
+                {editableScriptSections.map((section, index) => {
                   const scene = scenesPayload.scenes[index];
                   const nextScene = scenesPayload.scenes[index + 1];
                   const assignedImages = scene?.images || [];
@@ -2135,14 +2099,14 @@ export function App() {
                         </div>
                         <select
                           aria-label={`Add picture to scene ${index + 1}`}
-                          disabled={assignedImages.length >= 3 || unassignedImagePreviews.length === 0}
+                          disabled={unassignedImagePreviews.length === 0}
                           value=""
                           onChange={(event) => {
                             addImageToScene(index, event.target.value);
                             event.target.value = '';
                           }}
                         >
-                          <option value="">{assignedImages.length >= 3 ? 'Scene full' : 'Add picture'}</option>
+                          <option value="">Add picture</option>
                           {unassignedImagePreviews.map((preview) => (
                             <option key={preview.name} value={preview.name}>{preview.name}</option>
                           ))}
@@ -2151,7 +2115,8 @@ export function App() {
                       <textarea
                         className="script-section-textarea"
                         value={section}
-                        onChange={(event) => setScript(replaceScriptSection(scriptSections.join('\n\n'), index, event.target.value))}
+                        onChange={(event) => updateSceneTextDraft(index, event.target.value)}
+                        onBlur={commitSceneTextDrafts}
                       />
                     </div>
                   );

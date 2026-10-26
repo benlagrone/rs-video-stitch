@@ -40,6 +40,17 @@ export function titleFromScript(script, explicitTitle = '') {
   };
 }
 
+export function scriptWithNarrationSections(script, explicitTitle = '', sections = []) {
+  const parsed = titleFromScript(script, explicitTitle);
+  const narration = sections
+    .map((section) => String(section || '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+  const inlineTitle = !String(explicitTitle || '').trim() && parsed.title
+    && String(script || '').trim().startsWith(parsed.title);
+  return `${inlineTitle ? `${parsed.title}\n\n` : ''}${narration}`.trim();
+}
+
 export function titleCardFromScript(script, explicitTitle = '') {
   const { title } = titleFromScript(script, explicitTitle);
   const segments = title.split('|').map((segment) => segment.replace(/\s+/g, ' ').trim()).filter(Boolean);
@@ -56,6 +67,16 @@ export function sanitizeSceneImageAssignments(assignments, availableNames) {
       .filter((name) => available.has(name))
       .slice(0, 3)
   ));
+}
+
+export function fitSceneAssignmentsToNarration(assignments, narrationCount) {
+  const count = Math.max(0, Number(narrationCount) || 0);
+  if (!count || assignments.length <= count) return assignments;
+  return Array.from({ length: count }, (_, index) => {
+    const start = Math.floor((index * assignments.length) / count);
+    const end = Math.floor(((index + 1) * assignments.length) / count);
+    return assignments.slice(start, end).flat();
+  });
 }
 
 export function sceneAssignmentsFromRoomInfo(images, imageRoomInfo) {

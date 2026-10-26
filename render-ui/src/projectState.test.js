@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 
 import {
   leadLinesFromState,
+  fitSceneAssignmentsToNarration,
   renderOptionsFromProject,
   sceneAssignmentsFromRoomInfo,
   sanitizeSceneImageAssignments,
   sceneImageAssignmentsFromProject,
+  scriptWithNarrationSections,
   titleCardFromScript,
   titleFromScript,
 } from './projectState.js';
@@ -23,6 +25,15 @@ test('keeps ordinary mixed-case script openings in narration', () => {
 
   assert.equal(parsed.title, '');
   assert.equal(parsed.narration, 'Welcome to this Heights property.\n\nEnjoy the outdoor space.');
+});
+
+test('commits edited scene sections without consuming an inline title', () => {
+  const script = 'RARE OVERSIZED LOT | NO HOA\n\nWelcome to the property.\n\nEnjoy the outdoor space.';
+
+  assert.equal(
+    scriptWithNarrationSections(script, '', ['Updated opening narration.', 'Updated outdoor narration.']),
+    'RARE OVERSIZED LOT | NO HOA\n\nUpdated opening narration.\n\nUpdated outdoor narration.',
+  );
 });
 
 test('recognizes an explicit mixed-case title from intake metadata', () => {
@@ -65,6 +76,16 @@ test('groups Room Renamer labels into three-image scene assignments', () => {
     ['front-4.jpg'],
     ['kitchen.jpg'],
   ]);
+});
+
+test('fits image groups to narration paragraphs without splitting the narration', () => {
+  assert.deepEqual(
+    fitSceneAssignmentsToNarration(
+      [['front.jpg'], ['foyer.jpg'], ['kitchen.jpg'], ['primary.jpg'], ['yard.jpg']],
+      2,
+    ),
+    [['front.jpg', 'foyer.jpg'], ['kitchen.jpg', 'primary.jpg', 'yard.jpg']],
+  );
 });
 
 test('preserves a saved image reused by a later scene', () => {
