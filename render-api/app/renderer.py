@@ -1798,8 +1798,29 @@ def render_project(
                     log,
                 )
                 if thumbnail_enabled:
-                    thumbnail_file = output_dir / "thumbnail.jpg"
-                    _generate_youtube_thumbnail(intro_file, thumbnail_file, log)
+                    # Use the established LeCrown title-card layout for the
+                    # YouTube thumbnail. A HyperFrames lead-in is animated and
+                    # can begin on a dark transition frame, which makes a poor
+                    # listing thumbnail.
+                    leader_template = (
+                        _resolve_leader_template(input_dir, str(intro_leader_image) if intro_leader_image else None, log)
+                        if intro_leader_enabled
+                        else None
+                    )
+                    _, thumbnail_file = _create_intro_card_assets(
+                        background_image=intro_background,
+                        leader_template=leader_template,
+                        title=intro_title,
+                        work_dir=work_dir,
+                        output_dir=output_dir,
+                        fps=fps,
+                        duration=intro_duration,
+                        title_font_path=title_font_path,
+                        preset=preset,
+                        crf=crf,
+                        log=log,
+                        thumbnail_enabled=True,
+                    )
             else:
                 leader_template = (
                     _resolve_leader_template(input_dir, str(intro_leader_image) if intro_leader_image else None, log)
@@ -1911,11 +1932,6 @@ def render_project(
             crf,
             log,
         )
-
-    if thumbnail_enabled and intro_enabled and thumbnail_file:
-        # Sample the finished output so the thumbnail contains the same branding
-        # overlay and layout as the published video.
-        _generate_youtube_thumbnail(final_path, thumbnail_file, log)
 
     hyperframes_manifest = _write_hyperframes_manifest(output_dir, output_name, hyperframes_binding)
     if hyperframes_manifest:
