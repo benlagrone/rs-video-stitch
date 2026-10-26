@@ -46,6 +46,29 @@ class YouTubeProfileTests(unittest.TestCase):
         self.assertIs(result, credentials)
         credentials_class.from_authorized_user_file.assert_called_once_with(str(token_path))
 
+    def test_saved_oauth_token_takes_precedence_over_refresh_env_bootstrap(self):
+        saved_credentials = MagicMock()
+        env_credentials = MagicMock()
+        youtube_client = MagicMock()
+        with patch.object(
+            youtube_upload,
+            "_credentials_from_token_file",
+            return_value=saved_credentials,
+        ) as from_file, patch.object(
+            youtube_upload,
+            "_credentials_from_refresh_env",
+            return_value=env_credentials,
+        ) as from_env, patch.object(
+            youtube_upload,
+            "_google_modules",
+            return_value={"build": MagicMock(return_value=youtube_client)},
+        ):
+            result = youtube_upload.authenticate_youtube("english")
+
+        self.assertIs(result, youtube_client)
+        from_file.assert_called_once()
+        from_env.assert_not_called()
+
     def test_mandarin_uses_a_separate_token_file(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
             os.environ,

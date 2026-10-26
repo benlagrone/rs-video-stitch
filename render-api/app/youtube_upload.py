@@ -190,11 +190,15 @@ def _token_granted_scopes(profile: str = DEFAULT_PROFILE) -> set[str]:
 def authenticate_youtube(profile: str = DEFAULT_PROFILE):
     profile = normalize_youtube_profile(profile)
     token_file = _token_file_path(profile)
-    credentials = _credentials_from_refresh_env(profile)
-    if credentials:
-        _save_credentials(token_file, credentials)
-    else:
-        credentials = _credentials_from_token_file(token_file)
+    # OAuth reconnects persist the account the user explicitly selected.  An
+    # environment refresh token is only a bootstrap fallback; allowing it to
+    # win here would silently replace a newly connected channel on every
+    # request.
+    credentials = _credentials_from_token_file(token_file)
+    if not credentials:
+        credentials = _credentials_from_refresh_env(profile)
+        if credentials:
+            _save_credentials(token_file, credentials)
 
     if not credentials:
         raise YouTubeUploadConfigurationError(
