@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,40 @@ from app.schemas import YouTubeMetadataRequest, YouTubeThumbnailRequest, YouTube
 
 
 class YouTubeThumbnailApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_regenerate_thumbnail_creates_title_card_without_youtube_write(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            input_dir = root / "input"
+            image_dir = input_dir / "images"
+            output_dir = root / "output"
+            image_dir.mkdir(parents=True)
+            output_dir.mkdir()
+            (image_dir / "front.jpg").write_bytes(b"image")
+            (input_dir / "scenes.json").write_text(json.dumps({"scenes": [{"images": ["front.jpg"]}]}))
+            thumbnail = output_dir / "thumbnail.jpg"
+            saved_states = []
+
+            def create_thumbnail(**kwargs):
+                thumbnail.write_bytes(b"thumbnail")
+                return root / "work" / "intro.mp4", thumbnail
+
+            with patch.object(api, "p_input", return_value=input_dir), patch.object(
+                api, "p_output", return_value=output_dir
+            ), patch.object(api, "read_project_state", return_value={"title": "Listing title"}), patch.object(
+                api, "_resolve_leader_template", return_value=root / "leader.png"
+            ), patch.object(api, "_resolve_title_font", return_value=root / "font.ttf"), patch.object(
+                api, "_create_intro_card_assets", side_effect=create_thumbnail
+            ) as create_card, patch.object(
+                api, "save_project_state", side_effect=lambda _pid, state, **_kwargs: saved_states.append(dict(state))
+            ):
+                result = await api.regenerate_title_card_thumbnail("project-1")
+
+            self.assertEqual(result["filename"], "thumbnail.jpg")
+            self.assertTrue(thumbnail.exists())
+            self.assertEqual(create_card.call_args.kwargs["title"], "Listing title")
+            self.assertEqual(create_card.call_args.kwargs["background_image"], image_dir / "front.jpg")
+            self.assertEqual(saved_states[-1]["thumbnailFilename"], "thumbnail.jpg")
+
     async def test_upload_automatically_applies_and_persists_thumbnail(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)

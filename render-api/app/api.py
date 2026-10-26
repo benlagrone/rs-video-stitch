@@ -60,7 +60,13 @@ from app.schemas import (
     YouTubeUploadResponse,
 )
 from app.renderer import (
+    DEFAULT_CRF,
+    DEFAULT_FPS,
+    DEFAULT_PRESET,
     TTSConfigurationError,
+    _create_intro_card_assets,
+    _resolve_leader_template,
+    _resolve_title_font,
     _synthesize_azure_voice_proxy,
     _synthesize_flite,
     _synthesize_voice_gateway,
@@ -2302,6 +2308,67 @@ async def youtube_thumbnail(
         url=url,
         thumbnailFilename=thumbnail_path.name,
     )
+
+
+def _regenerate_title_card_thumbnail(pid: str) -> Path:
+    state = read_project_state(pid) or {}
+    scenes_path = p_input(pid) / "scenes.json"
+    if not scenes_path.exists():
+        raise FileNotFoundError("project scenes are missing")
+    scenes_doc = json.loads(scenes_path.read_text(encoding="utf-8"))
+    scenes = scenes_doc.get("scenes") or []
+    first_images = (scenes[0].get("images") or []) if scenes else []
+    if not first_images:
+        raise ValueError("the first scene needs an image to create a title-card thumbnail")
+
+    background_image = p_input(pid) / "images" / Path(first_images[0]).name
+    if not background_image.exists():
+        raise FileNotFoundError("the title-card background image is missing")
+
+    title = str(state.get("introTitle") or state.get("title") or pid).strip()
+    if not title:
+        raise ValueError("a video title is required to create a title-card thumbnail")
+
+    leader_image = state.get("leaderImageName")
+    _, thumbnail_path = _create_intro_card_assets(
+        background_image=background_image,
+        leader_template=_resolve_leader_template(p_input(pid), str(leader_image) if leader_image else None, None),
+        title=title,
+        work_dir=p_input(pid).parent / "work",
+        output_dir=p_output(pid),
+        fps=DEFAULT_FPS,
+        duration=1.0,
+        title_font_path=_resolve_title_font(),
+        preset=DEFAULT_PRESET,
+        crf=str(DEFAULT_CRF),
+        log=None,
+        thumbnail_enabled=True,
+    )
+    if thumbnail_path is None:
+        raise RuntimeError("thumbnail generation did not produce an image")
+    return thumbnail_path
+
+
+@app.post("/v1/projects/{pid}/thumbnail/regenerate")
+async def regenerate_title_card_thumbnail(pid: str) -> dict:
+    try:
+        thumbnail_path = await run_in_threadpool(_regenerate_title_card_thumbnail, pid)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Could not regenerate title-card thumbnail for %s", pid)
+        raise HTTPException(status_code=500, detail=f"thumbnail generation failed: {exc}") from exc
+
+    state = read_project_state(pid) or {}
+    state["thumbnailGeneratedAt"] = time.time()
+    state["thumbnailFilename"] = thumbnail_path.name
+    state["updatedAt"] = time.time()
+    save_project_state(pid, state, project_name=str(state.get("title") or pid))
+    return {
+        "projectId": pid,
+        "filename": thumbnail_path.name,
+        "generatedAt": state["thumbnailGeneratedAt"],
+    }
 
 
 @app.post("/v1/projects/{pid}/youtube/metadata", response_model=YouTubeMetadataResponse)

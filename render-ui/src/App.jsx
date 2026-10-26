@@ -342,11 +342,13 @@ export function App() {
   const [youtubeThumbnailApplied, setYoutubeThumbnailApplied] = useState(false);
   const [youtubeThumbnailFilename, setYoutubeThumbnailFilename] = useState('');
   const [youtubeThumbnailError, setYoutubeThumbnailError] = useState('');
+  const [thumbnailRefreshKey, setThumbnailRefreshKey] = useState('');
   const [youtubeCallbackUrl, setYoutubeCallbackUrl] = useState('');
   const [isConnectingYoutube, setIsConnectingYoutube] = useState(false);
   const [isUploadingYoutube, setIsUploadingYoutube] = useState(false);
   const [isUpdatingYoutubeDetails, setIsUpdatingYoutubeDetails] = useState(false);
   const [isApplyingYoutubeThumbnail, setIsApplyingYoutubeThumbnail] = useState(false);
+  const [isRegeneratingThumbnail, setIsRegeneratingThumbnail] = useState(false);
   const [job, setJob] = useState(null);
   const [logs, setLogs] = useState('');
   const [videoHref, setVideoHref] = useState('');
@@ -474,7 +476,9 @@ export function App() {
     [outputs],
   );
   const previewVideoHref = videoHref || (previewVideoName ? outputHref(previewVideoName) : '');
-  const previewPosterHref = previewPosterName ? outputHref(previewPosterName) : '';
+  const previewPosterHref = previewPosterName
+    ? `${outputHref(previewPosterName)}${thumbnailRefreshKey ? `&v=${encodeURIComponent(thumbnailRefreshKey)}` : ''}`
+    : '';
 
   useEffect(() => localStorage.setItem('renderUi.apiBase', apiBase), [apiBase]);
   useEffect(() => localStorage.setItem('renderUi.authToken', authToken), [authToken]);
@@ -696,6 +700,7 @@ export function App() {
     setYoutubeThumbnailApplied(false);
     setYoutubeThumbnailFilename('');
     setYoutubeThumbnailError('');
+    setThumbnailRefreshKey('');
     setYoutubeCallbackUrl('');
     setJob(null);
     setLogs('');
@@ -795,6 +800,7 @@ export function App() {
       setYoutubeThumbnailApplied(Boolean(state.youtubeUpload?.thumbnailApplied));
       setYoutubeThumbnailFilename(state.youtubeUpload?.thumbnailFilename || '');
       setYoutubeThumbnailError(state.youtubeUpload?.thumbnailError || '');
+      setThumbnailRefreshKey(String(state.thumbnailGeneratedAt || ''));
       setOutputs(result.outputs || []);
       setVideoHref('');
       setJob(null);
@@ -1340,6 +1346,27 @@ export function App() {
       setStatus('YouTube thumbnail failed');
     } finally {
       setIsApplyingYoutubeThumbnail(false);
+    }
+  }
+
+  async function regenerateThumbnail() {
+    if (!resolvedProjectId || isRegeneratingThumbnail) return;
+
+    setError('');
+    setIsRegeneratingThumbnail(true);
+    setStatus('Generating title-card thumbnail');
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/thumbnail/regenerate`, {
+        method: 'POST',
+      });
+      setThumbnailRefreshKey(String(result.generatedAt || Date.now()));
+      await refreshOutputs();
+      setStatus('Title-card thumbnail ready');
+    } catch (err) {
+      setError(err.message || String(err));
+      setStatus('Thumbnail generation failed');
+    } finally {
+      setIsRegeneratingThumbnail(false);
     }
   }
 
@@ -2372,6 +2399,9 @@ export function App() {
                   </button>
                   <button type="button" onClick={uploadYoutube} disabled={isUploadingYoutube || !youtubeAuth?.authenticated}>
                     {isUploadingYoutube ? 'Uploading' : 'Upload to YouTube'}
+                  </button>
+                  <button type="button" onClick={regenerateThumbnail} disabled={isRegeneratingThumbnail || !hasSavedProject}>
+                    {isRegeneratingThumbnail ? 'Updating thumbnail' : 'Update thumbnail'}
                   </button>
                   <button type="button" onClick={applyYoutubeThumbnail} disabled={isApplyingYoutubeThumbnail || !youtubeAuth?.authenticated || !youtubeVideoId.trim() || !previewPosterName}>
                     {isApplyingYoutubeThumbnail ? 'Applying thumbnail' : 'Apply thumbnail'}
