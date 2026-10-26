@@ -462,8 +462,12 @@ export function App() {
     [imagePreviews, selectedImageName],
   );
   const previewVideoName = useMemo(
-    () => outputs.find((file) => /\.(mp4|mov|mpg|mpeg|webm)$/i.test(file)) || '',
-    [outputs],
+    () => (
+      outputs.includes(outputName) && /\.(mp4|mov|mpg|mpeg|webm)$/i.test(outputName)
+        ? outputName
+        : outputs.find((file) => /\.(mp4|mov|mpg|mpeg|webm)$/i.test(file)) || ''
+    ),
+    [outputName, outputs],
   );
   const previewPosterName = useMemo(
     () => outputs.find((file) => /\.(jpg|jpeg|png|webp)$/i.test(file)) || '',
@@ -1273,7 +1277,9 @@ export function App() {
     setYoutubeResult('');
     setIsUploadingYoutube(true);
     try {
-      const selectedOutput = videoHref ? outputName : (outputs.find((file) => file.endsWith('.mp4') || file.endsWith('.mpg') || file.endsWith('.mov')) || outputName);
+      const selectedOutput = outputs.includes(outputName)
+        ? outputName
+        : (outputs.find((file) => file.endsWith('.mp4') || file.endsWith('.mpg') || file.endsWith('.mov')) || outputName);
       const description = youtubeDescription || originalScriptText || script;
       const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/youtube/upload`, {
         method: 'POST',
