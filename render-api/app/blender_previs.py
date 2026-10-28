@@ -179,9 +179,12 @@ def generate_scene_3d_brief(
     image_prompt = _clean_text((timeline.get("imageGeneration") or {}).get("prompt") or timeline.get("prompt"))
     motion_prompt = _clean_text(motion_instruction or scene.get("motionPrompt") or scene.get("action"))
     reference = _clean_text(scene.get("title"), 120)
+    is_genesis_one_one = bool(
+        re.match(r"^genesis\s+1:1\b", reference, flags=re.IGNORECASE)
+    )
     fallback = (
         _fallback_genesis_1_1_brief(scene, image_prompt, motion_prompt)
-        if re.match(r"^genesis\s+1:1\b", reference, flags=re.IGNORECASE)
+        if is_genesis_one_one
         else _generic_fallback_brief(scene, image_prompt, motion_prompt)
     )
     prompt = (
@@ -217,6 +220,11 @@ def generate_scene_3d_brief(
         payload = response.json()
         content = str(payload.get("response") or "").strip()
         brief = _sanitize_brief(json.loads(content), fallback)
+        if is_genesis_one_one:
+            brief["objects"] = fallback["objects"]
+            brief["actionBeats"] = fallback["actionBeats"]
+            brief["continuityRules"] = fallback["continuityRules"]
+            brief["videoPrompt"] = fallback["videoPrompt"]
         brief["source"] = "ollama-image+motion-prompts"
     except (GpuAdmissionError, requests.RequestException, json.JSONDecodeError, TypeError, ValueError):
         brief = fallback
