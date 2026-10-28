@@ -7,6 +7,7 @@ import math
 import random
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import bpy
@@ -17,6 +18,7 @@ def args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--brief", required=True)
     parser.add_argument("--video", required=True)
+    parser.add_argument("--depth-video", required=True)
     parser.add_argument("--poster", required=True)
     parser.add_argument("--blend", required=True)
     values = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
@@ -61,6 +63,28 @@ def material(name):
         value.node_tree.links.new(noise.outputs["Fac"], bump.inputs["Height"])
         value.node_tree.links.new(bump.outputs["Normal"], principled.inputs["Normal"])
     return value
+
+
+def configure_depth_output(scene, destination):
+    """Write a normalized inverse-depth sequence while the beauty guide renders."""
+    scene.view_layers[0].use_pass_z = True
+    scene.use_nodes = True
+    nodes = scene.node_tree.nodes
+    nodes.clear()
+    render_layers = nodes.new("CompositorNodeRLayers")
+    normalize = nodes.new("CompositorNodeNormalize")
+    invert = nodes.new("CompositorNodeInvert")
+    composite = nodes.new("CompositorNodeComposite")
+    depth_output = nodes.new("CompositorNodeOutputFile")
+    depth_output.base_path = str(destination)
+    depth_output.format.file_format = "PNG"
+    depth_output.format.color_mode = "BW"
+    depth_output.format.color_depth = "8"
+    depth_output.file_slots[0].path = "depth-"
+    scene.node_tree.links.new(render_layers.outputs["Image"], composite.inputs["Image"])
+    scene.node_tree.links.new(render_layers.outputs["Depth"], normalize.inputs["Value"])
+    scene.node_tree.links.new(normalize.outputs["Value"], invert.inputs["Color"])
+    scene.node_tree.links.new(invert.outputs["Color"], depth_output.inputs["Image"])
 
 
 def add_object(spec, mats):
@@ -178,7 +202,29 @@ def main():
     scene.render.image_settings.file_format = "FFMPEG"
     scene.render.ffmpeg.format = "MPEG4"
     scene.render.ffmpeg.codec = "H264"
-    bpy.ops.render.render(animation=True)
+    with tempfile.TemporaryDirectory(prefix="mediastudio-blender-depth-") as depth_temp:
+        depth_frames = Path(depth_temp)
+        configure_depth_output(scene, depth_frames)
+        bpy.ops.render.render(animation=True)
+        depth_target = Path(options.depth_video)
+        depth_target.parent.mkdir(parents=True, exist_ok=True)
+        depth_sources = sorted(depth_frames.glob("depth-*.png"))
+        if len(depth_sources) < 81:
+            raise RuntimeError(
+                f"Blender produced {len(depth_sources)} depth frames; 81 are required"
+            )
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-framerate", "16", "-start_number", "1", "-i",
+                str(depth_frames / "depth-%04d.png"), "-frames:v", "81",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "12",
+                "-pix_fmt", "yuv420p", str(depth_target),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        scene.use_nodes = False
     candidates = sorted(
         path for path in animation_prefix.parent.glob(f"{animation_prefix.name}-*")
         if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".mov", ".avi"}
