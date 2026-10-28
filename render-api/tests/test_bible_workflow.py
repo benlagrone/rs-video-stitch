@@ -1192,6 +1192,30 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(control_command[control_command.index("-i") + 1], str(depth))
         self.assertIn("format=gray", control_command[control_command.index("-vf") + 1])
 
+    def test_appearance_guidance_preserves_full_color_proxy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            appearance = Path(tmp) / "appearance.mp4"
+            control = Path(tmp) / "control.mp4"
+            mask = Path(tmp) / "mask.mp4"
+            appearance.write_bytes(b"appearance")
+
+            def render_track(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"video")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(
+                motion_provider.subprocess, "run", side_effect=render_track
+            ) as run, mock.patch.object(
+                motion_provider, "_verify_temporal_control_track"
+            ), mock.patch.object(
+                motion_provider, "_verify_static_control_track"
+            ):
+                motion_provider._prepare_appearance_guidance_assets(appearance, control, mask)
+
+        control_command = run.call_args_list[0].args[0]
+        self.assertEqual(control_command[control_command.index("-i") + 1], str(appearance))
+        self.assertNotIn("format=gray", control_command[control_command.index("-vf") + 1])
+
     def test_3d_guided_video_rejects_rgb_guide_copy_after_intro(self):
         with tempfile.TemporaryDirectory() as tmp:
             guide = Path(tmp) / "guide.mp4"
@@ -1901,7 +1925,7 @@ class BibleWorkflowTest(TestCase):
             ), mock.patch.object(
                 motion_provider, "_upload_asset", side_effect=["guide.mp4", "mask.mp4"]
             ), mock.patch.object(
-                motion_provider, "_generate_region_control_assets", return_value=1
+                motion_provider, "_prepare_appearance_guidance_assets"
             ) as appearance_control, mock.patch.object(
                 motion_provider, "_prepare_3d_guidance_assets"
             ) as depth_control, mock.patch.object(
