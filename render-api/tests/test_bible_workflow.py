@@ -1879,10 +1879,6 @@ class BibleWorkflowTest(TestCase):
             def prepare_source(_source, prepared):
                 prepared.write_bytes(b"prepared-png")
 
-            def prepare_guide(_depth, control, mask):
-                control.write_bytes(b"control-video")
-                mask.write_bytes(b"mask-video")
-
             def write_candidate(_session, _workflow, candidate):
                 candidate.write_bytes(b"motion")
 
@@ -1901,12 +1897,14 @@ class BibleWorkflowTest(TestCase):
             ), mock.patch.object(
                 motion_provider, "_release_stable_diffusion_gpu_memory"
             ), mock.patch.object(
-                motion_provider, "_prepare_3d_guidance_assets", side_effect=prepare_guide
-            ), mock.patch.object(
                 motion_provider, "_upload_image", return_value="scene.png"
             ), mock.patch.object(
                 motion_provider, "_upload_asset", side_effect=["guide.mp4", "mask.mp4"]
             ), mock.patch.object(
+                motion_provider, "_generate_region_control_assets", return_value=1
+            ) as appearance_control, mock.patch.object(
+                motion_provider, "_prepare_3d_guidance_assets"
+            ) as depth_control, mock.patch.object(
                 motion_provider, "_queue_and_download_workflow", side_effect=write_candidate
             ), mock.patch.object(
                 motion_provider, "_stabilize_locked_camera", return_value={"p95TranslationPixels": 0.0}
@@ -1939,7 +1937,14 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(quality["modelProvider"], "wan2.1-vace-3d-guide-control")
         self.assertEqual(quality["guideCopySsim"], 0.42)
         self.assertEqual(quality["depthControlSource"], depth.name)
+        self.assertEqual(quality["depthControlStrength"], 0.0)
+        self.assertEqual(
+            quality["appearanceControlStrength"],
+            motion_provider.GUIDED_APPEARANCE_CONTROL_STRENGTH,
+        )
         self.assertEqual(quality["appearanceReference"], still.name)
+        appearance_control.assert_called_once()
+        depth_control.assert_not_called()
         self.assertEqual(
             sequence_integrity.call_args.kwargs["ignored_tile_boxes"],
             expected_corridors,
