@@ -1084,7 +1084,11 @@ class BibleWorkflowTest(TestCase):
             protect_edges.assert_called_once()
             stabilize.assert_called_once_with(destination)
             fidelity.assert_called_once()
-            integrity.assert_called_once_with(destination)
+            integrity.assert_called_once_with(
+                destination,
+                ignored_tile_boxes=None,
+                allow_no_fixed_tiles=False,
+            )
             self.assertEqual(quality["sourceSizing"], "fit-and-pad-no-crop")
             self.assertEqual(quality["sourceFrameSsim"], 0.88)
             self.assertEqual(quality["modelProvider"], "wan2.2-ti2v-5b")
