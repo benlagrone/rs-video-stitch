@@ -1947,7 +1947,12 @@ def _generate_motion_clip(
         region_count = 0
         region_error: MotionProviderError | None = None
 
-        def validate_candidate(provider: str, denoise: float) -> dict[str, Any]:
+        def validate_candidate(
+            provider: str,
+            denoise: float,
+            *,
+            ignored_tile_boxes: list[dict[str, float]] | None = None,
+        ) -> dict[str, Any]:
             quality: dict[str, Any] = {
                 "status": "accepted",
                 "cameraBehavior": camera_behavior,
@@ -1963,7 +1968,10 @@ def _generate_motion_clip(
                 _protect_decorative_frame(prepared_source, destination)
                 quality["decorativeFrameProtected"] = True
             quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
-            quality["sequenceIntegrity"] = _measure_sequence_integrity(destination)
+            quality["sequenceIntegrity"] = _measure_sequence_integrity(
+                destination,
+                ignored_tile_boxes=ignored_tile_boxes,
+            )
             if provider.startswith("wan2.1-vace-"):
                 _verify_visible_generative_motion(quality["sequenceIntegrity"])
             _verify_video(destination)
@@ -2011,7 +2019,11 @@ def _generate_motion_clip(
                 strength=0.88,
             )
             _queue_and_download_workflow(session, guided_workflow, destination)
-            quality = validate_candidate("wan2.1-vace-3d-guide-control", 1.0)
+            quality = validate_candidate(
+                "wan2.1-vace-3d-guide-control",
+                1.0,
+                ignored_tile_boxes=_object_vector_motion_corridors(motion_plan),
+            )
             quality["controlMode"] = "3d-previsualization-guided-generative-video"
             quality["providerPolicy"] = "phronesis-local-model-via-sextant-orchestration"
             quality["guideSource"] = guidance_video_path.name

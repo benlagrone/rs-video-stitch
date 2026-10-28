@@ -1752,6 +1752,90 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(quality["fallbackFrom"], "wan2.2-ti2v-5b")
         self.assertIn("color blocks", quality["fallbackReason"])
 
+    def test_3d_guided_motion_ignores_only_declared_object_corridor_in_tile_gate(self):
+        session = mock.Mock()
+        session.get.return_value = _Response({"system": {"os": "posix"}})
+        motion_plan = {
+            "regions": [{
+                "id": "planet",
+                "label": "Planet",
+                "method": "object-vector",
+                "vector": {"dx": -0.2, "dy": 0.4},
+                "box": {"x": 0.48, "y": 0.02, "width": 0.34, "height": 0.38},
+                "enabled": True,
+            }],
+        }
+        expected_corridors = motion_provider._object_vector_motion_corridors(motion_plan)
+        with tempfile.TemporaryDirectory() as tmp:
+            still = Path(tmp) / "scene.png"
+            guide = Path(tmp) / "guide.mp4"
+            destination = Path(tmp) / "scene.mp4"
+            still.write_bytes(b"png-data")
+            guide.write_bytes(b"guide-video")
+
+            def prepare_source(_source, prepared):
+                prepared.write_bytes(b"prepared-png")
+
+            def prepare_guide(_source, control, mask):
+                control.write_bytes(b"control-video")
+                mask.write_bytes(b"mask-video")
+
+            def write_candidate(_session, _workflow, candidate):
+                candidate.write_bytes(b"motion")
+
+            def render_vector(_source, _plan, vector, **kwargs):
+                vector.write_bytes(b"vector-video")
+                if kwargs.get("guidance_mask_destination"):
+                    kwargs["guidance_mask_destination"].write_bytes(b"vector-mask")
+                if kwargs.get("guidance_corridor_destination"):
+                    kwargs["guidance_corridor_destination"].write_bytes(b"vector-corridor")
+                return {"status": "rendered"}
+
+            with mock.patch.object(
+                motion_provider, "_prepare_source_image", side_effect=prepare_source
+            ), mock.patch.object(
+                motion_provider, "_generate_object_vector_clip", side_effect=render_vector
+            ), mock.patch.object(
+                motion_provider, "_release_stable_diffusion_gpu_memory"
+            ), mock.patch.object(
+                motion_provider, "_prepare_3d_guidance_assets", side_effect=prepare_guide
+            ), mock.patch.object(
+                motion_provider, "_upload_image", return_value="scene.png"
+            ), mock.patch.object(
+                motion_provider, "_upload_asset", side_effect=["guide.mp4", "mask.mp4"]
+            ), mock.patch.object(
+                motion_provider, "_queue_and_download_workflow", side_effect=write_candidate
+            ), mock.patch.object(
+                motion_provider, "_stabilize_locked_camera", return_value={"p95TranslationPixels": 0.0}
+            ), mock.patch.object(
+                motion_provider, "_protect_locked_frame_edges"
+            ), mock.patch.object(
+                motion_provider, "_measure_source_frame_fidelity", return_value=0.9
+            ), mock.patch.object(
+                motion_provider,
+                "_measure_sequence_integrity",
+                return_value={"sampleCount": 81, "meanLumaFrameDifference": 5.0},
+            ) as sequence_integrity, mock.patch.object(
+                motion_provider, "_verify_visible_generative_motion"
+            ), mock.patch.object(motion_provider, "_verify_video"):
+                quality = motion_provider._generate_motion_clip(
+                    still,
+                    destination,
+                    prompt="One planet moves lower through the fixed scene.",
+                    negative_prompt="duplicate planet, moving camera",
+                    seed=1234,
+                    camera_behavior="locked",
+                    motion_plan=motion_plan,
+                    guidance_video_path=guide,
+                    session=session,
+                )
+
+        self.assertEqual(quality["modelProvider"], "wan2.1-vace-3d-guide-control")
+        self.assertEqual(
+            sequence_integrity.call_args.kwargs["ignored_tile_boxes"],
+            expected_corridors,
+        )
+
     def test_locked_motion_rejects_after_all_generative_models_fail(self):
         session = mock.Mock()
         session.get.return_value = _Response({"system": {"os": "posix"}})
