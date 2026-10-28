@@ -57,7 +57,10 @@ GUIDED_DEPTH_CONTROL_STRENGTH = float(os.getenv("GUIDED_DEPTH_CONTROL_STRENGTH",
 GUIDED_APPEARANCE_CONTROL_STRENGTH = float(
     os.getenv("GUIDED_APPEARANCE_CONTROL_STRENGTH", "0.38")
 )
-APPEARANCE_FUSION_LUMA_GAIN = float(os.getenv("APPEARANCE_FUSION_LUMA_GAIN", "0.18"))
+APPEARANCE_FUSION_LUMA_GAIN = float(os.getenv("APPEARANCE_FUSION_LUMA_GAIN", "0.10"))
+APPEARANCE_FUSION_MAX_LUMA_DELTA = float(
+    os.getenv("APPEARANCE_FUSION_MAX_LUMA_DELTA", "48")
+)
 APPEARANCE_PROXY_MIN_SSIM = float(os.getenv("APPEARANCE_PROXY_MIN_SSIM", "0.72"))
 GUIDE_COPY_MAX_SSIM = float(os.getenv("GUIDE_COPY_MAX_SSIM", "0.90"))
 SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT = float(
@@ -533,7 +536,9 @@ def _fuse_generated_motion_with_appearance_proxy(
         f"[2:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},fps=16,"
         "format=gray,setpts=PTS-STARTPTS[reference];"
         "[generated][reference]blend=all_expr='A-B+128',format=yuv444p[delta];"
-        f"[appearance][delta]blend=shortest=1:all_expr='clip(A+(B-128)*{APPEARANCE_FUSION_LUMA_GAIN},0,255)',"
+        "[appearance][delta]blend=shortest=1:all_expr='"
+        f"clip(A+clip(B-128,-{APPEARANCE_FUSION_MAX_LUMA_DELTA},{APPEARANCE_FUSION_MAX_LUMA_DELTA})"
+        f"*{APPEARANCE_FUSION_LUMA_GAIN},0,255)',"
         "format=yuv420p[video]"
     )
     fuse_command = [
@@ -2262,6 +2267,7 @@ def _generate_motion_clip(
                 quality["appearanceControlStrength"] = guided_strength
                 quality["appearanceFusion"] = "source-rgb-plus-generated-temporal-luminance"
                 quality["appearanceFusionLumaGain"] = APPEARANCE_FUSION_LUMA_GAIN
+                quality["appearanceFusionMaxLumaDelta"] = APPEARANCE_FUSION_MAX_LUMA_DELTA
                 quality["appearanceProxySsim"] = _measure_appearance_proxy_similarity(
                     vector_path,
                     destination,
