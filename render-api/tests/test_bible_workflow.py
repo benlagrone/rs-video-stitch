@@ -1242,6 +1242,7 @@ class BibleWorkflowTest(TestCase):
         self.assertIn("format=gray", filter_graph)
         self.assertIn("A-B+128", filter_graph)
         self.assertIn(str(motion_provider.APPEARANCE_FUSION_LUMA_GAIN), filter_graph)
+        self.assertIn(str(motion_provider.APPEARANCE_FUSION_MAX_LUMA_DELTA), filter_graph)
 
     def test_3d_guided_video_rejects_rgb_guide_copy_after_intro(self):
         with tempfile.TemporaryDirectory() as tmp:
