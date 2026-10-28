@@ -977,11 +977,25 @@ def animate_bible_scene(
         )
         candidate_path.replace(clip_path)
     except Exception as exc:
-        candidate_path.unlink(missing_ok=True)
+        rejected_candidate = None
+        if candidate_path.exists() and candidate_path.stat().st_size > 0:
+            rejected_dir = clip_path.parent / "rejected"
+            rejected_dir.mkdir(parents=True, exist_ok=True)
+            rejected_candidate = rejected_dir / (
+                f"{clip_path.stem}-candidate-rejected-{int(time.time())}{clip_path.suffix}"
+            )
+            candidate_path.replace(rejected_candidate)
+        else:
+            candidate_path.unlink(missing_ok=True)
         scene["animationQuality"] = {
             "status": "rejected",
             "cameraBehavior": camera_behavior,
             "reason": str(exc)[:1000],
+            **(
+                {"rejectedCandidate": f"rejected/{rejected_candidate.name}"}
+                if rejected_candidate
+                else {}
+            ),
             "updatedAt": time.time(),
         }
         project_name = str((document.get("info") or {}).get("name") or project_id)
