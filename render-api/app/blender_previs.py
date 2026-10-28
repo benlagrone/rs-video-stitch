@@ -244,8 +244,10 @@ def render_scene_previsualization(
     brief_path = work_dir / "shot-brief.json"
     blend_path = work_dir / f"scene_{scene_index:03d}-guide.blend"
     video_name = f"scene_{scene_index:03d}-3d-guide.mp4"
+    depth_video_name = f"scene_{scene_index:03d}-3d-depth.mp4"
     poster_name = f"scene_{scene_index:03d}-3d-guide.png"
     video_path = p_input(project_id) / "motion" / video_name
+    depth_video_path = p_input(project_id) / "motion" / depth_video_name
     poster_path = p_input(project_id) / "images" / poster_name
     brief_path.write_text(json.dumps(brief, indent=2), encoding="utf-8")
 
@@ -256,7 +258,8 @@ def render_scene_previsualization(
     log(f"Rendering Blender guide for scene {scene_index} from approved image and motion prompts")
     command = [
         executable, "--background", "--python", str(BLENDER_RENDER_SCRIPT), "--",
-        "--brief", str(brief_path), "--video", str(video_path), "--poster", str(poster_path),
+        "--brief", str(brief_path), "--video", str(video_path),
+        "--depth-video", str(depth_video_path), "--poster", str(poster_path),
         "--blend", str(blend_path),
     ]
     result = subprocess.run(command, capture_output=True, text=True, timeout=30 * 60)
@@ -264,6 +267,8 @@ def render_scene_previsualization(
         raise RuntimeError(f"Blender previsualization failed: {(result.stderr or result.stdout)[-1200:]}")
     if not video_path.exists() or video_path.stat().st_size == 0:
         raise RuntimeError("Blender completed without a 3D guide video")
+    if not depth_video_path.exists() or depth_video_path.stat().st_size == 0:
+        raise RuntimeError("Blender completed without a 3D depth-control video")
 
     scene["previsualization"] = {
         "status": "ready",
@@ -271,6 +276,7 @@ def render_scene_previsualization(
         "briefPath": f"work/previs/scene_{scene_index:03d}/shot-brief.json",
         "blendPath": f"work/previs/scene_{scene_index:03d}/scene_{scene_index:03d}-guide.blend",
         "video": video_name,
+        "depthVideo": depth_video_name,
         "poster": poster_name,
         "updatedAt": time.time(),
     }
@@ -280,7 +286,7 @@ def render_scene_previsualization(
     return video_path
 
 
-def guided_video_inputs(project_id: str, scene_index: int) -> tuple[str, dict[str, Any], Path]:
+def guided_video_inputs(project_id: str, scene_index: int) -> tuple[str, dict[str, Any], Path, Path]:
     _, scene = _scene_context(project_id, scene_index)
     previs = scene.get("previsualization") or {}
     brief = previs.get("brief") or {}
@@ -293,4 +299,13 @@ def guided_video_inputs(project_id: str, scene_index: int) -> tuple[str, dict[st
     guide_path = p_input(project_id) / "motion" / guide_name
     if not guide_name or not guide_path.exists():
         raise ValueError("The reviewed 3D guide video is missing; rebuild it before generating video")
-    return resolved_prompt, dict(brief.get("motionPlan") or scene.get("motionPlan") or {}), guide_path
+    depth_name = str(previs.get("depthVideo") or "").strip()
+    depth_path = p_input(project_id) / "motion" / depth_name
+    if not depth_name or not depth_path.exists():
+        raise ValueError("The reviewed 3D depth-control video is missing; rebuild the 3D guide before generating video")
+    return (
+        resolved_prompt,
+        dict(brief.get("motionPlan") or scene.get("motionPlan") or {}),
+        guide_path,
+        depth_path,
+    )
