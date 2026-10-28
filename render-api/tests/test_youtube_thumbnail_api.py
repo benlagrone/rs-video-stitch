@@ -43,6 +43,45 @@ class YouTubeThumbnailApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(create_card.call_args.kwargs["background_image"], image_dir / "front.jpg")
             self.assertEqual(saved_states[-1]["thumbnailFilename"], "thumbnail.jpg")
 
+    async def test_regenerate_thumbnail_uses_hyperframes_card_when_selected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            input_dir = root / "input"
+            image_dir = input_dir / "images"
+            output_dir = root / "output"
+            image_dir.mkdir(parents=True)
+            output_dir.mkdir()
+            (image_dir / "front.jpg").write_bytes(b"image")
+            (input_dir / "scenes.json").write_text(json.dumps({"scenes": [{"images": ["front.jpg"]}]}))
+            thumbnail = output_dir / "thumbnail.jpg"
+            intro = root / "work" / "hyperframes_thumbnail_intro.mp4"
+
+            def generate_thumbnail(*_args, **_kwargs):
+                thumbnail.write_bytes(b"thumbnail")
+                return thumbnail
+
+            with patch.object(api, "p_input", return_value=input_dir), patch.object(
+                api, "p_output", return_value=output_dir
+            ), patch.object(
+                api,
+                "read_project_state",
+                return_value={
+                    "title": "Listing title\nDetail line\nSupporting line",
+                    "hyperframes": {"leadCardMode": "hyperframes", "leadCard": "lecrown-lead-card"},
+                },
+            ), patch.object(api, "_render_hyperframes_clip", return_value=intro) as render_card, patch.object(
+                api, "_generate_youtube_thumbnail", side_effect=generate_thumbnail
+            ) as generate_thumbnail_mock, patch.object(
+                api, "save_project_state", side_effect=lambda *_args, **_kwargs: None
+            ):
+                result = await api.regenerate_title_card_thumbnail("project-1")
+
+            self.assertEqual(result["filename"], "thumbnail.jpg")
+            self.assertEqual(render_card.call_args.args[0], "lecrown-lead-card")
+            self.assertEqual(render_card.call_args.args[1]["title"], "Listing title")
+            self.assertEqual(render_card.call_args.args[1]["detail"], "Detail line · Supporting line")
+            self.assertEqual(generate_thumbnail_mock.call_args.kwargs["seek_seconds"], 1.35)
+
     async def test_upload_automatically_applies_and_persists_thumbnail(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)

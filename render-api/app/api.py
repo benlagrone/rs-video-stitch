@@ -65,6 +65,8 @@ from app.renderer import (
     DEFAULT_PRESET,
     TTSConfigurationError,
     _create_intro_card_assets,
+    _generate_youtube_thumbnail,
+    _render_hyperframes_clip,
     _resolve_leader_template,
     _resolve_title_font,
     _synthesize_azure_voice_proxy,
@@ -2331,6 +2333,34 @@ def _regenerate_title_card_thumbnail(pid: str) -> Path:
     title = str(state.get("introTitle") or state.get("title") or pid).strip()
     if not title:
         raise ValueError("a video title is required to create a title-card thumbnail")
+
+    hyperframes = state.get("hyperframes") or {}
+    if isinstance(hyperframes, dict) and str(hyperframes.get("leadCardMode") or "").lower() == "hyperframes":
+        work_dir = p_input(pid).parent / "work"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        intro_file = _render_hyperframes_clip(
+            str(hyperframes.get("leadCard") or "lecrown-lead-card"),
+            {
+                "image": background_image.resolve().as_uri(),
+                "title": title.split("\n", 1)[0] or pid,
+                "detail": " · ".join(line for line in title.splitlines()[1:3] if line.strip()),
+                "micro": " · ".join(line for line in title.splitlines()[3:] if line.strip()),
+            },
+            work_dir / "hyperframes_thumbnail_intro.mp4",
+            DEFAULT_FPS,
+            DEFAULT_PRESET,
+            DEFAULT_CRF,
+            None,
+        )
+        thumbnail_path = _generate_youtube_thumbnail(
+            intro_file,
+            p_output(pid) / "thumbnail.jpg",
+            None,
+            seek_seconds=1.35,
+        )
+        if thumbnail_path is None:
+            raise RuntimeError("HyperFrames thumbnail generation did not produce an image")
+        return thumbnail_path
 
     leader_image = state.get("leaderImageName")
     _, thumbnail_path = _create_intro_card_assets(

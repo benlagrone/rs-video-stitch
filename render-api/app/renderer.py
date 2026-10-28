@@ -1111,6 +1111,8 @@ def _generate_youtube_thumbnail(
     source_video: Path,
     thumbnail_path: Path,
     log: Optional[LogFunc],
+    *,
+    seek_seconds: float = 0.250,
 ) -> Optional[Path]:
     """Sample a YouTube-sized thumbnail from the supplied video."""
     generated_thumbnail: Optional[Path] = None
@@ -1120,7 +1122,7 @@ def _generate_youtube_thumbnail(
                 "ffmpeg",
                 "-y",
                 "-ss",
-                "0.250",
+                f"{max(0.0, seek_seconds):.3f}",
                 "-i",
                 str(source_video),
                 "-vf",
@@ -1517,20 +1519,11 @@ def _render_source_footage_project(
                 log,
             )
             if thumbnail_enabled:
-                leader_template = _resolve_leader_template(input_dir, str(intro_leader_image) if intro_leader_image else None, log) if intro_leader_enabled else None
-                _, thumbnail_file = _create_intro_card_assets(
-                    background_image=intro_background,
-                    leader_template=leader_template,
-                    title=intro_title,
-                    work_dir=work_dir,
-                    output_dir=output_dir,
-                    fps=fps,
-                    duration=intro_duration,
-                    title_font_path=title_font_path,
-                    preset=preset,
-                    crf=crf,
-                    log=log,
-                    thumbnail_enabled=True,
+                thumbnail_file = _generate_youtube_thumbnail(
+                    intro_file,
+                    output_dir / "thumbnail.jpg",
+                    log,
+                    seek_seconds=1.35,
                 )
         else:
             leader_template = _resolve_leader_template(input_dir, str(intro_leader_image) if intro_leader_image else None, log) if intro_leader_enabled else None
@@ -2119,28 +2112,11 @@ def render_project(
                     log,
                 )
                 if thumbnail_enabled:
-                    # Use the established LeCrown title-card layout for the
-                    # YouTube thumbnail. A HyperFrames lead-in is animated and
-                    # can begin on a dark transition frame, which makes a poor
-                    # listing thumbnail.
-                    leader_template = (
-                        _resolve_leader_template(input_dir, str(intro_leader_image) if intro_leader_image else None, log)
-                        if intro_leader_enabled
-                        else None
-                    )
-                    _, thumbnail_file = _create_intro_card_assets(
-                        background_image=intro_background,
-                        leader_template=leader_template,
-                        title=intro_title,
-                        work_dir=work_dir,
-                        output_dir=output_dir,
-                        fps=fps,
-                        duration=intro_duration,
-                        title_font_path=title_font_path,
-                        preset=preset,
-                        crf=crf,
-                        log=log,
-                        thumbnail_enabled=True,
+                    thumbnail_file = _generate_youtube_thumbnail(
+                        intro_file,
+                        output_dir / "thumbnail.jpg",
+                        log,
+                        seek_seconds=1.35,
                     )
             else:
                 leader_template = (
