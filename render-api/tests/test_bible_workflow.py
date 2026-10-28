@@ -1835,6 +1835,17 @@ class BibleWorkflowTest(TestCase):
             sequence_integrity.call_args.kwargs["ignored_tile_boxes"],
             expected_corridors,
         )
+        self.assertTrue(sequence_integrity.call_args.kwargs["allow_no_fixed_tiles"])
+
+    def test_guided_full_frame_tile_gate_can_report_no_fixed_background_tiles(self):
+        metrics = motion_provider._measure_edge_tile_integrity(
+            Path("unused.mp4"),
+            ignored_tile_boxes=[{"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}],
+            allow_no_fixed_tiles=True,
+        )
+
+        self.assertEqual(metrics["edgeTileSampleCount"], 0)
+        self.assertEqual(metrics["maxEdgeTileSaturationJump"], 0.0)
 
     def test_locked_motion_rejects_after_all_generative_models_fail(self):
         session = mock.Mock()

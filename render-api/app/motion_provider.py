@@ -743,6 +743,7 @@ def _measure_sequence_integrity(
     video_path: Path,
     *,
     ignored_tile_boxes: list[dict[str, float]] | None = None,
+    allow_no_fixed_tiles: bool = False,
 ) -> dict[str, float | int]:
     stats_path = video_path.with_name(f"{video_path.stem}.signalstats.log")
     command = [
@@ -803,7 +804,13 @@ def _measure_sequence_integrity(
                 f"mean luma-frame difference {metrics['meanLumaFrameDifference']:.2f} is below "
                 f"{SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE:.2f}"
             )
-        metrics.update(_measure_edge_tile_integrity(video_path, ignored_tile_boxes=ignored_tile_boxes))
+        metrics.update(
+            _measure_edge_tile_integrity(
+                video_path,
+                ignored_tile_boxes=ignored_tile_boxes,
+                allow_no_fixed_tiles=allow_no_fixed_tiles,
+            )
+        )
         return metrics
     except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
         raise MotionProviderError(f"Unable to validate animation sequence integrity: {exc}") from exc
@@ -825,6 +832,7 @@ def _measure_edge_tile_integrity(
     video_path: Path,
     *,
     ignored_tile_boxes: list[dict[str, float]] | None = None,
+    allow_no_fixed_tiles: bool = False,
 ) -> dict[str, float | int]:
     # Localized model corruption can hide inside healthy whole-frame averages. Sample every
     # 4x4 tile so central generation failures are caught as well as edge artifacts.
@@ -846,6 +854,12 @@ def _measure_edge_tile_integrity(
         if not intersects_ignored_box(row, column)
     ]
     if not tiles:
+        if allow_no_fixed_tiles:
+            return {
+                "edgeTileSampleCount": 0,
+                "maxEdgeTileSaturationJump": 0.0,
+                "maxEdgeTileLumaDifference": 0.0,
+            }
         raise MotionProviderError("Motion corridor leaves no fixed-background tiles for validation")
     worst_saturation_jump = 0.0
     worst_luma_difference = 0.0
@@ -1960,6 +1974,7 @@ def _generate_motion_clip(
             denoise: float,
             *,
             ignored_tile_boxes: list[dict[str, float]] | None = None,
+            allow_no_fixed_tiles: bool = False,
         ) -> dict[str, Any]:
             quality: dict[str, Any] = {
                 "status": "accepted",
@@ -1979,6 +1994,7 @@ def _generate_motion_clip(
             quality["sequenceIntegrity"] = _measure_sequence_integrity(
                 destination,
                 ignored_tile_boxes=ignored_tile_boxes,
+                allow_no_fixed_tiles=allow_no_fixed_tiles,
             )
             if provider.startswith("wan2.1-vace-"):
                 _verify_visible_generative_motion(quality["sequenceIntegrity"])
@@ -2031,6 +2047,7 @@ def _generate_motion_clip(
                 "wan2.1-vace-3d-guide-control",
                 1.0,
                 ignored_tile_boxes=_object_vector_motion_corridors(motion_plan),
+                allow_no_fixed_tiles=True,
             )
             quality["controlMode"] = "3d-previsualization-guided-generative-video"
             quality["providerPolicy"] = "phronesis-local-model-via-sextant-orchestration"
