@@ -69,6 +69,47 @@ class BlenderPrevisTests(unittest.TestCase):
         self.assertEqual(brief["source"], "deterministic-fallback")
         self.assertEqual([item["id"] for item in brief["objects"]].count("forming-earth"), 1)
 
+    def test_genesis_one_one_model_cannot_reverse_locked_planet_vector(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_input = Path(temp_dir) / "input"
+            project_input.mkdir()
+            (project_input / "scenes.json").write_text(json.dumps({
+                "scenes": [{
+                    "title": "Genesis 1:1",
+                    "VO": "In the beginning God created the heaven and the earth.",
+                    "timeline": [{"prompt": "One forming planet."}],
+                }],
+            }), encoding="utf-8")
+            response = mock.Mock()
+            response.json.return_value = {"response": json.dumps({
+                "objects": [{
+                    "id": "planet",
+                    "label": "Planet",
+                    "primitive": "sphere",
+                    "scale": [1, 1, 1],
+                    "material": "stone",
+                    "startPosition": [0, 0, -2],
+                    "endPosition": [0, 0, 2],
+                    "rotationDegrees": [0, 0, 0],
+                    "action": "The planet rises.",
+                }],
+                "videoPrompt": "The planet rises from below.",
+            })}
+            with mock.patch.object(
+                blender_previs,
+                "p_input",
+                return_value=project_input,
+            ), mock.patch.object(
+                blender_previs,
+                "governed_post",
+                return_value=response,
+            ):
+                brief = blender_previs.generate_scene_3d_brief("genesis", 1)
+
+        planet = next(item for item in brief["objects"] if item["id"] == "forming-earth")
+        self.assertGreater(planet["startPosition"][2], planet["endPosition"][2])
+        self.assertIn("moves smoothly downward", brief["videoPrompt"])
+
     def test_guided_video_inputs_require_and_return_reviewed_guide_track(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             project_input = Path(temp_dir) / "input"
