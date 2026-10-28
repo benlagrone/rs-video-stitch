@@ -1,6 +1,7 @@
 import base64
 import importlib.util
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -1119,6 +1120,58 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(workflow["12"]["inputs"]["strength"], 1.0)
         self.assertEqual(workflow["14"]["inputs"]["seed"], 42)
 
+    def test_3d_guidance_uses_depth_track_instead_of_rgb_preview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            depth = Path(tmp) / "scene-depth.mp4"
+            control = Path(tmp) / "control.mp4"
+            mask = Path(tmp) / "mask.mp4"
+            depth.write_bytes(b"depth")
+
+            def render_track(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"video")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(
+                motion_provider.subprocess,
+                "run",
+                side_effect=render_track,
+            ) as run, mock.patch.object(
+                motion_provider,
+                "_verify_temporal_control_track",
+            ), mock.patch.object(
+                motion_provider,
+                "_verify_static_control_track",
+            ):
+                motion_provider._prepare_3d_guidance_assets(depth, control, mask)
+
+        control_command = run.call_args_list[0].args[0]
+        self.assertEqual(control_command[control_command.index("-i") + 1], str(depth))
+        self.assertIn("format=gray", control_command[control_command.index("-vf") + 1])
+
+    def test_3d_guided_video_rejects_rgb_guide_copy_after_intro(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guide = Path(tmp) / "guide.mp4"
+            candidate = Path(tmp) / "candidate.mp4"
+            guide.write_bytes(b"guide")
+            candidate.write_bytes(b"candidate")
+
+            def write_similarity_log(command, **_kwargs):
+                filter_graph = command[command.index("-filter_complex") + 1]
+                stats_path = Path(re.search(r"stats_file=([^:]+)", filter_graph).group(1))
+                stats_path.write_text("\n".join("n:1 All:0.94" for _ in range(64)), encoding="utf-8")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(
+                motion_provider.subprocess,
+                "run",
+                side_effect=write_similarity_log,
+            ):
+                with self.assertRaisesRegex(
+                    motion_provider.MotionProviderError,
+                    "appearance collapsed into the Blender preview",
+                ):
+                    motion_provider._measure_guide_copy_similarity(guide, candidate)
+
     def test_ltx_keyframe_workflow_uses_tween_start_and_end_guides(self):
         workflow = motion_provider._ltx_keyframe_workflow(
             "start.png", "end.png", "planet descends", "no duplicate", "test/ltx", 42
@@ -1773,14 +1826,16 @@ class BibleWorkflowTest(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             still = Path(tmp) / "scene.png"
             guide = Path(tmp) / "guide.mp4"
+            depth = Path(tmp) / "depth.mp4"
             destination = Path(tmp) / "scene.mp4"
             still.write_bytes(b"png-data")
             guide.write_bytes(b"guide-video")
+            depth.write_bytes(b"depth-video")
 
             def prepare_source(_source, prepared):
                 prepared.write_bytes(b"prepared-png")
 
-            def prepare_guide(_source, control, mask):
+            def prepare_guide(_depth, control, mask):
                 control.write_bytes(b"control-video")
                 mask.write_bytes(b"mask-video")
 
@@ -1814,6 +1869,8 @@ class BibleWorkflowTest(TestCase):
             ), mock.patch.object(
                 motion_provider, "_measure_source_frame_fidelity", return_value=0.9
             ), mock.patch.object(
+                motion_provider, "_measure_guide_copy_similarity", return_value=0.42
+            ), mock.patch.object(
                 motion_provider,
                 "_measure_sequence_integrity",
                 return_value={"sampleCount": 81, "meanLumaFrameDifference": 5.0},
@@ -1831,10 +1888,14 @@ class BibleWorkflowTest(TestCase):
                     camera_behavior="locked",
                     motion_plan=motion_plan,
                     guidance_video_path=guide,
+                    guidance_depth_path=depth,
                     session=session,
                 )
 
         self.assertEqual(quality["modelProvider"], "wan2.1-vace-3d-guide-control")
+        self.assertEqual(quality["guideCopySsim"], 0.42)
+        self.assertEqual(quality["depthControlSource"], depth.name)
+        self.assertEqual(quality["appearanceReference"], still.name)
         self.assertEqual(
             sequence_integrity.call_args.kwargs["ignored_tile_boxes"],
             expected_corridors,
