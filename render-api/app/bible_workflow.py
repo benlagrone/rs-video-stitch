@@ -924,6 +924,7 @@ def animate_bible_scene(
     camera_behavior: str = "locked",
     motion_plan: dict[str, Any] | None = None,
     guidance_video_path: Path | None = None,
+    guidance_depth_path: Path | None = None,
     *,
     progress: Progress,
     log: Log,
@@ -972,6 +973,7 @@ def animate_bible_scene(
             camera_behavior=camera_behavior,
             motion_plan=scene.get("motionPlan") or {},
             guidance_video_path=guidance_video_path,
+            guidance_depth_path=guidance_depth_path,
         )
         candidate_path.replace(clip_path)
     except Exception as exc:
@@ -1022,7 +1024,10 @@ def animate_bible_scene_from_previsualization(
 ) -> Path:
     """Generate scene motion from the reviewed 3D shot brief and its exact trajectories."""
     progress("LOADING_3D_GUIDE", 0.06)
-    guide_prompt, guide_plan, guide_video_path = guided_video_inputs(project_id, scene_index)
+    guide_prompt, guide_plan, guide_video_path, guide_depth_path = guided_video_inputs(
+        project_id,
+        scene_index,
+    )
     requested = re.sub(r"\s+", " ", prompt).strip()
     resolved_prompt = f"{guide_prompt} Additional reviewed direction: {requested}" if requested else guide_prompt
     final_path = animate_bible_scene(
@@ -1032,6 +1037,7 @@ def animate_bible_scene_from_previsualization(
         camera_behavior,
         motion_plan or guide_plan,
         guidance_video_path=guide_video_path,
+        guidance_depth_path=guide_depth_path,
         progress=progress,
         log=log,
     )
@@ -1043,6 +1049,7 @@ def animate_bible_scene_from_previsualization(
         generation = timeline[0].setdefault("motionGeneration", {})
         generation["guide3d"] = {
             "video": previsualization.get("video"),
+            "depthVideo": previsualization.get("depthVideo"),
             "briefPath": previsualization.get("briefPath"),
             "blendPath": previsualization.get("blendPath"),
         }
