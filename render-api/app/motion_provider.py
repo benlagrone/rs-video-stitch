@@ -55,7 +55,7 @@ SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE = float(os.getenv("SEQUENCE_MIN_MEAN_LUMA_DIFF
 GENERATIVE_MIN_MEAN_LUMA_DIFFERENCE = float(os.getenv("GENERATIVE_MIN_MEAN_LUMA_DIFFERENCE", "0.9"))
 GUIDED_DEPTH_CONTROL_STRENGTH = float(os.getenv("GUIDED_DEPTH_CONTROL_STRENGTH", "0.48"))
 GUIDED_APPEARANCE_CONTROL_STRENGTH = float(
-    os.getenv("GUIDED_APPEARANCE_CONTROL_STRENGTH", "0.42")
+    os.getenv("GUIDED_APPEARANCE_CONTROL_STRENGTH", "0.38")
 )
 GUIDE_COPY_MAX_SSIM = float(os.getenv("GUIDE_COPY_MAX_SSIM", "0.90"))
 SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT = float(
@@ -473,6 +473,43 @@ def _prepare_3d_guidance_assets(
         raise MotionProviderError("Preparing the 3D guidance tracks produced no video")
     _verify_temporal_control_track(control_destination, "3D guide")
     _verify_static_control_track(mask_destination, "3D guide mask")
+
+
+def _prepare_appearance_guidance_assets(
+    appearance_guide_path: Path,
+    control_destination: Path,
+    mask_destination: Path,
+) -> None:
+    """Normalize a source-pixel trajectory proxy without replacing it with gray geometry."""
+    if not appearance_guide_path.exists() or appearance_guide_path.stat().st_size == 0:
+        raise MotionProviderError("The source-appearance trajectory proxy is missing or empty")
+    control_filter = (
+        f"scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        "fps=16,format=yuv420p"
+    )
+    control_command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(appearance_guide_path),
+        "-vf", control_filter, "-t", "5.0625", "-r", "16", "-c:v", "libx264",
+        "-preset", "fast", "-crf", "16", "-pix_fmt", "yuv420p", str(control_destination),
+    ]
+    mask_command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+        f"color=white:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d=5.0625",
+        "-t", "5.0625", "-r", "16", "-c:v", "libx264", "-preset", "fast",
+        "-crf", "12", "-pix_fmt", "yuv420p", str(mask_destination),
+    ]
+    try:
+        subprocess.run(control_command, check=True, capture_output=True, text=True)
+        subprocess.run(mask_command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        raise MotionProviderError(f"Unable to prepare source-appearance guidance: {detail[-600:]}") from exc
+    if not control_destination.exists() or not mask_destination.exists():
+        raise MotionProviderError("Preparing source-appearance guidance produced no video")
+    _verify_temporal_control_track(control_destination, "source-appearance trajectory")
+    _verify_static_control_track(mask_destination, "source-appearance guide mask")
 
 
 def _verify_static_control_track(path: Path, label: str) -> None:
@@ -2075,28 +2112,30 @@ def _generate_motion_clip(
                 )
             control_path = Path(temp_dir) / f"guide-{image_path.stem}.mp4"
             mask_path = Path(temp_dir) / f"guide-mask-{image_path.stem}.mp4"
-            if vector_path and vector_mask_path:
-                _generate_region_control_assets(
-                    prepared_source,
-                    motion_plan or {},
-                    control_path,
-                    mask_path,
-                    control_source=vector_path,
-                    mask_source=vector_mask_path,
-                )
+            if vector_path:
+                _prepare_appearance_guidance_assets(vector_path, control_path, mask_path)
                 guided_strength = GUIDED_APPEARANCE_CONTROL_STRENGTH
                 control_mode = "3d-trajectory-and-source-appearance-guided-generative-video"
+                control_instruction = (
+                    "The supplied control is a full-frame source-pixel appearance and trajectory proxy. Preserve its "
+                    "single-subject identity, palette, materials, lighting, background, and trajectory while generating "
+                    "natural internal surface, atmosphere, illumination, and shadow motion. Do not add an orb, matte, "
+                    "frame, window, plate, duplicate subject, or gray geometry."
+                )
             else:
                 _prepare_3d_guidance_assets(guidance_depth_path, control_path, mask_path)
                 guided_strength = GUIDED_DEPTH_CONTROL_STRENGTH
                 control_mode = "3d-previsualization-guided-generative-video"
+                control_instruction = (
+                    "The supplied control is depth only and must never determine visible color, texture, materials, or "
+                    "lighting."
+                )
             control_name = _upload_asset(session, control_path, "video/mp4")
             mask_name = _upload_asset(session, mask_path, "video/mp4")
             guided_prompt = (
                 f"{prompt} The supplied 3D guide is mandatory spatial and temporal blocking. Match its camera, "
                 "subject count, object positions, silhouettes, depth, occlusion, and trajectories frame by frame, "
-                "The supplied control is depth only and must never determine visible color, texture, materials, or "
-                "lighting. Preserve the approved reference image's finished visual style, palette, atmosphere, and "
+                f"{control_instruction} Preserve the approved reference image's finished visual style, palette, atmosphere, and "
                 "subject appearance throughout every frame. Produce coherent natural footage, not a 3D viewport render."
             )[:2800]
             guided_negative = (
