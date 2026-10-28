@@ -1,5 +1,9 @@
+import sys
 import unittest
+from pathlib import Path
 from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import api
 from app.schemas import SceneAnimationBatchRequest, SceneAnimationPromptRequest, SceneAnimationRequest, SceneMotionPlanRequest
@@ -100,6 +104,36 @@ class SceneAnimationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queued_job.payload["workflow"], "scene-animation-repair")
         self.assertEqual(queued_job.payload["motionPlan"], plan)
         self.assertTrue(database.committed)
+
+    async def test_previsualize_3d_queues_prompt_and_motion_plan(self):
+        database = _Database()
+        plan = {"summary": "One planet descends", "regions": [{"id": "planet"}]}
+        with mock.patch.object(api, "scene_animation_context"):
+            result = await api.previsualize_scene_3d(
+                "bible-genesis-1",
+                1,
+                SceneAnimationRequest(prompt="The planet moves lower.", motionPlan=plan),
+                db=database,
+            )
+
+        queued_job = next(value for value in database.added if hasattr(value, "payload"))
+        self.assertEqual(result["status"], "QUEUED")
+        self.assertEqual(queued_job.payload["workflow"], "scene-previsualization")
+        self.assertEqual(queued_job.payload["motionPlan"], plan)
+
+    async def test_animate_from_3d_queues_guided_video_workflow(self):
+        database = _Database()
+        with mock.patch.object(api, "scene_animation_context"):
+            result = await api.animate_scene_from_3d(
+                "bible-genesis-1",
+                1,
+                SceneAnimationRequest(prompt="Use the reviewed descending trajectory."),
+                db=database,
+            )
+
+        queued_job = next(value for value in database.added if hasattr(value, "payload"))
+        self.assertEqual(result["status"], "QUEUED")
+        self.assertEqual(queued_job.payload["workflow"], "scene-animation-3d-guided")
 
     async def test_animate_all_scenes_queues_each_still_in_storyboard_order(self):
         database = _Database()

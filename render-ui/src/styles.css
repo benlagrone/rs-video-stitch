@@ -117,6 +117,9 @@ button { font: inherit; }
 .bible-scene img, .bible-scene video { aspect-ratio: 16 / 9; background: #050709; border-radius: 4px; object-fit: contain; width: 100%; }
 .scene-media { display: grid; gap: 5px; }
 .scene-media span { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.scene-3d-guide { background: var(--surface-strong); border: 1px solid var(--line); border-radius: 5px; display: grid; gap: 6px; margin-top: 6px; padding: 7px; }
+.scene-3d-guide video { border-radius: 3px; width: 100%; }
+.scene-3d-guide strong { color: var(--accent-strong); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
 .scene-number { align-items: center; background: var(--field); border-radius: 4px; color: var(--muted); display: flex; font-size: 12px; height: 28px; justify-content: center; }
 .bible-scene h3 { font-family: Georgia, serif; font-size: 15px; margin: 2px 0 7px; }
 .bible-scene p { color: var(--text); font-size: 13px; line-height: 1.45; margin: 0; }
@@ -131,6 +134,8 @@ button { font: inherit; }
 .scene-animation-tools select { margin-top: 6px; text-transform: none; width: 100%; }
 .scene-animation-tools > div { display: flex; flex-wrap: wrap; gap: 8px; }
 .scene-animation-tools button { min-height: 34px; }
+.scene-3d-actions { background: color-mix(in srgb, var(--accent) 8%, var(--surface-strong)); border: 1px solid var(--line-strong); border-radius: 5px; display: grid !important; gap: 7px !important; padding: 9px; }
+.scene-3d-actions small { grid-column: 1 / -1; margin: 0; }
 .motion-plan-empty { align-items: start; background: var(--surface-strong); border: 1px dashed var(--line-strong); border-radius: 5px; display: grid !important; gap: 6px !important; padding: 9px; }
 .motion-plan-empty strong, .motion-plan-heading strong { color: var(--accent-strong); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
 .motion-plan-empty span, .motion-plan-heading span { color: var(--muted); font-size: 11px; line-height: 1.4; }

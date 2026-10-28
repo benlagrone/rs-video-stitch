@@ -17,6 +17,7 @@ from urllib.parse import quote
 import requests
 
 from app.art_styles import resolve_art_style
+from app.blender_previs import guided_video_inputs
 from app.gpu_admission import admit_gpu, governed_post
 from app.motion_provider import COMFYUI_MODEL_API_URL, extract_last_frame, generate_motion_clip
 from app.storage import ensure_dirs, p_input, read_project_state, save_project_state, save_scenes
@@ -922,6 +923,7 @@ def animate_bible_scene(
     prompt: str = "",
     camera_behavior: str = "locked",
     motion_plan: dict[str, Any] | None = None,
+    guidance_video_path: Path | None = None,
     *,
     progress: Progress,
     log: Log,
@@ -969,6 +971,7 @@ def animate_bible_scene(
             protect_style_frame=bool((provenance.get("decorativeFrameProtection") or {}).get("enabled")),
             camera_behavior=camera_behavior,
             motion_plan=scene.get("motionPlan") or {},
+            guidance_video_path=guidance_video_path,
         )
         candidate_path.replace(clip_path)
     except Exception as exc:
@@ -1005,6 +1008,47 @@ def animate_bible_scene(
     save_project_state(project_id, state, project_name=str(state.get("title") or project_name))
     progress("MOTION_READY", 0.95)
     return clip_path
+
+
+def animate_bible_scene_from_previsualization(
+    project_id: str,
+    scene_index: int,
+    prompt: str = "",
+    camera_behavior: str = "locked",
+    motion_plan: dict[str, Any] | None = None,
+    *,
+    progress: Progress,
+    log: Log,
+) -> Path:
+    """Generate scene motion from the reviewed 3D shot brief and its exact trajectories."""
+    progress("LOADING_3D_GUIDE", 0.06)
+    guide_prompt, guide_plan, guide_video_path = guided_video_inputs(project_id, scene_index)
+    requested = re.sub(r"\s+", " ", prompt).strip()
+    resolved_prompt = f"{guide_prompt} Additional reviewed direction: {requested}" if requested else guide_prompt
+    final_path = animate_bible_scene(
+        project_id,
+        scene_index,
+        resolved_prompt,
+        camera_behavior,
+        motion_plan or guide_plan,
+        guidance_video_path=guide_video_path,
+        progress=progress,
+        log=log,
+    )
+    document, scene, _, _ = scene_animation_context(project_id, scene_index)
+    previsualization = scene.setdefault("previsualization", {})
+    previsualization["usedForVideoAt"] = time.time()
+    timeline = scene.setdefault("timeline", [{}])
+    if timeline:
+        generation = timeline[0].setdefault("motionGeneration", {})
+        generation["guide3d"] = {
+            "video": previsualization.get("video"),
+            "briefPath": previsualization.get("briefPath"),
+            "blendPath": previsualization.get("blendPath"),
+        }
+    project_name = str((document.get("info") or {}).get("name") or project_id)
+    save_scenes(project_id, json.dumps(document, indent=2), project_name=project_name)
+    return final_path
 
 
 def _validate_motion_safe_still_semantics(

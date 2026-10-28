@@ -12,11 +12,13 @@ from app.models import Artifact, Job
 from app.renderer import render_project
 from app.bible_workflow import (
     animate_bible_scene,
+    animate_bible_scene_from_previsualization,
     generate_bible_title_card,
     prepare_bible_project,
     repair_and_animate_bible_scene,
     regenerate_bible_scene_stills,
 )
+from app.blender_previs import render_scene_previsualization
 from app.storage import ROOT as STORAGE_ROOT, job_log_path, p_input
 
 POLL_INTERVAL = 1.0
@@ -174,10 +176,31 @@ def loop(stop_event: Event | None = None) -> None:
             try:
                 is_bible_video = payload.get("workflow") == "bible-video"
                 is_scene_animation = payload.get("workflow") == "scene-animation"
+                is_scene_previsualization = payload.get("workflow") == "scene-previsualization"
+                is_scene_animation_3d = payload.get("workflow") == "scene-animation-3d-guided"
                 is_scene_animation_repair = payload.get("workflow") == "scene-animation-repair"
                 is_scene_stills = payload.get("workflow") == "bible-scene-stills"
                 is_bible_title_card = payload.get("workflow") == "bible-title-card"
-                if is_scene_animation_repair:
+                if is_scene_previsualization:
+                    final_path = render_scene_previsualization(
+                        job.project_id,
+                        int(payload.get("sceneIndex") or 0),
+                        str(payload.get("prompt") or ""),
+                        dict(payload.get("motionPlan") or {}),
+                        progress=progress,
+                        log=log,
+                    )
+                elif is_scene_animation_3d:
+                    final_path = animate_bible_scene_from_previsualization(
+                        job.project_id,
+                        int(payload.get("sceneIndex") or 0),
+                        str(payload.get("prompt") or ""),
+                        str(payload.get("cameraBehavior") or "locked"),
+                        dict(payload.get("motionPlan") or {}),
+                        progress=progress,
+                        log=log,
+                    )
+                elif is_scene_animation_repair:
                     final_path = repair_and_animate_bible_scene(
                         job.project_id,
                         int(payload.get("sceneIndex") or 0),

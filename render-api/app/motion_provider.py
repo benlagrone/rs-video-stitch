@@ -433,6 +433,43 @@ def _generate_region_control_assets(
     return len(regions)
 
 
+def _prepare_3d_guidance_assets(
+    guide_path: Path,
+    control_destination: Path,
+    mask_destination: Path,
+) -> None:
+    """Normalize a reviewed Blender guide into VACE control and full-frame mask tracks."""
+    if not guide_path.exists() or guide_path.stat().st_size == 0:
+        raise MotionProviderError("The reviewed 3D guidance video is missing or empty")
+    control_filter = (
+        f"scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        "fps=16,format=yuv420p"
+    )
+    control_command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(guide_path),
+        "-vf", control_filter, "-t", "5.0625", "-r", "16", "-c:v", "libx264",
+        "-preset", "fast", "-crf", "16", "-pix_fmt", "yuv420p", str(control_destination),
+    ]
+    mask_command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+        f"color=white:s={FRAME_PROTECTION_WIDTH}x{FRAME_PROTECTION_HEIGHT}:r=16:d=5.0625",
+        "-t", "5.0625", "-r", "16", "-c:v", "libx264", "-preset", "fast",
+        "-crf", "12", "-pix_fmt", "yuv420p", str(mask_destination),
+    ]
+    try:
+        subprocess.run(control_command, check=True, capture_output=True, text=True)
+        subprocess.run(mask_command, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        raise MotionProviderError(f"Unable to prepare the 3D guidance tracks: {detail[-600:]}") from exc
+    if not control_destination.exists() or not mask_destination.exists():
+        raise MotionProviderError("Preparing the 3D guidance tracks produced no video")
+    _verify_temporal_control_track(control_destination, "3D guide")
+    _verify_static_control_track(mask_destination, "3D guide mask")
+
+
 def _verify_static_control_track(path: Path, label: str) -> None:
     """Reject temporal control tracks so VACE cannot be driven by translated source patches."""
     command = [
@@ -1830,6 +1867,7 @@ def _generate_motion_clip(
     protect_style_frame: bool = False,
     camera_behavior: str = "locked",
     motion_plan: dict[str, Any] | None = None,
+    guidance_video_path: Path | None = None,
     session=requests,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="mediastudio-motion-") as temp_dir:
@@ -1944,6 +1982,41 @@ def _generate_motion_clip(
             if providers:
                 quality["fallbackFrom"] = ",".join(providers)
                 quality["fallbackReason"] = "; ".join(reasons)[:500]
+            return quality
+
+        if guidance_video_path:
+            control_path = Path(temp_dir) / f"guide-{image_path.stem}.mp4"
+            mask_path = Path(temp_dir) / f"guide-mask-{image_path.stem}.mp4"
+            _prepare_3d_guidance_assets(guidance_video_path, control_path, mask_path)
+            control_name = _upload_asset(session, control_path, "video/mp4")
+            mask_name = _upload_asset(session, mask_path, "video/mp4")
+            guided_prompt = (
+                f"{prompt} The supplied 3D guide is mandatory spatial and temporal blocking. Match its camera, "
+                "subject count, object positions, silhouettes, depth, occlusion, and trajectories frame by frame, "
+                "while replacing the preview materials with the approved reference image's finished visual style, "
+                "lighting, texture, and atmosphere. Produce coherent natural footage, not a 3D viewport render."
+            )[:2800]
+            guided_negative = (
+                f"{negative_prompt}, gray clay render, viewport preview, wireframe, primitive geometry, flat shader, "
+                "changed trajectory, changed camera, duplicate subject, extra object, moving crop, matte seam"
+            )[:2200]
+            guided_workflow = _vace_region_workflow(
+                uploaded_name,
+                control_name,
+                mask_name,
+                guided_prompt,
+                guided_negative,
+                f"{prefix}-3d-guide",
+                effective_seed,
+                strength=0.88,
+            )
+            _queue_and_download_workflow(session, guided_workflow, destination)
+            quality = validate_candidate("wan2.1-vace-3d-guide-control", 1.0)
+            quality["controlMode"] = "3d-previsualization-guided-generative-video"
+            quality["providerPolicy"] = "phronesis-local-model-via-sextant-orchestration"
+            quality["guideSource"] = guidance_video_path.name
+            quality["fullFrameGeneration"] = True
+            quality["semanticMotionGate"] = "reviewed-3d-camera-and-object-trajectories"
             return quality
 
         allow_full_frame = not motion_plan or bool((motion_plan or {}).get("allowFullFrameGeneration"))
@@ -2183,6 +2256,7 @@ def generate_motion_clip(
     protect_style_frame: bool = False,
     camera_behavior: str = "locked",
     motion_plan: dict[str, Any] | None = None,
+    guidance_video_path: Path | None = None,
     session=requests,
 ) -> dict[str, Any]:
     with admit_gpu(
@@ -2201,5 +2275,6 @@ def generate_motion_clip(
             protect_style_frame=protect_style_frame,
             camera_behavior=camera_behavior,
             motion_plan=motion_plan,
+            guidance_video_path=guidance_video_path,
             session=session,
         )
