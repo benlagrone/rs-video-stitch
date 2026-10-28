@@ -54,6 +54,9 @@ SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE = float(os.getenv("SEQUENCE_MAX_LUMA_FRAME_DI
 SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE = float(os.getenv("SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE", "0.35"))
 GENERATIVE_MIN_MEAN_LUMA_DIFFERENCE = float(os.getenv("GENERATIVE_MIN_MEAN_LUMA_DIFFERENCE", "0.9"))
 GUIDED_DEPTH_CONTROL_STRENGTH = float(os.getenv("GUIDED_DEPTH_CONTROL_STRENGTH", "0.48"))
+GUIDED_APPEARANCE_CONTROL_STRENGTH = float(
+    os.getenv("GUIDED_APPEARANCE_CONTROL_STRENGTH", "0.42")
+)
 GUIDE_COPY_MAX_SSIM = float(os.getenv("GUIDE_COPY_MAX_SSIM", "0.90"))
 SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT = float(
     os.getenv("SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT", "4.0")
@@ -2072,7 +2075,21 @@ def _generate_motion_clip(
                 )
             control_path = Path(temp_dir) / f"guide-{image_path.stem}.mp4"
             mask_path = Path(temp_dir) / f"guide-mask-{image_path.stem}.mp4"
-            _prepare_3d_guidance_assets(guidance_depth_path, control_path, mask_path)
+            if vector_path and vector_mask_path:
+                _generate_region_control_assets(
+                    prepared_source,
+                    motion_plan or {},
+                    control_path,
+                    mask_path,
+                    control_source=vector_path,
+                    mask_source=vector_mask_path,
+                )
+                guided_strength = GUIDED_APPEARANCE_CONTROL_STRENGTH
+                control_mode = "3d-trajectory-and-source-appearance-guided-generative-video"
+            else:
+                _prepare_3d_guidance_assets(guidance_depth_path, control_path, mask_path)
+                guided_strength = GUIDED_DEPTH_CONTROL_STRENGTH
+                control_mode = "3d-previsualization-guided-generative-video"
             control_name = _upload_asset(session, control_path, "video/mp4")
             mask_name = _upload_asset(session, mask_path, "video/mp4")
             guided_prompt = (
@@ -2094,7 +2111,7 @@ def _generate_motion_clip(
                 guided_negative,
                 f"{prefix}-3d-guide",
                 effective_seed,
-                strength=GUIDED_DEPTH_CONTROL_STRENGTH,
+                strength=guided_strength,
             )
             _queue_and_download_workflow(session, guided_workflow, destination)
             quality = validate_candidate(
@@ -2106,11 +2123,16 @@ def _generate_motion_clip(
                 protect_locked_edges=False,
                 guide_appearance_path=guidance_video_path,
             )
-            quality["controlMode"] = "3d-previsualization-guided-generative-video"
+            quality["controlMode"] = control_mode
             quality["providerPolicy"] = "phronesis-local-model-via-sextant-orchestration"
             quality["guideSource"] = guidance_video_path.name
             quality["depthControlSource"] = guidance_depth_path.name
-            quality["depthControlStrength"] = GUIDED_DEPTH_CONTROL_STRENGTH
+            quality["depthControlStrength"] = (
+                GUIDED_DEPTH_CONTROL_STRENGTH if not vector_path else 0.0
+            )
+            if vector_path:
+                quality["appearanceControlSource"] = vector_path.name
+                quality["appearanceControlStrength"] = guided_strength
             quality["appearanceReference"] = image_path.name
             quality["fullFrameGeneration"] = True
             quality["semanticMotionGate"] = "reviewed-3d-camera-and-object-trajectories"
