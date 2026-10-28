@@ -98,7 +98,7 @@ function splitScript(script) {
     .filter(Boolean);
 }
 
-function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageLabelEnabled, imageRoomInfo, sceneDurations = [], sceneImageAssignments = [], voice, language, ttsApi, hyperframes }) {
+function buildScenes({ title, scriptTitle, script, images, sourceFootage = [], imageHeaders, imageLabelEnabled, imageRoomInfo, sceneDurations = [], sceneImageAssignments = [], voice, language, ttsApi, hyperframes }) {
   const imageNames = images.map((image) => image.name).filter(Boolean);
   const scriptContent = titleFromScript(script, scriptTitle || title);
   const existingParagraphs = splitScript(scriptContent.narration);
@@ -106,7 +106,7 @@ function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageLa
     sanitizeSceneImageAssignments(sceneImageAssignments, imageNames),
     existingParagraphs.length,
   );
-  const paragraphs = existingParagraphs;
+  const paragraphs = sourceFootage.length ? [] : existingParagraphs;
   const scenes = paragraphs.map((paragraph, index) => {
     const assignedImages = assignments[index] || [];
     const sceneTitle = assignedImages.map((image) => imageHeaders[image]).find((header) => header && header.trim()) || '';
@@ -134,6 +134,7 @@ function buildScenes({ title, scriptTitle, script, images, imageHeaders, imageLa
     info: { name: title || titleCardFromScript(script, scriptTitle || title).mainTitle || 'MediaStudio upload', source: 'render-ui' },
     vid: { voice: voice || null, lang: language || 'en-US', api: ttsApi || 'azure' },
     hyperframes,
+    sourceFootage: sourceFootage.map((clip) => ({ filename: clip.name, title: clip.title || '', showTitle: Boolean(clip.showTitle) })),
     scenes,
   };
 }
@@ -242,6 +243,7 @@ function projectStateFromValues(values) {
     sceneImageAssignments: values.sceneImageAssignments,
     outputName: values.outputName,
     images: values.images.map((image) => ({ name: image.name })),
+    sourceFootage: values.sourceFootage.map((clip) => ({ name: clip.name, title: clip.title || '', showTitle: Boolean(clip.showTitle) })),
     removedImages: values.removedImages.map((image) => ({ name: image.name })),
     imageHeaders: values.imageHeaders,
     imageLabelEnabled: values.imageLabelEnabled,
@@ -296,6 +298,7 @@ export function App() {
   const [sceneTextDrafts, setSceneTextDrafts] = useState(null);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [images, setImages] = useState([]);
+  const [sourceFootage, setSourceFootage] = useState([]);
   const [removedImages, setRemovedImages] = useState([]);
   const [imageHeaders, setImageHeaders] = useState({});
   const [imageLabelEnabled, setImageLabelEnabled] = useState({});
@@ -406,8 +409,8 @@ export function App() {
   );
 
   const scenesPayload = useMemo(
-    () => buildScenes({ title, scriptTitle, script, images, imageHeaders, imageLabelEnabled, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi, hyperframes: selectedHyperframes }),
-    [title, scriptTitle, script, images, imageHeaders, imageLabelEnabled, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi, selectedHyperframes],
+    () => buildScenes({ title, scriptTitle, script, images, sourceFootage, imageHeaders, imageLabelEnabled, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi, hyperframes: selectedHyperframes }),
+    [title, scriptTitle, script, images, sourceFootage, imageHeaders, imageLabelEnabled, imageRoomInfo, sceneDurations, sceneImageAssignments, voice, language, ttsApi, selectedHyperframes],
   );
   const unassignedImageCount = useMemo(() => {
     const assigned = new Set(scenesPayload.scenes.flatMap((scene) => scene.images || []));
@@ -449,9 +452,11 @@ export function App() {
     item.header.trim() || item.roomDescription.trim() || item.label.trim()
   ));
 
-  const canRender = scenesPayload.scenes.length > 0
+  const canRender = sourceFootage.length > 0 || (
+    scenesPayload.scenes.length > 0
     && images.length > 0
-    && scenesPayload.scenes.every((scene) => scene.images.length > 0);
+    && scenesPayload.scenes.every((scene) => scene.images.length > 0)
+  );
   const resolvedIntroTitle = joinLeadLines(introLines);
   const canEnhance = script.trim().length > 0
     && Number.isFinite(Number(targetSeconds))
@@ -674,6 +679,7 @@ export function App() {
     setSceneDurations([]);
     setSceneImageAssignments([]);
     setImages([]);
+    setSourceFootage([]);
     setRemovedImages([]);
     setImageHeaders({});
     setImageLabelEnabled({});
@@ -739,6 +745,12 @@ export function App() {
           .map((image) => stateImageItem(image, result.assets, 'images', apiBase))
           .filter(Boolean)
         : (result.assets?.images || []).map((asset) => persistedItem(asset, apiBase));
+      const projectFootage = state.sourceFootage?.length
+        ? state.sourceFootage.map((clip) => {
+          const asset = (result.assets?.footage || []).find((item) => item.name === clip.name);
+          return asset ? { ...persistedItem(asset, apiBase), title: clip.title || '', showTitle: Boolean(clip.showTitle) } : null;
+        }).filter(Boolean)
+        : (result.assets?.footage || []).map((asset) => ({ ...persistedItem(asset, apiBase), title: '', showTitle: false }));
       const leaderAsset = assetByName(result.assets, 'leader', state.leaderImageName);
       const logoAsset = assetByName(result.assets, 'logo', state.logoImageName);
       const savedSceneDurations = Array.isArray(state.sceneDurations)
@@ -763,6 +775,7 @@ export function App() {
       setSceneImageAssignments(sanitizeSceneImageAssignments(savedSceneImageAssignments, projectImages.map((image) => image.name)));
       setOutputName(state.outputName || 'video.mp4');
       setImages(projectImages);
+      setSourceFootage(projectFootage);
       setRemovedImages(removedProjectImages);
       setImageHeaders(imageHeadersFromProject(state, persistedScenes));
       setImageLabelEnabled(state.imageLabelEnabled || {});
@@ -848,6 +861,34 @@ export function App() {
     if (selectedItems.length) {
       setStatus(`${selectedItems.length} image${selectedItems.length === 1 ? '' : 's'} added to top`);
     }
+  }
+
+  function handleFootageSelection(files) {
+    const selectedItems = Array.from(files || [])
+      .filter((file) => /\.(mov|mp4|m4v|webm)$/i.test(file.name))
+      .map((file) => ({ ...fileItem(file), url: URL.createObjectURL(file), title: '', showTitle: false }));
+    if (!selectedItems.length) return;
+    setSourceFootage((current) => {
+      const incomingNames = new Set(selectedItems.map((clip) => clip.name));
+      return [...current.filter((clip) => !incomingNames.has(clip.name)), ...selectedItems];
+    });
+    setStatus(`${selectedItems.length} source clip${selectedItems.length === 1 ? '' : 's'} added`);
+  }
+
+  function updateFootage(index, patch) {
+    setSourceFootage((current) => current.map((clip, clipIndex) => (
+      clipIndex === index ? { ...clip, ...patch } : clip
+    )));
+  }
+
+  function moveFootage(index, offset) {
+    setSourceFootage((current) => {
+      const destination = index + offset;
+      if (destination < 0 || destination >= current.length) return current;
+      const next = [...current];
+      [next[index], next[destination]] = [next[destination], next[index]];
+      return next;
+    });
   }
 
   function updateImageHeader(imageName, header) {
@@ -1088,12 +1129,13 @@ export function App() {
       setStatus('Saving project');
       await request('/healthz');
       await uploadAssetItems(images, 'images');
+      await uploadAssetItems(sourceFootage, 'footage');
       if (leaderImage) await uploadAssetItems([leaderImage], 'leader');
       if (logoImage) await uploadAssetItems([logoImage], 'logo');
       const scenesAreRenderable = scenesPayload.scenes.length > 0
         && scenesPayload.scenes.every((scene) => scene.images.length > 0);
-      if (scenesAreRenderable) {
-        await saveRoomAnnotations();
+      if (scenesAreRenderable || sourceFootage.length) {
+        if (scenesAreRenderable) await saveRoomAnnotations();
         await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/scenes`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -1116,6 +1158,7 @@ export function App() {
             sceneImageAssignments,
             outputName,
             images,
+            sourceFootage,
             removedImages,
             imageHeaders,
             imageLabelEnabled,
@@ -1603,7 +1646,7 @@ export function App() {
     setLogs('');
     setVideoHref('');
     if (!canRender) {
-      setError('Add images and script paragraphs. Every generated scene needs an image.');
+      setError('Add source footage, or add images with a narration paragraph for every scene.');
       return;
     }
 
@@ -1620,12 +1663,12 @@ export function App() {
       });
       await saveProject();
 
-      setStatus('Naming rooms before render');
+      setStatus(sourceFootage.length ? 'Preparing source footage for render' : 'Naming rooms before render');
       setRenderTracker((previous) => ({
         ...previous,
         phase: 'naming',
         progress: renderTrackerProgress({ phase: 'naming' }),
-        message: 'Classifying images and localizing rolling titles',
+        message: sourceFootage.length ? 'Normalizing source clips and preserving recorded audio' : 'Classifying images and localizing rolling titles',
       }));
       const roomNaming = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/room-name-project`, {
         method: 'POST',
@@ -2163,6 +2206,40 @@ export function App() {
             <label htmlFor="image-upload">Add Images</label>
             <span>{images.length ? `${unassignedImageCount} in loading zone / ${images.length} uploaded` : 'No images selected'}</span>
           </div>
+
+          <div className="upload-box footage-upload-box">
+            <input id="footage-upload" type="file" accept="video/mp4,video/quicktime,video/webm,.mov,.mp4,.m4v,.webm" multiple onChange={(event) => handleFootageSelection(event.target.files)} />
+            <label htmlFor="footage-upload">Add Source Footage</label>
+            <span>{sourceFootage.length ? `${sourceFootage.length} clip${sourceFootage.length === 1 ? '' : 's'} in render order` : 'MOV, MP4, M4V, or WebM — recorded audio is preserved'}</span>
+          </div>
+
+          {sourceFootage.length > 0 && (
+            <section className="footage-panel" aria-label="Source footage">
+              <div className="loading-zone-heading">
+                <h3>Source Footage</h3>
+                <span>Leader, text, transitions, and logo apply to this sequence</span>
+              </div>
+              <div className="footage-list">
+                {sourceFootage.map((clip, index) => (
+                  <article className="footage-card" key={clip.name}>
+                    <video controls muted preload="metadata" src={clip.url} />
+                    <div className="footage-card-fields">
+                      <strong>{index + 1}. {clip.name}</strong>
+                      <label>On-screen text
+                        <input value={clip.title || ''} onChange={(event) => updateFootage(index, { title: event.target.value })} placeholder="Optional text overlay" />
+                      </label>
+                      <label className="check-row"><input type="checkbox" checked={Boolean(clip.showTitle)} onChange={(event) => updateFootage(index, { showTitle: event.target.checked })} />Show text over this clip</label>
+                      <div className="footage-card-actions">
+                        <button type="button" className="secondary-action" onClick={() => moveFootage(index, -1)} disabled={index === 0}>Move earlier</button>
+                        <button type="button" className="secondary-action" onClick={() => moveFootage(index, 1)} disabled={index === sourceFootage.length - 1}>Move later</button>
+                        <button type="button" onClick={() => setSourceFootage((current) => current.filter((item) => item.name !== clip.name))}>Remove</button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
 
           {imagePreviews.length > 0 && (
             <>

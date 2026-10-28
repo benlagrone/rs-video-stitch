@@ -203,6 +203,44 @@ class RendererTTSTest(TestCase):
         self.assertIn("channel_layouts=stereo", graph)
         self.assertTrue(graph.endswith("[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"))
 
+    def test_source_footage_renders_in_sequence_without_tts(self):
+        commands = []
+        with tempfile.TemporaryDirectory() as tmp:
+            storage_root = Path(tmp)
+            footage_dir = storage_root / "projects" / "footage-project" / "input" / "footage"
+            footage_dir.mkdir(parents=True)
+            (footage_dir / "walkthrough.mov").write_bytes(b"clip")
+            (footage_dir / "detail.mp4").write_bytes(b"clip")
+            (footage_dir.parent / "scenes.json").write_text(json.dumps({
+                "info": {"name": "Footage listing"},
+                "sourceFootage": [
+                    {"filename": "walkthrough.mov", "title": "Welcome", "showTitle": True},
+                    {"filename": "detail.mp4", "title": "Kitchen", "showTitle": False},
+                ],
+                "scenes": [],
+            }), encoding="utf-8")
+
+            def fake_run(command, log=None):
+                commands.append(command)
+                target = Path(command[-1])
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"rendered")
+
+            with mock.patch.object(renderer, "run", side_effect=fake_run), mock.patch.object(
+                renderer, "_footage_has_audio", return_value=True
+            ), mock.patch.object(renderer, "_resolve_title_font_from_style", return_value=Path(tmp) / "font.ttf"):
+                result = renderer.render_project("footage-project", storage_root, {
+                    "logoEnabled": False,
+                    "introEnabled": False,
+                }, "listing.mp4")
+
+            self.assertTrue(result.exists())
+            self.assertEqual(result.name, "listing.mp4")
+            rendered_commands = [" ".join(map(str, command)) for command in commands]
+            self.assertTrue(any("walkthrough.mov" in command for command in rendered_commands))
+            self.assertTrue(any("detail.mp4" in command for command in rendered_commands))
+            self.assertTrue(any("concat=n=2:v=1:a=1" in command for command in rendered_commands))
+
     def test_vibevoice_preserves_named_english_presets(self):
         self.assertEqual(renderer._vibevoice_speaker_name("en-Emma_woman"), "en-Emma_woman")
         self.assertEqual(

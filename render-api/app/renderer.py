@@ -445,6 +445,10 @@ def _overlay_title(
             str(source),
             "-vf",
             video_filter,
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
             "-c:v",
             "libx264",
             "-preset",
@@ -453,6 +457,8 @@ def _overlay_title(
             crf,
             "-pix_fmt",
             "yuv420p",
+            "-c:a",
+            "copy",
             str(destination),
         ],
         log,
@@ -761,6 +767,99 @@ def _normalized_concat_filter(input_count: int, fps: int) -> str:
         labels.append(f"[v{index}][a{index}]")
     normalized.append("".join(labels) + f"concat=n={input_count}:v=1:a=1[v][a]")
     return ";".join(normalized)
+
+
+def _footage_has_audio(source: Path) -> bool:
+    """Return whether a source clip has an audio stream without decoding it."""
+
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "csv=p=0",
+            str(source),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _extract_footage_poster(source: Path, destination: Path, log: Optional[LogFunc]) -> Path:
+    """Write one stable opening frame for leader cards and HyperFrames variables."""
+
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source),
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+            str(destination),
+        ],
+        log,
+    )
+    return destination
+
+
+def _prepare_footage_clip(
+    source: Path,
+    destination: Path,
+    fps: int,
+    preset: str,
+    crf: str,
+    log: Optional[LogFunc],
+) -> Path:
+    """Normalize creator footage for deterministic concat while retaining its audio."""
+
+    command = ["ffmpeg", "-y", "-i", str(source)]
+    audio_input = "0:a:0"
+    if not _footage_has_audio(source):
+        command.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"])
+        audio_input = "1:a:0"
+        _log(log, f"Footage {source.name} has no audio; adding a silent track")
+    command.extend(
+        [
+            "-vf",
+            (
+                "scale=1920:1080:force_original_aspect_ratio=decrease,"
+                "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p"
+            ),
+            "-r",
+            str(fps),
+            "-map",
+            "0:v:0",
+            "-map",
+            audio_input,
+            "-c:v",
+            "libx264",
+            "-preset",
+            preset,
+            "-crf",
+            crf,
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            str(destination),
+        ]
+    )
+    run(command, log)
+    return destination
 
 
 def _overlay_logo_on_video(
@@ -1300,6 +1399,220 @@ def _resolve_project_root(pid: str, storage_root: Path) -> Path:
     return projects_root / pid
 
 
+def _render_source_footage_project(
+    pid: str,
+    input_dir: Path,
+    work_dir: Path,
+    output_dir: Path,
+    footage: List[Dict[str, Any]],
+    opts: Dict[str, Any],
+    scenes_doc: Dict[str, Any],
+    output_name: str,
+    log: Optional[LogFunc],
+    progress: Optional[ProgressFunc],
+) -> Path:
+    """Render ordered source clips with the standard MediaStudio brand treatment."""
+
+    def update(stage: str, value: float) -> None:
+        if progress:
+            progress(stage, value)
+
+    fps = int(opts.get("fps", DEFAULT_FPS))
+    preset = str(opts.get("preset", DEFAULT_PRESET))
+    crf = str(opts.get("crf", DEFAULT_CRF))
+    raw_title_style = opts.get("titleStyle")
+    if hasattr(raw_title_style, "model_dump"):
+        raw_title_style = raw_title_style.model_dump()
+    title_style = dict(raw_title_style) if isinstance(raw_title_style, dict) else {}
+    title_font_path = _resolve_title_font_from_style(title_style, input_dir.parent, log)
+    info_meta = scenes_doc.get("info") if isinstance(scenes_doc.get("info"), dict) else {}
+    intro_enabled = _truthy(opts.get("introEnabled") or opts.get("intro_enabled"))
+    intro_title = str(opts.get("introTitle") or opts.get("intro_title") or info_meta.get("name") or pid).strip()
+    intro_leader_image = opts.get("introLeaderImage") or opts.get("intro_leader_image")
+    intro_background_image = opts.get("introBackgroundImage") or opts.get("intro_background_image")
+    intro_leader_enabled = _truthy(opts.get("introLeaderEnabled", opts.get("intro_leader_enabled", True)))
+    try:
+        intro_duration = max(0.1, float(opts.get("introDuration") or opts.get("intro_duration") or 1.0))
+    except (TypeError, ValueError):
+        intro_duration = 1.0
+    thumbnail_enabled = _truthy(opts.get("thumbnailEnabled", True))
+    logo_enabled = _truthy(opts.get("logoEnabled", True))
+    logo_image = opts.get("logoImage") or opts.get("logo_image")
+    logo_corner = str(opts.get("logoCorner") or opts.get("logo_corner") or "top-right")
+    try:
+        logo_margin = max(0, int(opts.get("logoMargin") or opts.get("logo_margin") or 24))
+    except (TypeError, ValueError):
+        logo_margin = 24
+    hyperframes_binding = opts.get("hyperframes") or scenes_doc.get("hyperframes") or {}
+    if not isinstance(hyperframes_binding, dict):
+        hyperframes_binding = {}
+    lead_card_mode = str(hyperframes_binding.get("leadCardMode") or "traditional").strip().lower()
+    transition_mode = str(hyperframes_binding.get("sceneTransitionMode") or "traditional").strip().lower()
+
+    supported_extensions = {".mov", ".mp4", ".m4v", ".webm"}
+    prepared_clips: List[Path] = []
+    posters: List[Path] = []
+    normalized_footage: List[Dict[str, Any]] = []
+    for index, item in enumerate(footage):
+        filename = Path(str(item.get("filename") or "")).name
+        if not filename or Path(filename).suffix.lower() not in supported_extensions:
+            raise ValueError(f"Unsupported source-footage filename: {filename or '<missing>'}")
+        source = input_dir / "footage" / filename
+        if not source.is_file():
+            raise FileNotFoundError(f"Missing source footage: {filename}")
+        clip_dir = work_dir / "footage"
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        prepared = _prepare_footage_clip(
+            source,
+            clip_dir / f"clip_{index:02d}.mp4",
+            fps,
+            preset,
+            crf,
+            log,
+        )
+        title = str(item.get("title") or "").strip()
+        if title and _truthy(item.get("showTitle")):
+            titled = clip_dir / f"clip_{index:02d}_titled.mp4"
+            _overlay_title(
+                prepared,
+                titled,
+                title,
+                clip_dir / f"clip_{index:02d}_title.txt",
+                title_font_path,
+                title_style,
+                preset,
+                crf,
+                log,
+            )
+            prepared = titled
+        prepared_clips.append(prepared)
+        posters.append(_extract_footage_poster(source, clip_dir / f"clip_{index:02d}.jpg", log))
+        normalized_footage.append({"filename": filename, "title": title})
+        update(f"FOOTAGE_PREP[{index:02d}]", 0.1 + ((index + 1) / len(footage)) * 0.55)
+
+    if not prepared_clips:
+        raise ValueError("No source footage is available to render")
+
+    intro_file: Optional[Path] = None
+    thumbnail_file: Optional[Path] = None
+    if intro_enabled:
+        intro_background = posters[0]
+        if intro_background_image:
+            requested_background = input_dir / "leader" / Path(str(intro_background_image)).name
+            if requested_background.exists():
+                intro_background = requested_background
+        if lead_card_mode == "hyperframes":
+            intro_file = _render_hyperframes_clip(
+                str(hyperframes_binding.get("leadCard") or "lecrown-lead-card"),
+                {
+                    "image": intro_background.resolve().as_uri(),
+                    "title": intro_title.split("\n", 1)[0] or pid,
+                    "detail": " · ".join(line for line in intro_title.splitlines()[1:3] if line.strip()),
+                    "micro": " · ".join(line for line in intro_title.splitlines()[3:] if line.strip()),
+                },
+                work_dir / "hyperframes_intro.mp4",
+                fps,
+                preset,
+                crf,
+                log,
+            )
+            if thumbnail_enabled:
+                leader_template = _resolve_leader_template(input_dir, str(intro_leader_image) if intro_leader_image else None, log) if intro_leader_enabled else None
+                _, thumbnail_file = _create_intro_card_assets(
+                    background_image=intro_background,
+                    leader_template=leader_template,
+                    title=intro_title,
+                    work_dir=work_dir,
+                    output_dir=output_dir,
+                    fps=fps,
+                    duration=intro_duration,
+                    title_font_path=title_font_path,
+                    preset=preset,
+                    crf=crf,
+                    log=log,
+                    thumbnail_enabled=True,
+                )
+        else:
+            leader_template = _resolve_leader_template(input_dir, str(intro_leader_image) if intro_leader_image else None, log) if intro_leader_enabled else None
+            intro_file, thumbnail_file = _create_intro_card_assets(
+                background_image=intro_background,
+                leader_template=leader_template,
+                title=intro_title,
+                work_dir=work_dir,
+                output_dir=output_dir,
+                fps=fps,
+                duration=intro_duration,
+                title_font_path=title_font_path,
+                preset=preset,
+                crf=crf,
+                log=log,
+                thumbnail_enabled=thumbnail_enabled,
+            )
+
+    scene_files = list(prepared_clips)
+    if transition_mode == "hyperframes" and len(prepared_clips) > 1:
+        transition_titles = hyperframes_binding.get("transitionTitles") or {}
+        interspersed: List[Path] = []
+        for index, clip in enumerate(prepared_clips):
+            interspersed.append(clip)
+            if index >= len(prepared_clips) - 1:
+                continue
+            transition_file = _render_hyperframes_clip(
+                str(hyperframes_binding.get("sceneTransition") or "lecrown-scene-transition"),
+                {
+                    "outgoing_image": posters[index].resolve().as_uri(),
+                    "incoming_image": posters[index + 1].resolve().as_uri(),
+                    "transition_title": str(
+                        transition_titles.get(str(index))
+                        or transition_titles.get(index)
+                        or normalized_footage[index + 1].get("title")
+                        or f"Clip {index + 2}"
+                    ),
+                },
+                work_dir / f"hyperframes_footage_transition_{index:02d}.mp4",
+                fps,
+                preset,
+                crf,
+                log,
+            )
+            interspersed.append(transition_file)
+        scene_files = interspersed
+    if intro_file:
+        scene_files.insert(0, intro_file)
+
+    update("CONCAT", 0.8)
+    final_path = output_dir / output_name
+    concat_output_path = work_dir / f"pre_logo_{Path(output_name).name}" if logo_enabled else final_path
+    concat_inputs = [value for clip in scene_files for value in ("-i", str(clip))]
+    run(
+        [
+            "ffmpeg", "-y", *concat_inputs, "-filter_complex", _normalized_concat_filter(len(scene_files), fps),
+            "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", preset,
+            "-crf", crf, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart", str(concat_output_path),
+        ],
+        log,
+    )
+    if logo_enabled:
+        _overlay_logo_on_video(
+            concat_output_path,
+            final_path,
+            _resolve_logo_image(input_dir, str(logo_image) if logo_image else None, log),
+            logo_corner,
+            logo_margin,
+            preset,
+            crf,
+            log,
+        )
+    if thumbnail_file:
+        _log(log, f"Thumbnail ready: {thumbnail_file}")
+    manifest = _write_hyperframes_manifest(output_dir, output_name, hyperframes_binding)
+    if manifest:
+        _log(log, f"HyperFrames render map: {manifest.name}")
+    update("FINALIZE", 0.98)
+    return final_path
+
+
 def render_project(
     pid: str,
     storage_root: Path,
@@ -1328,8 +1641,16 @@ def render_project(
 
     scenes_doc = json.loads(scenes_path.read_text("utf-8"))
     scenes = scenes_doc.get("scenes", [])
+    source_footage = scenes_doc.get("sourceFootage", [])
+    if not isinstance(source_footage, list):
+        source_footage = []
+    if source_footage:
+        return _render_source_footage_project(
+            pid, input_dir, work_dir, output_dir, source_footage, opts, scenes_doc,
+            output_name, log, progress,
+        )
     if not scenes:
-        raise ValueError("No scenes defined in scenes.json")
+        raise ValueError("No scenes or source footage defined in scenes.json")
 
     video_meta = scenes_doc.get("video") or scenes_doc.get("vid") or {}
 

@@ -28,6 +28,14 @@ class Scene(BaseModel):
         extra = "allow"
 
 
+class SourceFootageClip(BaseModel):
+    """One creator-supplied video clip stored with a project."""
+
+    filename: str = Field(min_length=1)
+    title: Optional[str] = None
+    showTitle: bool = Field(default=False)
+
+
 class VideoSettings(BaseModel):
     voice: Optional[str] = None
     language: Optional[str] = Field(default=None, alias="lang")
@@ -39,7 +47,8 @@ class VideoSettings(BaseModel):
 
 class ProjectSpec(BaseModel):
     info: Optional[Dict[str, Any]] = None
-    scenes: List[Scene]
+    scenes: List[Scene] = Field(default_factory=list)
+    sourceFootage: List[SourceFootageClip] = Field(default_factory=list)
     video: Optional[VideoSettings] = Field(
         default=None,
         alias="vid",

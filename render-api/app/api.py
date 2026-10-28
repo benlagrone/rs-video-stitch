@@ -1941,7 +1941,7 @@ async def get_project(pid: str) -> dict:
             }
             for filename in list_asset_files(pid, subdir)
         ]
-        for subdir in ("images", "motion", "leader", "logo", "voiceovers")
+        for subdir in ("images", "motion", "leader", "logo", "voiceovers", "footage")
     }
     scenes = _load_scenes(pid)
     if not state:
@@ -2012,7 +2012,7 @@ async def restore_project_version(pid: str, version_id: str) -> dict:
 
 @app.get("/v1/projects/{pid}/assets/{subdir}/{filename}")
 async def get_project_asset(pid: str, subdir: str, filename: str) -> FileResponse:
-    allowed = {"images", "motion", "leader", "logo", "voiceovers"}
+    allowed = {"images", "motion", "leader", "logo", "voiceovers", "footage"}
     if subdir not in allowed:
         raise HTTPException(status_code=400, detail="Invalid subdir")
 
@@ -2131,7 +2131,7 @@ async def upload_assets(
     files: list[UploadFile] = File(...),
     subdir: str = Form("images"),
 ) -> dict:
-    allowed = {"images", "leader", "logo", "voiceovers"}
+    allowed = {"images", "leader", "logo", "voiceovers", "footage"}
     if subdir not in allowed:
         raise HTTPException(status_code=400, detail="Invalid subdir")
 
@@ -2141,11 +2141,14 @@ async def upload_assets(
 
     count = 0
     for upload in files:
-        data = await upload.read()
         if not upload.filename:
             continue
-        target = dest / upload.filename
-        target.write_bytes(data)
+        target = dest / Path(upload.filename).name
+        with target.open("wb") as handle:
+            data = await upload.read(1024 * 1024)
+            while data:
+                handle.write(data)
+                data = await upload.read(1024 * 1024)
         count += 1
 
     return {"projectId": pid, "count": count, "subdir": subdir}

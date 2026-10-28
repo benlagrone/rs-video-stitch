@@ -1078,6 +1078,19 @@ textarea {
   padding: 14px;
 }
 
+.footage-upload-box { margin-top: 14px; }
+.footage-panel { margin-top: 18px; }
+.footage-list { display: grid; gap: 12px; }
+.footage-card { align-items: start; background: var(--surface-strong); border: 1px solid var(--line-strong); display: grid; gap: 14px; grid-template-columns: minmax(190px, 36%) 1fr; padding: 12px; }
+.footage-card video { background: #050709; display: block; max-height: 190px; width: 100%; }
+.footage-card-fields { display: grid; gap: 10px; }
+.footage-card-fields label { display: grid; gap: 5px; }
+.footage-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+@media (max-width: 720px) {
+  .footage-card { grid-template-columns: 1fr; }
+}
+
 .upload-box input {
   height: 1px;
   opacity: 0;

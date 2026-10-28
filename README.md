@@ -2,8 +2,11 @@
 
 MediaStudio provides one project desk at `/media-studio` for generic,
 real-estate, and Bible video workflows. Real-estate projects manage listing
-photos, bilingual scripts, branded renders, thumbnails, and reviewed YouTube
-uploads. Bible Video Studio adds a passage-first flow with `Still` and `Motion`
+photos or ordered source footage, bilingual scripts, branded renders,
+thumbnails, and reviewed YouTube uploads. Source-footage projects accept MOV,
+MP4, M4V, and WebM clips, preserve recorded audio, and apply the existing
+leader, text, logo, and HyperFrames controls to the finished sequence. Bible
+Video Studio adds a passage-first flow with `Still` and `Motion`
 modes. Its searchable visual-style picker is populated by the Sextant-owned
 `GET /v1/bible/styles` catalog, so style names and prompt characteristics stay
 server-side and are shared by still and motion generation. Public YouTube
@@ -66,6 +69,7 @@ Mounted host directory `~/Videos/MediaStudio` is mapped to `/videos` inside both
     input/
       scenes.json
       images/...
+      footage/...
       voiceovers/...
     work/                  # temp intermediates (kept on failure)
     output/
@@ -392,7 +396,7 @@ All endpoints are currently unauthenticated.
 | --- | --- |
 | `GET /healthz`, `GET /readyz` | Basic liveness/readiness checks. |
 | `PUT /v1/projects/{id}/scenes` | Upsert full project spec (validated, ≤3 images/scene) and write `scenes.json`. |
-| `POST /v1/projects/{id}/assets` | Multipart upload for asset files; optional `subdir` of `images` or `voiceovers`. |
+| `POST /v1/projects/{id}/assets` | Multipart upload for asset files; optional `subdir` of `images`, `footage`, or `voiceovers`. |
 | `POST /v1/projects/{id}/render` | Queue a render job with output name + render options; returns `jobId`. |
 | `GET /v1/jobs/{jobId}` | Poll job status, progress (0..1), stage, error, and recent logs. |
 | `GET /v1/projects/{id}/outputs` | List generated files under `output/`. |
