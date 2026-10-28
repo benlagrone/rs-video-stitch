@@ -1897,6 +1897,19 @@ class BibleWorkflowTest(TestCase):
             with self.assertRaisesRegex(motion_provider.MotionProviderError, "failed hard gates"):
                 motion_provider._verify_video(Path(tmp) / "short.mp4")
 
+    def test_comfy_history_poll_retries_transient_connection_timeout(self):
+        session = mock.Mock()
+        session.get.side_effect = [
+            motion_provider.requests.ConnectTimeout("Phronesis briefly unavailable"),
+            _Response({"prompt-123": {"outputs": {"17": {"videos": [{"filename": "scene.mp4"}]}}}}),
+        ]
+
+        with mock.patch.object(motion_provider.time, "sleep"):
+            result = motion_provider._wait_for_output(session, "prompt-123")
+
+        self.assertIn("outputs", result)
+        self.assertEqual(session.get.call_count, 2)
+
     def test_crop_safe_source_preparation_fits_and_pads_without_crop(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "source.png"

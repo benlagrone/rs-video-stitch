@@ -514,16 +514,24 @@ def _verify_temporal_control_track(path: Path, label: str) -> None:
 
 def _wait_for_output(session, prompt_id: str) -> dict:
     deadline = time.monotonic() + COMFYUI_TIMEOUT_SECONDS
+    last_connection_error: requests.RequestException | None = None
     while time.monotonic() < deadline:
-        response = session.get(
-            f"{COMFYUI_MODEL_API_URL.rstrip('/')}/history/{prompt_id}", timeout=30
-        )
-        response.raise_for_status()
+        try:
+            response = session.get(
+                f"{COMFYUI_MODEL_API_URL.rstrip('/')}/history/{prompt_id}", timeout=30
+            )
+            response.raise_for_status()
+            last_connection_error = None
+        except requests.RequestException as exc:
+            last_connection_error = exc
+            time.sleep(max(0.25, COMFYUI_POLL_SECONDS))
+            continue
         entry = response.json().get(prompt_id)
         if entry:
             return entry
         time.sleep(max(0.25, COMFYUI_POLL_SECONDS))
-    raise MotionProviderError(f"ComfyUI prompt {prompt_id} timed out")
+    detail = f" after transient connection errors: {last_connection_error}" if last_connection_error else ""
+    raise MotionProviderError(f"ComfyUI prompt {prompt_id} timed out{detail}")
 
 
 def _queue_and_download_workflow(session, workflow: dict[str, Any], destination: Path) -> None:
