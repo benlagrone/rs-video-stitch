@@ -1976,6 +1976,7 @@ def _generate_motion_clip(
             ignored_tile_boxes: list[dict[str, float]] | None = None,
             allow_no_fixed_tiles: bool = False,
             require_unconstrained_generative_motion: bool = True,
+            protect_locked_edges: bool = True,
         ) -> dict[str, Any]:
             quality: dict[str, Any] = {
                 "status": "accepted",
@@ -1986,8 +1987,9 @@ def _generate_motion_clip(
             }
             if camera_behavior == "locked":
                 quality["stabilization"] = _stabilize_locked_camera(destination)
-                _protect_locked_frame_edges(prepared_source, destination)
-                quality["lockedEdgesProtected"] = True
+                if protect_locked_edges:
+                    _protect_locked_frame_edges(prepared_source, destination)
+                quality["lockedEdgesProtected"] = protect_locked_edges
             if protect_style_frame:
                 _protect_decorative_frame(prepared_source, destination)
                 quality["decorativeFrameProtected"] = True
@@ -2050,6 +2052,7 @@ def _generate_motion_clip(
                 ignored_tile_boxes=_object_vector_motion_corridors(motion_plan),
                 allow_no_fixed_tiles=True,
                 require_unconstrained_generative_motion=False,
+                protect_locked_edges=False,
             )
             quality["controlMode"] = "3d-previsualization-guided-generative-video"
             quality["providerPolicy"] = "phronesis-local-model-via-sextant-orchestration"
