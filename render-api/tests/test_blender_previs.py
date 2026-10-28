@@ -75,13 +75,16 @@ class BlenderPrevisTests(unittest.TestCase):
             motion_dir = project_input / "motion"
             motion_dir.mkdir(parents=True)
             guide_path = motion_dir / "scene_001-3d-guide.mp4"
+            depth_path = motion_dir / "scene_001-3d-depth.mp4"
             guide_path.write_bytes(b"reviewed-guide")
+            depth_path.write_bytes(b"reviewed-depth")
             (project_input / "scenes.json").write_text(json.dumps({
                 "scenes": [{
                     "title": "Genesis 1:1",
                     "previsualization": {
                         "status": "ready",
                         "video": guide_path.name,
+                        "depthVideo": depth_path.name,
                         "brief": {
                             "videoPrompt": "One planet descends.",
                             "continuityRules": ["Exactly one planet is visible."],
@@ -91,12 +94,16 @@ class BlenderPrevisTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
             with mock.patch.object(blender_previs, "p_input", return_value=project_input):
-                prompt, plan, resolved_guide = blender_previs.guided_video_inputs("genesis", 1)
+                prompt, plan, resolved_guide, resolved_depth = blender_previs.guided_video_inputs(
+                    "genesis",
+                    1,
+                )
 
         self.assertIn("One planet descends", prompt)
         self.assertIn("Exactly one planet", prompt)
         self.assertEqual(plan["summary"], "Move the planet lower.")
         self.assertEqual(resolved_guide, guide_path)
+        self.assertEqual(resolved_depth, depth_path)
 
 
 if __name__ == "__main__":
