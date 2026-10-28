@@ -1975,6 +1975,7 @@ def _generate_motion_clip(
             *,
             ignored_tile_boxes: list[dict[str, float]] | None = None,
             allow_no_fixed_tiles: bool = False,
+            require_unconstrained_generative_motion: bool = True,
         ) -> dict[str, Any]:
             quality: dict[str, Any] = {
                 "status": "accepted",
@@ -1996,7 +1997,7 @@ def _generate_motion_clip(
                 ignored_tile_boxes=ignored_tile_boxes,
                 allow_no_fixed_tiles=allow_no_fixed_tiles,
             )
-            if provider.startswith("wan2.1-vace-"):
+            if provider.startswith("wan2.1-vace-") and require_unconstrained_generative_motion:
                 _verify_visible_generative_motion(quality["sequenceIntegrity"])
             _verify_video(destination)
             return quality
@@ -2048,6 +2049,7 @@ def _generate_motion_clip(
                 1.0,
                 ignored_tile_boxes=_object_vector_motion_corridors(motion_plan),
                 allow_no_fixed_tiles=True,
+                require_unconstrained_generative_motion=False,
             )
             quality["controlMode"] = "3d-previsualization-guided-generative-video"
             quality["providerPolicy"] = "phronesis-local-model-via-sextant-orchestration"

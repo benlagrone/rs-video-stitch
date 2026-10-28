@@ -1817,7 +1817,7 @@ class BibleWorkflowTest(TestCase):
                 return_value={"sampleCount": 81, "meanLumaFrameDifference": 5.0},
             ) as sequence_integrity, mock.patch.object(
                 motion_provider, "_verify_visible_generative_motion"
-            ), mock.patch.object(motion_provider, "_verify_video"):
+            ) as generative_motion, mock.patch.object(motion_provider, "_verify_video"):
                 quality = motion_provider._generate_motion_clip(
                     still,
                     destination,
@@ -1836,6 +1836,7 @@ class BibleWorkflowTest(TestCase):
             expected_corridors,
         )
         self.assertTrue(sequence_integrity.call_args.kwargs["allow_no_fixed_tiles"])
+        generative_motion.assert_not_called()
 
     def test_guided_full_frame_tile_gate_can_report_no_fixed_background_tiles(self):
         metrics = motion_provider._measure_edge_tile_integrity(
