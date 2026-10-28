@@ -879,14 +879,12 @@ def _motion_provenance(scene: dict[str, Any], still_path: Path, scene_index: int
 def _motion_provider_prompt(resolved_prompt: str, scene: dict[str, Any], provenance: dict[str, Any]) -> str:
     reference = str(scene.get("title") or "")
     verse = str(scene.get("VO") or scene.get("description") or "")
-    source_prompt = str(provenance.get("sourceImagePrompt") or "").strip()
     visual_anchor = (
-        "The supplied source image is the authoritative first frame. Preserve its exact subjects, count, identities, "
+        "The supplied source image pixels are the sole authority for visible appearance. Preserve their exact subjects, count, identities, "
         "anatomy, environment, composition, palette, materials, lighting, and art treatment; animate it without "
-        "restaging or introducing new elements."
+        "restaging or introducing new elements. Historical image-generation text is provenance only and must not "
+        "repaint, restyle, recolor, or reinterpret the approved source pixels."
     )
-    if source_prompt:
-        visual_anchor += f" Locked source-image description: {source_prompt}"
     camera_behavior = str(provenance.get("cameraBehavior") or "locked")
     camera_direction = {
         "locked": (
