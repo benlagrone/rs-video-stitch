@@ -708,7 +708,8 @@ class BibleWorkflowTest(TestCase):
         self.assertTrue(saved_document["scenes"][0]["motionPrompt"].startswith("Light expands across the water."))
         self.assertNotIn("Locked God character design", saved_document["scenes"][0]["motionPrompt"])
         motion_prompt = generate_motion.call_args.kwargs["prompt"]
-        self.assertIn("Locked source-image description: A dark primordial ocean", motion_prompt)
+        self.assertIn("source image pixels are the sole authority", motion_prompt)
+        self.assertNotIn("A dark primordial ocean with a gold illuminated border", motion_prompt)
         self.assertIn("Motion direction: Light expands across the water.", motion_prompt)
         self.assertIn("Genesis 1 scenery-first composition", motion_prompt)
         self.assertNotIn("full silver-white beard", motion_prompt)
