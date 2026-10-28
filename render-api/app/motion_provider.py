@@ -53,6 +53,8 @@ SEQUENCE_LUMA_JUMP_LIMIT = float(os.getenv("SEQUENCE_LUMA_JUMP_LIMIT", "20.0"))
 SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE = float(os.getenv("SEQUENCE_MAX_LUMA_FRAME_DIFFERENCE", "26.0"))
 SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE = float(os.getenv("SEQUENCE_MIN_MEAN_LUMA_DIFFERENCE", "0.35"))
 GENERATIVE_MIN_MEAN_LUMA_DIFFERENCE = float(os.getenv("GENERATIVE_MIN_MEAN_LUMA_DIFFERENCE", "0.9"))
+GUIDED_DEPTH_CONTROL_STRENGTH = float(os.getenv("GUIDED_DEPTH_CONTROL_STRENGTH", "0.62"))
+GUIDE_COPY_MAX_SSIM = float(os.getenv("GUIDE_COPY_MAX_SSIM", "0.90"))
 SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT = float(
     os.getenv("SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT", "4.0")
 )
@@ -434,21 +436,21 @@ def _generate_region_control_assets(
 
 
 def _prepare_3d_guidance_assets(
-    guide_path: Path,
+    depth_guide_path: Path,
     control_destination: Path,
     mask_destination: Path,
 ) -> None:
-    """Normalize a reviewed Blender guide into VACE control and full-frame mask tracks."""
-    if not guide_path.exists() or guide_path.stat().st_size == 0:
-        raise MotionProviderError("The reviewed 3D guidance video is missing or empty")
+    """Normalize Blender depth into non-photographic VACE structure and motion control."""
+    if not depth_guide_path.exists() or depth_guide_path.stat().st_size == 0:
+        raise MotionProviderError("The reviewed 3D depth-control video is missing or empty")
     control_filter = (
         f"scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:"
         "force_original_aspect_ratio=decrease:force_divisible_by=2,"
         f"pad={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,"
-        "fps=16,format=yuv420p"
+        "fps=16,format=gray,eq=contrast=1.15:brightness=-0.05,gblur=sigma=1.2,format=yuv420p"
     )
     control_command = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(guide_path),
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(depth_guide_path),
         "-vf", control_filter, "-t", "5.0625", "-r", "16", "-c:v", "libx264",
         "-preset", "fast", "-crf", "16", "-pix_fmt", "yuv420p", str(control_destination),
     ]
@@ -703,6 +705,43 @@ def _measure_source_frame_fidelity(image_path: Path, video_path: Path) -> float:
         return round(score, 4)
     except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
         raise MotionProviderError(f"Unable to validate source framing fidelity: {exc}") from exc
+    finally:
+        stats_path.unlink(missing_ok=True)
+
+
+def _measure_guide_copy_similarity(guide_path: Path, video_path: Path) -> float:
+    """Reject candidates that visually collapse back into the RGB Blender preview."""
+    stats_path = video_path.with_name(f"{video_path.stem}.guide-copy-ssim.log")
+    filter_graph = (
+        f"[0:v]trim=start=1,fps=16,scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},"
+        "setpts=PTS-STARTPTS[guide];"
+        f"[1:v]trim=start=1,fps=16,scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},"
+        f"setpts=PTS-STARTPTS[candidate];[guide][candidate]ssim=stats_file={stats_path}:shortest=1"
+    )
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(guide_path),
+        "-i", str(video_path), "-filter_complex", filter_graph, "-f", "null", "-",
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        scores = [
+            float(value)
+            for value in re.findall(
+                r"All:([0-9.]+)",
+                stats_path.read_text(encoding="utf-8", errors="replace"),
+            )
+        ]
+        if len(scores) < 16:
+            raise MotionProviderError("Unable to measure post-intro Blender-guide similarity")
+        score = statistics.fmean(scores)
+        if score > GUIDE_COPY_MAX_SSIM:
+            raise MotionProviderError(
+                "Animation rejected because the AI appearance collapsed into the Blender preview after the intro: "
+                f"guide-copy SSIM {score:.3f} exceeds {GUIDE_COPY_MAX_SSIM:.3f}"
+            )
+        return round(score, 4)
+    except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
+        raise MotionProviderError(f"Unable to validate Blender-guide appearance separation: {exc}") from exc
     finally:
         stats_path.unlink(missing_ok=True)
 
@@ -1890,6 +1929,7 @@ def _generate_motion_clip(
     camera_behavior: str = "locked",
     motion_plan: dict[str, Any] | None = None,
     guidance_video_path: Path | None = None,
+    guidance_depth_path: Path | None = None,
     session=requests,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="mediastudio-motion-") as temp_dir:
@@ -1977,6 +2017,7 @@ def _generate_motion_clip(
             allow_no_fixed_tiles: bool = False,
             require_unconstrained_generative_motion: bool = True,
             protect_locked_edges: bool = True,
+            guide_appearance_path: Path | None = None,
         ) -> dict[str, Any]:
             quality: dict[str, Any] = {
                 "status": "accepted",
@@ -1994,6 +2035,11 @@ def _generate_motion_clip(
                 _protect_decorative_frame(prepared_source, destination)
                 quality["decorativeFrameProtected"] = True
             quality["sourceFrameSsim"] = _measure_source_frame_fidelity(prepared_source, destination)
+            if guide_appearance_path:
+                quality["guideCopySsim"] = _measure_guide_copy_similarity(
+                    guide_appearance_path,
+                    destination,
+                )
             quality["sequenceIntegrity"] = _measure_sequence_integrity(
                 destination,
                 ignored_tile_boxes=ignored_tile_boxes,
@@ -2020,16 +2066,21 @@ def _generate_motion_clip(
             return quality
 
         if guidance_video_path:
+            if not guidance_depth_path:
+                raise MotionProviderError(
+                    "The 3D guide predates depth control; rebuild the 3D guide before generating AI video"
+                )
             control_path = Path(temp_dir) / f"guide-{image_path.stem}.mp4"
             mask_path = Path(temp_dir) / f"guide-mask-{image_path.stem}.mp4"
-            _prepare_3d_guidance_assets(guidance_video_path, control_path, mask_path)
+            _prepare_3d_guidance_assets(guidance_depth_path, control_path, mask_path)
             control_name = _upload_asset(session, control_path, "video/mp4")
             mask_name = _upload_asset(session, mask_path, "video/mp4")
             guided_prompt = (
                 f"{prompt} The supplied 3D guide is mandatory spatial and temporal blocking. Match its camera, "
                 "subject count, object positions, silhouettes, depth, occlusion, and trajectories frame by frame, "
-                "while replacing the preview materials with the approved reference image's finished visual style, "
-                "lighting, texture, and atmosphere. Produce coherent natural footage, not a 3D viewport render."
+                "The supplied control is depth only and must never determine visible color, texture, materials, or "
+                "lighting. Preserve the approved reference image's finished visual style, palette, atmosphere, and "
+                "subject appearance throughout every frame. Produce coherent natural footage, not a 3D viewport render."
             )[:2800]
             guided_negative = (
                 f"{negative_prompt}, gray clay render, viewport preview, wireframe, primitive geometry, flat shader, "
@@ -2043,7 +2094,7 @@ def _generate_motion_clip(
                 guided_negative,
                 f"{prefix}-3d-guide",
                 effective_seed,
-                strength=0.88,
+                strength=GUIDED_DEPTH_CONTROL_STRENGTH,
             )
             _queue_and_download_workflow(session, guided_workflow, destination)
             quality = validate_candidate(
@@ -2053,10 +2104,14 @@ def _generate_motion_clip(
                 allow_no_fixed_tiles=True,
                 require_unconstrained_generative_motion=False,
                 protect_locked_edges=False,
+                guide_appearance_path=guidance_video_path,
             )
             quality["controlMode"] = "3d-previsualization-guided-generative-video"
             quality["providerPolicy"] = "phronesis-local-model-via-sextant-orchestration"
             quality["guideSource"] = guidance_video_path.name
+            quality["depthControlSource"] = guidance_depth_path.name
+            quality["depthControlStrength"] = GUIDED_DEPTH_CONTROL_STRENGTH
+            quality["appearanceReference"] = image_path.name
             quality["fullFrameGeneration"] = True
             quality["semanticMotionGate"] = "reviewed-3d-camera-and-object-trajectories"
             return quality
@@ -2299,6 +2354,7 @@ def generate_motion_clip(
     camera_behavior: str = "locked",
     motion_plan: dict[str, Any] | None = None,
     guidance_video_path: Path | None = None,
+    guidance_depth_path: Path | None = None,
     session=requests,
 ) -> dict[str, Any]:
     with admit_gpu(
@@ -2318,5 +2374,6 @@ def generate_motion_clip(
             camera_behavior=camera_behavior,
             motion_plan=motion_plan,
             guidance_video_path=guidance_video_path,
+            guidance_depth_path=guidance_depth_path,
             session=session,
         )
