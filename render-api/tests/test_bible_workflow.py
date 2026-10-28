@@ -819,6 +819,49 @@ class BibleWorkflowTest(TestCase):
         self.assertNotIn("camera pans", rejected_scene["motionPrompt"].lower())
         self.assertIn("Keep the camera locked", rejected_scene["motionPrompt"])
 
+    def test_rejected_candidate_is_archived_for_visual_qa(self):
+        document = {
+            "info": {"name": "Genesis 1 (KJV)"},
+            "scenes": [{
+                "title": "Genesis 1:1",
+                "VO": "In the beginning.",
+                "images": ["scene_001.png"],
+                "timeline": [{"image": "scene_001.png", "video": "scene_001.mp4"}],
+            }],
+        }
+
+        def reject_after_render(_source, candidate, **_kwargs):
+            candidate.write_bytes(b"rejected-ai-candidate")
+            raise RuntimeError("Animation rejected for temporal corruption")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            bible_workflow, "p_input", return_value=Path(tmp) / "input"
+        ), mock.patch.object(
+            bible_workflow, "save_scenes"
+        ) as save_scenes, mock.patch.object(
+            bible_workflow, "generate_motion_clip", side_effect=reject_after_render
+        ):
+            input_dir = Path(tmp) / "input"
+            (input_dir / "images").mkdir(parents=True)
+            (input_dir / "motion").mkdir(parents=True)
+            (input_dir / "images" / "scene_001.png").write_bytes(b"still")
+            (input_dir / "motion" / "scene_001.mp4").write_bytes(b"accepted")
+            (input_dir / "scenes.json").write_text(json.dumps(document), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "temporal corruption"):
+                bible_workflow.animate_bible_scene(
+                    "bible-test",
+                    1,
+                    "The planet moves lower.",
+                    progress=mock.Mock(),
+                    log=mock.Mock(),
+                )
+
+            saved = json.loads(save_scenes.call_args.args[1])
+            rejected_relative = saved["scenes"][0]["animationQuality"]["rejectedCandidate"]
+            rejected_path = input_dir / "motion" / rejected_relative
+            self.assertEqual(rejected_path.read_bytes(), b"rejected-ai-candidate")
+
     def test_motion_safe_repair_restores_original_still_and_scene_after_exhaustion(self):
         document = {
             "info": {"name": "Genesis 1 (KJV)"},
