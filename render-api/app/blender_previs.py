@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 import requests
 
-from app.gpu_admission import governed_post
+from app.gpu_admission import GpuAdmissionError, governed_post
 from app.storage import p_input, read_project_state, save_scenes
 
 
@@ -218,7 +218,7 @@ def generate_scene_3d_brief(
         content = str(payload.get("response") or "").strip()
         brief = _sanitize_brief(json.loads(content), fallback)
         brief["source"] = "ollama-image+motion-prompts"
-    except (requests.RequestException, json.JSONDecodeError, TypeError, ValueError):
+    except (GpuAdmissionError, requests.RequestException, json.JSONDecodeError, TypeError, ValueError):
         brief = fallback
         brief["source"] = "deterministic-fallback"
     brief["imagePrompt"] = image_prompt

@@ -8,6 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import blender_previs
+from app.gpu_admission import GpuAdmissionError
 
 
 class BlenderPrevisTests(unittest.TestCase):
@@ -48,6 +49,25 @@ class BlenderPrevisTests(unittest.TestCase):
         }, fallback)
 
         self.assertEqual(brief["objects"][0]["primitive"], "sphere")
+
+    def test_gpu_admission_failure_uses_cpu_safe_genesis_fallback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_input = Path(temp_dir) / "input"
+            project_input.mkdir()
+            (project_input / "scenes.json").write_text(json.dumps({
+                "scenes": [{
+                    "title": "Genesis 1:1",
+                    "VO": "In the beginning God created the heaven and the earth.",
+                    "timeline": [{"prompt": "One solitary newly forming planet."}],
+                }],
+            }), encoding="utf-8")
+            with mock.patch.object(blender_previs, "p_input", return_value=project_input), mock.patch.object(
+                blender_previs, "governed_post", side_effect=GpuAdmissionError("optimizer timed out")
+            ):
+                brief = blender_previs.generate_scene_3d_brief("genesis", 1)
+
+        self.assertEqual(brief["source"], "deterministic-fallback")
+        self.assertEqual([item["id"] for item in brief["objects"]].count("forming-earth"), 1)
 
     def test_guided_video_inputs_require_and_return_reviewed_guide_track(self):
         with tempfile.TemporaryDirectory() as temp_dir:
