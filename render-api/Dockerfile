@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
     libasound2 \
     libcurl4 \
+    libegl1 \
     ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
