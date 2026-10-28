@@ -57,6 +57,8 @@ GUIDED_DEPTH_CONTROL_STRENGTH = float(os.getenv("GUIDED_DEPTH_CONTROL_STRENGTH",
 GUIDED_APPEARANCE_CONTROL_STRENGTH = float(
     os.getenv("GUIDED_APPEARANCE_CONTROL_STRENGTH", "0.38")
 )
+APPEARANCE_FUSION_LUMA_GAIN = float(os.getenv("APPEARANCE_FUSION_LUMA_GAIN", "0.18"))
+APPEARANCE_PROXY_MIN_SSIM = float(os.getenv("APPEARANCE_PROXY_MIN_SSIM", "0.72"))
 GUIDE_COPY_MAX_SSIM = float(os.getenv("GUIDE_COPY_MAX_SSIM", "0.90"))
 SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT = float(
     os.getenv("SEQUENCE_EDGE_TILE_SATURATION_JUMP_LIMIT", "4.0")
@@ -512,6 +514,50 @@ def _prepare_appearance_guidance_assets(
     _verify_static_control_track(mask_destination, "source-appearance guide mask")
 
 
+def _fuse_generated_motion_with_appearance_proxy(
+    appearance_proxy_path: Path,
+    generated_path: Path,
+) -> None:
+    """Keep approved RGB pixels while importing only restrained generated luminance changes."""
+    first_frame_path = generated_path.with_name(f"{generated_path.stem}.generated-first.png")
+    fused_path = generated_path.with_name(f"{generated_path.stem}.appearance-fused{generated_path.suffix}")
+    extract_first_command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(generated_path),
+        "-frames:v", "1", str(first_frame_path),
+    ]
+    filter_graph = (
+        f"[0:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},fps=16,"
+        "setpts=PTS-STARTPTS[appearance];"
+        f"[1:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},fps=16,"
+        "format=gray,setpts=PTS-STARTPTS[generated];"
+        f"[2:v]scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},fps=16,"
+        "format=gray,setpts=PTS-STARTPTS[reference];"
+        "[generated][reference]blend=all_expr='A-B+128',format=yuv444p[delta];"
+        f"[appearance][delta]blend=shortest=1:all_expr='clip(A+(B-128)*{APPEARANCE_FUSION_LUMA_GAIN},0,255)',"
+        "format=yuv420p[video]"
+    )
+    fuse_command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(appearance_proxy_path), "-i", str(generated_path),
+        "-loop", "1", "-i", str(first_frame_path),
+        "-filter_complex", filter_graph, "-map", "[video]", "-map", "1:a?",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-c:a", "copy", str(fused_path),
+    ]
+    try:
+        subprocess.run(extract_first_command, check=True, capture_output=True, text=True)
+        subprocess.run(fuse_command, check=True, capture_output=True, text=True)
+        if not fused_path.exists() or fused_path.stat().st_size == 0:
+            raise MotionProviderError("Appearance fusion produced no video")
+        fused_path.replace(generated_path)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        raise MotionProviderError(f"Unable to preserve approved appearance during motion fusion: {detail[-600:]}") from exc
+    finally:
+        first_frame_path.unlink(missing_ok=True)
+        fused_path.unlink(missing_ok=True)
+
+
 def _verify_static_control_track(path: Path, label: str) -> None:
     """Reject temporal control tracks so VACE cannot be driven by translated source patches."""
     command = [
@@ -782,6 +828,43 @@ def _measure_guide_copy_similarity(guide_path: Path, video_path: Path) -> float:
         return round(score, 4)
     except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
         raise MotionProviderError(f"Unable to validate Blender-guide appearance separation: {exc}") from exc
+    finally:
+        stats_path.unlink(missing_ok=True)
+
+
+def _measure_appearance_proxy_similarity(appearance_path: Path, video_path: Path) -> float:
+    """Require the accepted clip to retain the reviewed source-pixel appearance trajectory."""
+    stats_path = video_path.with_name(f"{video_path.stem}.appearance-proxy-ssim.log")
+    filter_graph = (
+        f"[0:v]fps=16,scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},"
+        "setpts=PTS-STARTPTS[appearance];"
+        f"[1:v]fps=16,scale={FRAME_PROTECTION_WIDTH}:{FRAME_PROTECTION_HEIGHT},"
+        f"setpts=PTS-STARTPTS[candidate];[appearance][candidate]ssim=stats_file={stats_path}:shortest=1"
+    )
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(appearance_path),
+        "-i", str(video_path), "-filter_complex", filter_graph, "-f", "null", "-",
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        scores = [
+            float(value)
+            for value in re.findall(
+                r"All:([0-9.]+)",
+                stats_path.read_text(encoding="utf-8", errors="replace"),
+            )
+        ]
+        if len(scores) < 16:
+            raise MotionProviderError("Unable to measure source-appearance retention")
+        score = statistics.fmean(scores)
+        if score < APPEARANCE_PROXY_MIN_SSIM:
+            raise MotionProviderError(
+                "Animation rejected because its appearance diverged from the approved still trajectory: "
+                f"appearance SSIM {score:.3f} is below {APPEARANCE_PROXY_MIN_SSIM:.3f}"
+            )
+        return round(score, 4)
+    except (FileNotFoundError, subprocess.CalledProcessError, OSError) as exc:
+        raise MotionProviderError(f"Unable to validate source-appearance retention: {exc}") from exc
     finally:
         stats_path.unlink(missing_ok=True)
 
@@ -2153,8 +2236,13 @@ def _generate_motion_clip(
                 strength=guided_strength,
             )
             _queue_and_download_workflow(session, guided_workflow, destination)
+            if vector_path:
+                _fuse_generated_motion_with_appearance_proxy(vector_path, destination)
             quality = validate_candidate(
-                "wan2.1-vace-3d-guide-control",
+                (
+                    "wan2.1-vace-3d-guide-control+source-appearance-luma-fusion"
+                    if vector_path else "wan2.1-vace-3d-guide-control"
+                ),
                 1.0,
                 ignored_tile_boxes=_object_vector_motion_corridors(motion_plan),
                 allow_no_fixed_tiles=True,
@@ -2172,6 +2260,12 @@ def _generate_motion_clip(
             if vector_path:
                 quality["appearanceControlSource"] = vector_path.name
                 quality["appearanceControlStrength"] = guided_strength
+                quality["appearanceFusion"] = "source-rgb-plus-generated-temporal-luminance"
+                quality["appearanceFusionLumaGain"] = APPEARANCE_FUSION_LUMA_GAIN
+                quality["appearanceProxySsim"] = _measure_appearance_proxy_similarity(
+                    vector_path,
+                    destination,
+                )
             quality["appearanceReference"] = image_path.name
             quality["fullFrameGeneration"] = True
             quality["semanticMotionGate"] = "reviewed-3d-camera-and-object-trajectories"
