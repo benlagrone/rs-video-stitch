@@ -1216,6 +1216,33 @@ class BibleWorkflowTest(TestCase):
         self.assertEqual(control_command[control_command.index("-i") + 1], str(appearance))
         self.assertNotIn("format=gray", control_command[control_command.index("-vf") + 1])
 
+    def test_appearance_fusion_keeps_proxy_rgb_and_adds_only_generated_luminance_delta(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            appearance = Path(tmp) / "appearance.mp4"
+            generated = Path(tmp) / "generated.mp4"
+            appearance.write_bytes(b"appearance")
+            generated.write_bytes(b"generated")
+
+            def render_output(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"rendered")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(
+                motion_provider.subprocess, "run", side_effect=render_output
+            ) as run:
+                motion_provider._fuse_generated_motion_with_appearance_proxy(
+                    appearance,
+                    generated,
+                )
+
+        self.assertEqual(run.call_count, 2)
+        fuse_command = run.call_args_list[1].args[0]
+        filter_graph = fuse_command[fuse_command.index("-filter_complex") + 1]
+        self.assertIn("[0:v]scale=", filter_graph)
+        self.assertIn("format=gray", filter_graph)
+        self.assertIn("A-B+128", filter_graph)
+        self.assertIn(str(motion_provider.APPEARANCE_FUSION_LUMA_GAIN), filter_graph)
+
     def test_3d_guided_video_rejects_rgb_guide_copy_after_intro(self):
         with tempfile.TemporaryDirectory() as tmp:
             guide = Path(tmp) / "guide.mp4"
@@ -1931,6 +1958,10 @@ class BibleWorkflowTest(TestCase):
             ) as depth_control, mock.patch.object(
                 motion_provider, "_queue_and_download_workflow", side_effect=write_candidate
             ), mock.patch.object(
+                motion_provider, "_fuse_generated_motion_with_appearance_proxy"
+            ) as appearance_fusion, mock.patch.object(
+                motion_provider, "_measure_appearance_proxy_similarity", return_value=0.93
+            ), mock.patch.object(
                 motion_provider, "_stabilize_locked_camera", return_value={"p95TranslationPixels": 0.0}
             ), mock.patch.object(
                 motion_provider, "_measure_source_frame_fidelity", return_value=0.9
@@ -1958,7 +1989,10 @@ class BibleWorkflowTest(TestCase):
                     session=session,
                 )
 
-        self.assertEqual(quality["modelProvider"], "wan2.1-vace-3d-guide-control")
+        self.assertEqual(
+            quality["modelProvider"],
+            "wan2.1-vace-3d-guide-control+source-appearance-luma-fusion",
+        )
         self.assertEqual(quality["guideCopySsim"], 0.42)
         self.assertEqual(quality["depthControlSource"], depth.name)
         self.assertEqual(quality["depthControlStrength"], 0.0)
@@ -1967,7 +2001,13 @@ class BibleWorkflowTest(TestCase):
             motion_provider.GUIDED_APPEARANCE_CONTROL_STRENGTH,
         )
         self.assertEqual(quality["appearanceReference"], still.name)
+        self.assertEqual(quality["appearanceProxySsim"], 0.93)
+        self.assertEqual(
+            quality["appearanceFusion"],
+            "source-rgb-plus-generated-temporal-luminance",
+        )
         appearance_control.assert_called_once()
+        appearance_fusion.assert_called_once_with(mock.ANY, destination)
         depth_control.assert_not_called()
         self.assertEqual(
             sequence_integrity.call_args.kwargs["ignored_tile_boxes"],
