@@ -103,6 +103,102 @@ def _fallback_genesis_1_1_brief(scene: dict[str, Any], image_prompt: str, motion
     }
 
 
+def _fallback_genesis_1_2_brief(scene: dict[str, Any], image_prompt: str, motion_prompt: str) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "reference": _clean_text(scene.get("title"), 120),
+        "durationSeconds": 5.0625,
+        "frameRate": 16,
+        "camera": {
+            "behavior": "locked",
+            "position": [0.0, -10.0, 4.0],
+            "target": [0.0, 1.8, 2.0],
+            "lensMm": 45,
+        },
+        "environment": {
+            "kind": "primordial-ocean",
+            "description": "An endless dark ocean beneath one enormous unfinished world and a low misty horizon.",
+            "palette": ["#020617", "#0f172a", "#475569", "#f8fafc"],
+        },
+        "objects": [
+            {
+                "id": "unfinished-earth",
+                "label": "One enormous unfinished world",
+                "primitive": "sphere",
+                "scale": [3.7, 3.7, 3.7],
+                "material": "rocky-planet",
+                "startPosition": [0.0, 4.6, 6.1],
+                "endPosition": [0.0, 4.6, 6.1],
+                "rotationDegrees": [0.0, 0.0, 0.0],
+                "action": "The single world remains fixed in frame while its surface rotates slowly.",
+            },
+            {
+                "id": "primordial-ocean",
+                "label": "Primordial ocean",
+                "primitive": "plane",
+                "scale": [8.0, 10.0, 1.0],
+                "material": "water",
+                "startPosition": [0.0, 2.2, 0.0],
+                "endPosition": [0.0, 1.7, 0.0],
+                "rotationDegrees": [0.0, 0.0, 0.0],
+                "action": "The ocean surface advances subtly toward the fixed camera.",
+            },
+            {
+                "id": "near-wave",
+                "label": "Near wave crest",
+                "primitive": "torus",
+                "scale": [4.6, 1.3, 0.16],
+                "material": "water",
+                "startPosition": [0.0, 1.8, 0.34],
+                "endPosition": [0.0, -0.8, 0.42],
+                "rotationDegrees": [0.0, 0.0, 0.0],
+                "action": "A broad wave crest travels toward the foreground without changing the horizon.",
+            },
+            {
+                "id": "far-wave",
+                "label": "Far wave crest",
+                "primitive": "torus",
+                "scale": [5.2, 1.45, 0.12],
+                "material": "water",
+                "startPosition": [0.0, 3.8, 0.22],
+                "endPosition": [0.0, 1.2, 0.30],
+                "rotationDegrees": [0.0, 0.0, 0.0],
+                "action": "A second wave crest follows the first toward the foreground.",
+            },
+            {
+                "id": "spirit-light",
+                "label": "Diffuse Spirit light over the water",
+                "primitive": "torus",
+                "scale": [2.6, 0.52, 0.08],
+                "material": "gold",
+                "startPosition": [-1.6, 0.7, 0.56],
+                "endPosition": [1.6, 0.7, 0.56],
+                "rotationDegrees": [0.0, 0.0, 0.0],
+                "action": "A diffuse luminous path moves left to right over existing wave tops without becoming a figure or orb.",
+            },
+        ],
+        "actionBeats": [
+            {"seconds": "0.0-0.8", "action": "Hold the fixed world and establish the dark ocean."},
+            {"seconds": "0.8-4.2", "action": "Advance two broad wave crests while the diffuse light crosses their surface."},
+            {"seconds": "4.2-5.0625", "action": "Let the light settle at right-center while the waves continue forward."},
+        ],
+        "continuityRules": [
+            "Exactly one world is visible and it remains fixed in frame.",
+            "The camera, horizon, frame edges, and global exposure remain fixed.",
+            "The Spirit is represented only by diffuse light moving over existing water, never by a person, orb, or solid object.",
+            "Wave motion travels toward the foreground without a cut, collision, duplicate object, or moving crop.",
+        ],
+        "imagePrompt": image_prompt,
+        "motionPrompt": motion_prompt,
+        "videoPrompt": (
+            "Fixed wide camera over a dark primordial ocean beneath one enormous unfinished world. Two broad wave crests "
+            "travel continuously toward the foreground while a diffuse silver-gold light moves left to right across their "
+            "surface, parting low mist and brightening nearby ripples. Keep the single world, horizon, palette, composition, "
+            "and camera fixed; no person, orb, duplicate world, collision, crop animation, or cut."
+        ),
+    }
+
+
 def _generic_fallback_brief(scene: dict[str, Any], image_prompt: str, motion_prompt: str) -> dict[str, Any]:
     return {
         "version": 1,
@@ -179,14 +275,14 @@ def generate_scene_3d_brief(
     image_prompt = _clean_text((timeline.get("imageGeneration") or {}).get("prompt") or timeline.get("prompt"))
     motion_prompt = _clean_text(motion_instruction or scene.get("motionPrompt") or scene.get("action"))
     reference = _clean_text(scene.get("title"), 120)
-    is_genesis_one_one = bool(
-        re.match(r"^genesis\s+1:1\b", reference, flags=re.IGNORECASE)
-    )
-    fallback = (
-        _fallback_genesis_1_1_brief(scene, image_prompt, motion_prompt)
-        if is_genesis_one_one
-        else _generic_fallback_brief(scene, image_prompt, motion_prompt)
-    )
+    is_genesis_one_one = bool(re.match(r"^genesis\s+1:1\b", reference, flags=re.IGNORECASE))
+    is_genesis_one_two = bool(re.match(r"^genesis\s+1:2\b", reference, flags=re.IGNORECASE))
+    if is_genesis_one_one:
+        fallback = _fallback_genesis_1_1_brief(scene, image_prompt, motion_prompt)
+    elif is_genesis_one_two:
+        fallback = _fallback_genesis_1_2_brief(scene, image_prompt, motion_prompt)
+    else:
+        fallback = _generic_fallback_brief(scene, image_prompt, motion_prompt)
     prompt = (
         "Return only valid JSON for a Blender previsualization brief. Translate the approved image prompt and motion "
         "prompt into a fixed-camera 5.0625-second 3D shot. Use only these primitives: sphere, plane, cube, cone, torus. "
@@ -220,7 +316,7 @@ def generate_scene_3d_brief(
         payload = response.json()
         content = str(payload.get("response") or "").strip()
         brief = _sanitize_brief(json.loads(content), fallback)
-        if is_genesis_one_one:
+        if is_genesis_one_one or is_genesis_one_two:
             brief["objects"] = fallback["objects"]
             brief["actionBeats"] = fallback["actionBeats"]
             brief["continuityRules"] = fallback["continuityRules"]
