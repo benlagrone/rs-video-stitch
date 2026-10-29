@@ -16,7 +16,10 @@
       #rule { left: 112px; top: 186px; width: 480px; height: 10px; background: var(--gold); transform-origin: left; }
       #title { left: 112px; top: 254px; width: 980px; font-size: 90px; font-weight: 800; letter-spacing: -.055em; line-height: .94; text-transform: uppercase; }
       #detail { left: 116px; top: 555px; width: 850px; color: var(--gold); font-size: 30px; font-weight: 750; letter-spacing: .13em; line-height: 1.25; text-transform: uppercase; }
-      #listing-agent { right: 112px; top: 180px; width: 570px; border-left: 8px solid var(--gold); background: rgba(7, 7, 7, .68); padding: 28px 32px; color: white; font-size: 36px; font-weight: 800; letter-spacing: .04em; line-height: 1.2; text-transform: uppercase; white-space: pre-line; }
+      #listing-agent { right: 112px; top: 180px; width: 750px; border-left: 8px solid var(--gold); background: rgba(7, 7, 7, .68); padding: 28px 32px; color: white; font-weight: 800; letter-spacing: .04em; line-height: 1.2; text-transform: uppercase; }
+      #listing-brokerage, #listing-broker { display: block; white-space: nowrap; }
+      #listing-brokerage { font-size: 37px; }
+      #listing-broker { font-size: 36px; }
       #brand { right: 112px; bottom: 104px; display: flex; align-items: center; gap: 22px; font-size: 34px; font-weight: 800; letter-spacing: -.03em; }
       #brand-mark { width: 72px; height: 72px; border: 2px solid var(--gold); display: grid; place-items: center; color: var(--gold); font-size: 44px; line-height: 1; }
       #micro { left: 116px; bottom: 116px; color: rgba(255,255,255,.78); font-size: 20px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
@@ -29,7 +32,7 @@
       <div id="rule" class="clip" data-start=".15" data-duration="2.25"></div>
       <h1 id="title" class="clip" data-start=".35" data-duration="2.05" data-var-text="title">Featured property</h1>
       <p id="detail" class="clip" data-start=".68" data-duration="1.72" data-var-text="detail">LeCrown Properties</p>
-      <p id="listing-agent" class="clip" data-start=".78" data-duration="1.62">Listed by LeCrown Properties<br>Broker: Jie Huang</p>
+      <p id="listing-agent" class="clip" data-start=".78" data-duration="1.62"><span id="listing-brokerage">Brokerage: LeCrown Properties</span><span id="listing-broker">Broker Jie Huang</span></p>
       <div id="brand" class="clip" data-start="1" data-duration="1.4"><span id="brand-mark">♛</span><span>LeCrown Properties</span></div>
       <p id="micro" class="clip" data-start="1.18" data-duration="1.22" data-var-text="micro">Houston real estate</p>
     </main>
