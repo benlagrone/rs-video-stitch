@@ -71,7 +71,15 @@ function hyperframesEditUrl(compositionId, variables = {}) {
   return `${editorUrl}&selFile=${encodeURIComponent(composition.file)}&selId=${encodeURIComponent(composition.elementId)}&selSelector=${encodeURIComponent(`#${composition.elementId}`)}`;
 }
 
-function hyperframesBinding(leadCard, sceneTransition, transitionTitles, leadCardMode = 'hyperframes', sceneTransitionMode = 'hyperframes') {
+function hyperframesBinding(
+  leadCard,
+  sceneTransition,
+  transitionTitles,
+  leadCardMode = 'hyperframes',
+  sceneTransitionMode = 'hyperframes',
+  leadCardRight1 = 'Brokerage: LeCrown Properties',
+  leadCardRight2 = 'Broker Jie Huang',
+) {
   return {
     projectId: HYPERFRAMES_PROJECT_ID,
     leadCard,
@@ -79,6 +87,8 @@ function hyperframesBinding(leadCard, sceneTransition, transitionTitles, leadCar
     transitionTitles,
     leadCardMode,
     sceneTransitionMode,
+    leadCardRight1,
+    leadCardRight2,
   };
 }
 
@@ -324,6 +334,8 @@ export function App() {
   const [hyperframesLeadCard, setHyperframesLeadCard] = useState('lecrown-lead-card');
   const [hyperframesSceneTransition, setHyperframesSceneTransition] = useState('lecrown-scene-transition');
   const [hyperframesTransitionTitles, setHyperframesTransitionTitles] = useState({});
+  const [leadCardRight1, setLeadCardRight1] = useState('Brokerage: LeCrown Properties');
+  const [leadCardRight2, setLeadCardRight2] = useState('Broker Jie Huang');
   const [leadCardMode, setLeadCardMode] = useState('hyperframes');
   const [sceneTransitionMode, setSceneTransitionMode] = useState('hyperframes');
   const [generatingTransitionIndex, setGeneratingTransitionIndex] = useState(null);
@@ -404,8 +416,10 @@ export function App() {
       hyperframesTransitionTitles,
       leadCardMode,
       sceneTransitionMode,
+      leadCardRight1,
+      leadCardRight2,
     ),
-    [hyperframesLeadCard, hyperframesSceneTransition, hyperframesTransitionTitles, leadCardMode, sceneTransitionMode],
+    [hyperframesLeadCard, hyperframesSceneTransition, hyperframesTransitionTitles, leadCardMode, sceneTransitionMode, leadCardRight1, leadCardRight2],
   );
 
   const scenesPayload = useMemo(
@@ -802,6 +816,8 @@ export function App() {
       setHyperframesTransitionTitles(savedHyperframes.transitionTitles || {});
       setLeadCardMode(savedHyperframes.leadCardMode || 'hyperframes');
       setSceneTransitionMode(savedHyperframes.sceneTransitionMode || 'hyperframes');
+      setLeadCardRight1(savedHyperframes.leadCardRight1 || 'Brokerage: LeCrown Properties');
+      setLeadCardRight2(savedHyperframes.leadCardRight2 || 'Broker Jie Huang');
       setRenderOptions(renderOptionsFromProject(state));
       setYoutubeTitle(state.youtubeTitle || '');
       setYoutubeDescription(state.youtubeDescription || savedOriginalScript);
@@ -1527,6 +1543,8 @@ export function App() {
           nextTransitionTitles,
           leadCardMode,
           sceneTransitionMode,
+          leadCardRight1,
+          leadCardRight2,
         ),
       });
       const url = hyperframesEditUrl(hyperframesSceneTransition, { ...variables, transition_title: transitionTitle });
@@ -2025,8 +2043,12 @@ export function App() {
               </label>
             )}
             <p>The selected style is saved with the project and applied to the rendered video.</p>
-            {leadCardMode === 'hyperframes' && <a className="secondary-action hyperframes-launch" href={hyperframesEditUrl(hyperframesLeadCard)} target="_blank" rel="noreferrer">Edit animated opening</a>}
+            {leadCardMode === 'hyperframes' && <a className="secondary-action hyperframes-launch" href={hyperframesEditUrl(hyperframesLeadCard, { lead_card_right_1: leadCardRight1, lead_card_right_2: leadCardRight2 })} target="_blank" rel="noreferrer">Edit animated opening</a>}
           </div>
+          {leadCardMode === 'hyperframes' && <>
+            <label>Lead Card Right 1<input value={leadCardRight1} onChange={(event) => setLeadCardRight1(event.target.value)} placeholder="Brokerage: LeCrown Properties" /></label>
+            <label>Lead Card Right 2<input value={leadCardRight2} onChange={(event) => setLeadCardRight2(event.target.value)} placeholder="Broker Jie Huang" /></label>
+          </>}
           <label className="check-row"><input type="checkbox" checked={useIntro} onChange={(event) => setUseIntro(event.target.checked)} />Use 1 second leader card</label>
           <label>Lead card line 1<input value={introLines[0] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 0, event.target.value))} placeholder="Primary title line" /></label>
           <label>Lead card line 2<input value={introLines[1] || ''} onChange={(event) => setIntroLines((current) => updateLeadLineValue(current, 1, event.target.value))} placeholder="Subtitle or property detail" /></label>

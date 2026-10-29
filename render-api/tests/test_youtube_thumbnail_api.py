@@ -67,7 +67,12 @@ class YouTubeThumbnailApiTests(unittest.IsolatedAsyncioTestCase):
                 "read_project_state",
                 return_value={
                     "title": "Listing title\nDetail line\nSupporting line",
-                    "hyperframes": {"leadCardMode": "hyperframes", "leadCard": "lecrown-lead-card"},
+                    "hyperframes": {
+                        "leadCardMode": "hyperframes",
+                        "leadCard": "lecrown-lead-card",
+                        "leadCardRight1": "Brokerage: Example Realty",
+                        "leadCardRight2": "Broker Jane Doe",
+                    },
                 },
             ), patch.object(api, "_render_hyperframes_clip", return_value=intro) as render_card, patch.object(
                 api, "_generate_youtube_thumbnail", side_effect=generate_thumbnail
@@ -80,6 +85,8 @@ class YouTubeThumbnailApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(render_card.call_args.args[0], "lecrown-lead-card")
             self.assertEqual(render_card.call_args.args[1]["title"], "Listing title")
             self.assertEqual(render_card.call_args.args[1]["detail"], "Detail line · Supporting line")
+            self.assertEqual(render_card.call_args.args[1]["lead_card_right_1"], "Brokerage: Example Realty")
+            self.assertEqual(render_card.call_args.args[1]["lead_card_right_2"], "Broker Jane Doe")
             self.assertEqual(generate_thumbnail_mock.call_args.kwargs["seek_seconds"], 1.35)
 
     async def test_upload_automatically_applies_and_persists_thumbnail(self):

@@ -2345,6 +2345,8 @@ def _regenerate_title_card_thumbnail(pid: str) -> Path:
                 "title": title.split("\n", 1)[0] or pid,
                 "detail": " · ".join(line for line in title.splitlines()[1:3] if line.strip()),
                 "micro": " · ".join(line for line in title.splitlines()[3:] if line.strip()),
+                "lead_card_right_1": str(hyperframes.get("leadCardRight1") or "Brokerage: LeCrown Properties"),
+                "lead_card_right_2": str(hyperframes.get("leadCardRight2") or "Broker Jie Huang"),
             },
             work_dir / "hyperframes_thumbnail_intro.mp4",
             DEFAULT_FPS,
