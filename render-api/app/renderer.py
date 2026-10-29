@@ -150,6 +150,20 @@ def _find_font_by_family(font_family: str) -> Optional[Path]:
             candidate = root / bundled_relative
             if candidate.exists():
                 return candidate
+    try:
+        matched = subprocess.run(
+            ["fc-match", "--format=%{file}", font_family],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        ).stdout.strip()
+    except (FileNotFoundError, subprocess.SubprocessError):
+        matched = ""
+    if matched:
+        candidate = Path(matched)
+        if candidate.exists():
+            return candidate
     for font_path in _available_fonts():
         normalized = "".join(ch for ch in font_path.stem.lower() if ch.isalnum())
         if target in normalized:
@@ -1712,6 +1726,8 @@ def render_project(
         or video_meta.get("lang")
         or DEFAULT_TTS_LANGUAGE
     )
+    if str(tts_language).lower().startswith("zh"):
+        title_style.setdefault("fontFamily", "Noto Sans CJK SC")
     title_font_path = _resolve_title_font_from_style(title_style, project_root, log)
     intro_enabled = _truthy(opts.get("introEnabled") or opts.get("intro_enabled"))
     hyperframes_binding = opts.get("hyperframes") or scenes_doc.get("hyperframes")

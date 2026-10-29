@@ -2,7 +2,7 @@ const MAX_INTRO_LINES = 6;
 
 const MANDARIN_TITLE_STYLE = {
   fill: '#ffffff',
-  fontFile: 'input/logo/Arial-Unicode.ttf',
+  fontFamily: 'Noto Sans CJK SC',
   fontSize: 58,
   outline: '#000000',
   position: 'top-center',

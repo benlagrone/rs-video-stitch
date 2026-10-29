@@ -355,6 +355,15 @@ def _voice_options_payload() -> dict:
     return payload
 
 
+def _hydrate_saved_hyperframes(render_options: dict, project_state: dict | None) -> None:
+    """Use the project's selected compositions when a render request omits them."""
+    if isinstance(render_options.get("hyperframes"), dict):
+        return
+    saved_hyperframes = (project_state or {}).get("hyperframes")
+    if isinstance(saved_hyperframes, dict):
+        render_options["hyperframes"] = deepcopy(saved_hyperframes)
+
+
 @app.get("/v1/voice-options")
 async def voice_options() -> dict:
     return _voice_options_payload()
@@ -2183,6 +2192,7 @@ async def render(
         render_opts["tts"] = project.voice
     if project.language and not render_opts.get("ttsLanguage"):
         render_opts["ttsLanguage"] = project.language
+    _hydrate_saved_hyperframes(render_opts, read_project_state(pid))
 
     db.add(project)
 
