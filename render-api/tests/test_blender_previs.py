@@ -38,6 +38,34 @@ class BlenderPrevisTests(unittest.TestCase):
         self.assertIn("no duplicate world", brief["videoPrompt"])
         self.assertEqual(brief["source"], "deterministic-fallback")
 
+    def test_genesis_one_two_fallback_stages_fixed_world_waves_and_spirit_light(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_input = Path(temp_dir) / "input"
+            project_input.mkdir()
+            (project_input / "scenes.json").write_text(json.dumps({
+                "scenes": [{
+                    "title": "Genesis 1:2",
+                    "VO": "The Spirit of God moved upon the face of the waters.",
+                    "motionPrompt": "Waves advance while diffuse light crosses the water.",
+                    "motionPlan": {"summary": "Move light across advancing waves."},
+                    "timeline": [{"prompt": "One enormous world above a dark primordial ocean."}],
+                }],
+            }), encoding="utf-8")
+            with mock.patch.object(blender_previs, "p_input", return_value=project_input), mock.patch.object(
+                blender_previs, "governed_post", side_effect=blender_previs.requests.RequestException("offline")
+            ):
+                brief = blender_previs.generate_scene_3d_brief("genesis", 1)
+
+        world = next(item for item in brief["objects"] if item["id"] == "unfinished-earth")
+        waves = [item for item in brief["objects"] if item["id"] in {"near-wave", "far-wave"}]
+        spirit = next(item for item in brief["objects"] if item["id"] == "spirit-light")
+        self.assertEqual(world["startPosition"], world["endPosition"])
+        self.assertTrue(all(item["endPosition"][1] < item["startPosition"][1] for item in waves))
+        self.assertGreater(spirit["endPosition"][0], spirit["startPosition"][0])
+        self.assertIn("never by a person, orb, or solid object", " ".join(brief["continuityRules"]))
+        self.assertIn("dark primordial ocean", brief["videoPrompt"])
+        self.assertEqual(brief["source"], "deterministic-fallback")
+
     def test_sanitizer_rejects_arbitrary_blender_primitives(self):
         scene = {"title": "Psalm 1:3"}
         fallback = blender_previs._generic_fallback_brief(scene, "Tree by water", "Leaves move")
