@@ -2349,6 +2349,31 @@ def _regenerate_title_card_thumbnail(pid: str) -> Path:
     if not title:
         raise ValueError("a video title is required to create a title-card thumbnail")
 
+    if str(state.get("thumbnailStyle") or "black-agent-card").lower() == "first-frame":
+        source_footage = scenes_doc.get("sourceFootage") or []
+        if source_footage:
+            filename = Path(str(source_footage[0].get("filename") or "")).name
+            source_video = p_input(pid) / "footage" / filename
+            if source_video.exists():
+                thumbnail_path = _generate_youtube_thumbnail(
+                    source_video,
+                    p_output(pid) / "thumbnail.jpg",
+                    None,
+                    seek_seconds=0.05,
+                )
+                if thumbnail_path is not None:
+                    return thumbnail_path
+        # Image projects use their first selected scene image as the first-frame equivalent.
+        thumbnail_path = _generate_youtube_thumbnail(
+            background_image,
+            p_output(pid) / "thumbnail.jpg",
+            None,
+            seek_seconds=0.0,
+        )
+        if thumbnail_path is not None:
+            return thumbnail_path
+        raise RuntimeError("First-frame thumbnail generation did not produce an image")
+
     hyperframes = state.get("hyperframes") or {}
     if isinstance(hyperframes, dict) and str(hyperframes.get("leadCardMode") or "").lower() == "hyperframes":
         work_dir = p_input(pid).parent / "work"

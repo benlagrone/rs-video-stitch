@@ -272,6 +272,7 @@ function projectStateFromValues(values) {
     ttsApi: values.ttsApi,
     hyperframes: values.hyperframes,
     renderOptions: values.renderOptions,
+    thumbnailStyle: values.thumbnailStyle,
     youtubeTitle: values.youtubeTitle,
     youtubeDescription: values.youtubeDescription,
     youtubeTags: values.youtubeTags,
@@ -340,6 +341,7 @@ export function App() {
   const [sceneTransitionMode, setSceneTransitionMode] = useState('hyperframes');
   const [generatingTransitionIndex, setGeneratingTransitionIndex] = useState(null);
   const [renderOptions, setRenderOptions] = useState({});
+  const [thumbnailStyle, setThumbnailStyle] = useState('black-agent-card');
   const [voiceProviders, setVoiceProviders] = useState([]);
   const [outputName, setOutputName] = useState('video.mp4');
   const [status, setStatus] = useState('Idle');
@@ -819,6 +821,7 @@ export function App() {
       setLeadCardRight1(savedHyperframes.leadCardRight1 || 'Brokerage: LeCrown Properties');
       setLeadCardRight2(savedHyperframes.leadCardRight2 || 'Broker Jie Huang');
       setRenderOptions(renderOptionsFromProject(state));
+      setThumbnailStyle(state.thumbnailStyle || 'black-agent-card');
       setYoutubeTitle(state.youtubeTitle || '');
       setYoutubeDescription(state.youtubeDescription || savedOriginalScript);
       setYoutubeTags(state.youtubeTags || '');
@@ -1192,6 +1195,7 @@ export function App() {
             ttsApi,
             hyperframes: overrides.hyperframes ?? selectedHyperframes,
             renderOptions,
+            thumbnailStyle,
             youtubeTitle,
             youtubeDescription: overrides.youtubeDescription ?? descriptionFromSource,
             youtubeTags,
@@ -1731,6 +1735,7 @@ export function App() {
             introLeaderImage: leaderImage ? leaderImage.name : null,
             introDuration: 1,
             thumbnailEnabled: true,
+            thumbnailStyle,
             logoEnabled: useLogo,
             logoImage: logoImage ? logoImage.name : logoChoice,
             logoCorner,
@@ -2509,6 +2514,12 @@ export function App() {
                     {isUpdatingYoutubeDetails ? 'Updating details' : 'Update YouTube details'}
                   </button>
                 </div>
+                <label>Thumbnail style
+                  <select value={thumbnailStyle} onChange={(event) => setThumbnailStyle(event.target.value)}>
+                    <option value="black-agent-card">Black agent card</option>
+                    <option value="first-frame">First frame</option>
+                  </select>
+                </label>
                 {youtubeAuth?.authUrl && !youtubeAuth?.authenticated && (
                   <div className="youtube-auth-link">
                     <p>Use your external browser profile if the in-app Google tab cannot sign in.</p>
