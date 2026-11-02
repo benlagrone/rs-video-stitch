@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 import requests
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile, Request
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -90,6 +90,7 @@ from app.storage import (
     save_scenes,
 )
 from app.worker import loop as worker_loop
+from app.thumbnail_styles import generate_project_thumbnail
 from app.youtube_upload import (
     YouTubeUploadConfigurationError,
     complete_youtube_auth,
@@ -2336,6 +2337,12 @@ def _regenerate_title_card_thumbnail(pid: str) -> Path:
     if not scenes_path.exists():
         raise FileNotFoundError("project scenes are missing")
     scenes_doc = json.loads(scenes_path.read_text(encoding="utf-8"))
+    thumbnail_style = state.get("thumbnailStyle") or (state.get("renderOptions") or {}).get("thumbnailStyle")
+    if thumbnail_style in {"black-agent-card", "first-frame"}:
+        return generate_project_thumbnail(
+            p_input(pid), p_output(pid), p_input(pid).parent / "work",
+            scenes_doc, state, thumbnail_style,
+        )
     scenes = scenes_doc.get("scenes") or []
     first_images = (scenes[0].get("images") or []) if scenes else []
     if not first_images:
@@ -2348,31 +2355,6 @@ def _regenerate_title_card_thumbnail(pid: str) -> Path:
     title = str(state.get("introTitle") or state.get("title") or pid).strip()
     if not title:
         raise ValueError("a video title is required to create a title-card thumbnail")
-
-    if str(state.get("thumbnailStyle") or "black-agent-card").lower() == "first-frame":
-        source_footage = scenes_doc.get("sourceFootage") or []
-        if source_footage:
-            filename = Path(str(source_footage[0].get("filename") or "")).name
-            source_video = p_input(pid) / "footage" / filename
-            if source_video.exists():
-                thumbnail_path = _generate_youtube_thumbnail(
-                    source_video,
-                    p_output(pid) / "thumbnail.jpg",
-                    None,
-                    seek_seconds=0.05,
-                )
-                if thumbnail_path is not None:
-                    return thumbnail_path
-        # Image projects use their first selected scene image as the first-frame equivalent.
-        thumbnail_path = _generate_youtube_thumbnail(
-            background_image,
-            p_output(pid) / "thumbnail.jpg",
-            None,
-            seek_seconds=0.0,
-        )
-        if thumbnail_path is not None:
-            return thumbnail_path
-        raise RuntimeError("First-frame thumbnail generation did not produce an image")
 
     hyperframes = state.get("hyperframes") or {}
     if isinstance(hyperframes, dict) and str(hyperframes.get("leadCardMode") or "").lower() == "hyperframes":
@@ -2425,7 +2407,15 @@ def _regenerate_title_card_thumbnail(pid: str) -> Path:
 
 
 @app.post("/v1/projects/{pid}/thumbnail/regenerate")
-async def regenerate_title_card_thumbnail(pid: str) -> dict:
+async def regenerate_title_card_thumbnail(pid: str, options: Optional[dict] = Body(default=None)) -> dict:
+    if isinstance(options, dict):
+        style = options.get("style")
+        if style not in {"black-agent-card", "first-frame"}:
+            raise HTTPException(status_code=422, detail="Unknown thumbnail style")
+        state = read_project_state(pid) or {}
+        state["thumbnailStyle"] = style
+        state["renderOptions"] = {**(state.get("renderOptions") or {}), "thumbnailStyle": style}
+        save_project_state(pid, state, project_name=str(state.get("title") or pid))
     try:
         thumbnail_path = await run_in_threadpool(_regenerate_title_card_thumbnail, pid)
     except (FileNotFoundError, ValueError) as exc:
@@ -2437,6 +2427,7 @@ async def regenerate_title_card_thumbnail(pid: str) -> dict:
     state = read_project_state(pid) or {}
     state["thumbnailGeneratedAt"] = time.time()
     state["thumbnailFilename"] = thumbnail_path.name
+    state["thumbnailGeneratedStyle"] = state.get("thumbnailStyle") or (state.get("renderOptions") or {}).get("thumbnailStyle")
     state["updatedAt"] = time.time()
     save_project_state(pid, state, project_name=str(state.get("title") or pid))
     return {

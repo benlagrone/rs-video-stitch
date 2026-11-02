@@ -156,6 +156,7 @@ class RenderOptions(BaseModel):
     introLeaderEnabled: bool = Field(default=True)
     introDuration: float = Field(default=1.0, gt=0)
     thumbnailEnabled: bool = Field(default=True)
+    thumbnailStyle: Optional[Literal["black-agent-card", "first-frame"]] = None
     logoEnabled: bool = Field(default=True)
     logoImage: Optional[str] = None
     logoCorner: str = Field(default="top-right")

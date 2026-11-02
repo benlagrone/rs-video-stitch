@@ -1415,6 +1415,22 @@ def _resolve_project_root(pid: str, storage_root: Path) -> Path:
     return projects_root / pid
 
 
+def _generate_selected_thumbnail(input_dir, output_dir, work_dir, scenes_doc, opts, output_name, log):
+    """Apply the independent thumbnail choice after the finished video exists."""
+    if not _truthy(opts.get("thumbnailEnabled", True)):
+        return
+    state_path = input_dir / "project_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    style = opts.get("thumbnailStyle") or state.get("thumbnailStyle")
+    if style not in {"black-agent-card", "first-frame"}:
+        return
+    from app.thumbnail_styles import generate_project_thumbnail
+    generate_project_thumbnail(
+        input_dir, output_dir, work_dir, scenes_doc,
+        {**state, "outputName": output_name}, style, log,
+    )
+
+
 def _render_source_footage_project(
     pid: str,
     input_dir: Path,
@@ -1618,6 +1634,7 @@ def _render_source_footage_project(
     manifest = _write_hyperframes_manifest(output_dir, output_name, hyperframes_binding)
     if manifest:
         _log(log, f"HyperFrames render map: {manifest.name}")
+    _generate_selected_thumbnail(input_dir, output_dir, work_dir, scenes_doc, opts, output_name, log)
     update("FINALIZE", 0.98)
     return final_path
 
@@ -2254,5 +2271,6 @@ def render_project(
     if hyperframes_manifest:
         _log(log, f"HyperFrames render map: {hyperframes_manifest.name}")
 
+    _generate_selected_thumbnail(input_dir, output_dir, work_dir, scenes_doc, opts, output_name, log)
     update("FINALIZE", 0.98)
     return final_path

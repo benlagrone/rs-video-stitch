@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { YouTubeChannelSelector } from './YouTubeChannelSelector.jsx';
+import { ThumbnailStyleSelector } from './ThumbnailStyleSelector.jsx';
 
 const FALLBACK_STYLES = [
   { id: 'cinematic-natural-light', name: 'Cinematic natural light', category: 'Sacred & historical', prompt: 'Cinematic natural light and grounded historical realism' },
@@ -73,6 +74,9 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
   const [isQueuingAllAnimations, setIsQueuingAllAnimations] = useState(false);
   const [stillRegenerationJob, setStillRegenerationJob] = useState(null);
   const [titleCardJob, setTitleCardJob] = useState(null);
+  const [thumbnailStyle, setThumbnailStyle] = useState('black-agent-card');
+  const [isUpdatingThumbnail, setIsUpdatingThumbnail] = useState(false);
+  const [thumbnailPreview, setThumbnailPreview] = useState('');
 
   const headers = (extra = {}) => ({
     ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
@@ -93,6 +97,10 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     const state = loaded.state || {};
     const loadedScenes = loaded.scenes?.scenes || [];
     setProject(loaded);
+    setThumbnailStyle(state.thumbnailStyle || state.renderOptions?.thumbnailStyle || 'black-agent-card');
+    setThumbnailPreview((loaded.outputs || []).includes('thumbnail.jpg')
+      ? `${apiUrl(effectiveApiBase, `/v1/projects/${encodeURIComponent(projectId)}/outputs/video?filename=thumbnail.jpg`)}&v=${state.thumbnailGeneratedAt || state.updatedAt || ''}`
+      : '');
     setPassage(state.passage || state.title || passage);
     setThemeInterpretation(state.themeInterpretation ?? loaded.scenes?.info?.themeInterpretation ?? '');
     setTranslation(state.translation || 'kjv');
@@ -467,6 +475,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
     try {
       const renderOptions = {
         ...(project.state?.renderOptions || {}),
+        thumbnailStyle,
         tts: voice,
         ttsLanguage: 'en-US',
         ttsApi,
@@ -493,6 +502,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
             visualStyle,
             voice,
             ttsApi,
+            thumbnailStyle,
             renderOptions,
           },
         }),
@@ -503,6 +513,24 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
       setError(saveError.message || String(saveError));
     } finally {
       setIsSavingProject(false);
+    }
+  }
+
+  async function updateThumbnail() {
+    if (!project?.projectId || isUpdatingThumbnail) return;
+    setIsUpdatingThumbnail(true);
+    setError('');
+    try {
+      await request(`/v1/projects/${encodeURIComponent(project.projectId)}/thumbnail/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ style: thumbnailStyle }),
+      });
+      await loadBibleProject(project.projectId);
+    } catch (thumbnailError) {
+      setError(thumbnailError.message || String(thumbnailError));
+    } finally {
+      setIsUpdatingThumbnail(false);
     }
   }
 
@@ -519,7 +547,7 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
         body: JSON.stringify({
           passage, themeInterpretation, translation, mode, visualStyle, voice,
           language: 'en-US', ttsApi, outputName: 'video.mp4',
-          renderOptions: { tts: voice, ttsLanguage: 'en-US', ttsApi, introEnabled: true, introTitle: passage, introBackgroundImage: 'bible-title-card.png', introLeaderEnabled: false, logoEnabled: true, logoImage: 'animal-safari-kids.png', logoCorner: 'bottom-right', logoMargin: 28, scriptureCaptionEnabled: true, titleStyle: { fontFamily: captionFont, fontSize: 48, fill: '#ffffff', outline: '#000000', position: 'bottom-left' } },
+          renderOptions: { thumbnailStyle, tts: voice, ttsLanguage: 'en-US', ttsApi, introEnabled: true, introTitle: passage, introBackgroundImage: 'bible-title-card.png', introLeaderEnabled: false, logoEnabled: true, logoImage: 'animal-safari-kids.png', logoCorner: 'bottom-right', logoMargin: 28, scriptureCaptionEnabled: true, titleStyle: { fontFamily: captionFont, fontSize: 48, fill: '#ffffff', outline: '#000000', position: 'bottom-left' } },
         }),
       });
       setJob({ ...created, status: 'QUEUED', stage: 'QUEUED', progress: 0 });
@@ -619,6 +647,12 @@ export function BibleStudio({ authToken, theme, initialProjectId = '', onBack, o
         </section>
 
         <aside className="bible-output">
+          <section className="thumbnail-settings" aria-label="Thumbnail">
+            <h2>Thumbnail</h2>
+            <ThumbnailStyleSelector value={thumbnailStyle} onChange={setThumbnailStyle} bible disabled={isUpdatingThumbnail} />
+            <button type="button" onClick={updateThumbnail} disabled={!project || isUpdatingThumbnail}>{isUpdatingThumbnail ? 'Updating thumbnail' : 'Update thumbnail'}</button>
+            {thumbnailPreview && <a href={thumbnailPreview} target="_blank" rel="noreferrer"><img className="thumbnail-preview" src={thumbnailPreview} alt="Generated thumbnail" /></a>}
+          </section>
           <section><div className="bible-section-heading"><div><h2>Video preview</h2><p>16:9 · 1080p MP4</p></div></div>{videoHref ? <video controls src={videoHref} /> : <div className="video-placeholder"><span>{progress}%</span><p>{job ? stageLabel(job.stage) : 'Waiting for a job'}</p></div>}</section>
           <section className="progress-card"><h2>Render progress</h2><progress value={job?.progress || 0} max="1" /><div><span>{stageLabel(job?.stage)}</span><strong>{progress}%</strong></div></section>
           <section className="health-card"><h2>Worker health</h2>{healthRows.map(([label, value]) => <div className="health-row" key={label}><span>{label}</span><strong className={value?.ok ? 'healthy' : 'offline'}>{value?.ok ? 'Healthy' : 'Unavailable'}</strong></div>)}</section>

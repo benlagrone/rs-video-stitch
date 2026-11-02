@@ -1079,6 +1079,8 @@ textarea {
 }
 
 .footage-upload-box { margin-top: 14px; }
+.thumbnail-settings { margin: 20px 0; display: grid; gap: 12px; }
+.thumbnail-preview { display: block; width: 100%; max-width: 640px; height: auto; border-radius: 6px; }
 .footage-panel { margin-top: 18px; }
 .footage-list { display: grid; gap: 12px; }
 .footage-card { align-items: start; background: var(--surface-strong); border: 1px solid var(--line-strong); display: grid; gap: 14px; grid-template-columns: minmax(190px, 36%) 1fr; padding: 12px; }

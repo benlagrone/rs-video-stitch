@@ -19,6 +19,7 @@ import {
 } from './renderProgress.js';
 import { YouTubeChannelSelector } from './YouTubeChannelSelector.jsx';
 import { VoiceSamples } from './VoiceSamples.jsx';
+import { ThumbnailStyleSelector } from './ThumbnailStyleSelector.jsx';
 
 const DEFAULT_RENDER_OPTIONS = {
   fps: 30,
@@ -493,7 +494,7 @@ export function App() {
     [outputName, outputs],
   );
   const previewPosterName = useMemo(
-    () => outputs.find((file) => /\.(jpg|jpeg|png|webp)$/i.test(file)) || '',
+    () => outputs.includes('thumbnail.jpg') ? 'thumbnail.jpg' : outputs.find((file) => /\.(jpg|jpeg|png|webp)$/i.test(file)) || '',
     [outputs],
   );
   const previewVideoHref = videoHref || (previewVideoName ? outputHref(previewVideoName) : '');
@@ -711,6 +712,7 @@ export function App() {
     setLogoMargin(24);
     setOutputName('video.mp4');
     setRenderOptions({});
+    setThumbnailStyle('black-agent-card');
     setRenderTracker(EMPTY_RENDER_TRACKER);
     setYoutubeTitle('');
     setYoutubeDescription('');
@@ -1417,14 +1419,18 @@ export function App() {
 
     setError('');
     setIsRegeneratingThumbnail(true);
-    setStatus('Generating title-card thumbnail');
+    setStatus('Generating thumbnail');
     try {
+      await saveProject();
       const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/thumbnail/regenerate`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ style: thumbnailStyle }),
       });
       setThumbnailRefreshKey(String(result.generatedAt || Date.now()));
       await refreshOutputs();
-      setStatus('Title-card thumbnail ready');
+      setYoutubeThumbnailApplied(false);
+      setStatus('Thumbnail ready');
     } catch (err) {
       setError(err.message || String(err));
       setStatus('Thumbnail generation failed');
@@ -2443,6 +2449,16 @@ export function App() {
             )}
           </div>
 
+          <section className="thumbnail-settings" aria-label="Thumbnail">
+            <h3>Thumbnail</h3>
+            <ThumbnailStyleSelector value={thumbnailStyle} onChange={setThumbnailStyle} disabled={isRegeneratingThumbnail} />
+            <p className="hint">Choose the thumbnail independently of the video opening card. Saved with this project.</p>
+            <button type="button" onClick={regenerateThumbnail} disabled={isRegeneratingThumbnail || !hasSavedProject}>
+              {isRegeneratingThumbnail ? 'Updating thumbnail' : 'Update thumbnail'}
+            </button>
+            {previewPosterHref && <a href={previewPosterHref} target="_blank" rel="noreferrer"><img className="thumbnail-preview" src={previewPosterHref} alt="Generated thumbnail" /></a>}
+          </section>
+
           <button className="primary-action" type="button" onClick={submitRender} disabled={!canRender || isRendering}>
             {isRendering
               ? `${({ saving: 'Saving', deleting: 'Deleting', naming: 'Naming rooms', queueing: 'Queueing' }[renderTracker.phase] || 'Rendering')} ${Math.round(renderTracker.progress * 100)}%`
@@ -2504,9 +2520,6 @@ export function App() {
                   <button type="button" onClick={uploadYoutube} disabled={isUploadingYoutube || !youtubeAuth?.authenticated}>
                     {isUploadingYoutube ? 'Uploading' : 'Upload to YouTube'}
                   </button>
-                  <button type="button" onClick={regenerateThumbnail} disabled={isRegeneratingThumbnail || !hasSavedProject}>
-                    {isRegeneratingThumbnail ? 'Updating thumbnail' : 'Update thumbnail'}
-                  </button>
                   <button type="button" onClick={applyYoutubeThumbnail} disabled={isApplyingYoutubeThumbnail || !youtubeAuth?.authenticated || !youtubeVideoId.trim() || !previewPosterName}>
                     {isApplyingYoutubeThumbnail ? 'Applying thumbnail' : 'Apply thumbnail'}
                   </button>
@@ -2514,12 +2527,6 @@ export function App() {
                     {isUpdatingYoutubeDetails ? 'Updating details' : 'Update YouTube details'}
                   </button>
                 </div>
-                <label>Thumbnail style
-                  <select value={thumbnailStyle} onChange={(event) => setThumbnailStyle(event.target.value)}>
-                    <option value="black-agent-card">Black agent card</option>
-                    <option value="first-frame">First frame</option>
-                  </select>
-                </label>
                 {youtubeAuth?.authUrl && !youtubeAuth?.authenticated && (
                   <div className="youtube-auth-link">
                     <p>Use your external browser profile if the in-app Google tab cannot sign in.</p>
