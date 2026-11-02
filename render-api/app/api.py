@@ -2022,7 +2022,12 @@ async def restore_project_version(pid: str, version_id: str) -> dict:
 
 
 @app.get("/v1/projects/{pid}/assets/{subdir}/{filename}")
-async def get_project_asset(pid: str, subdir: str, filename: str) -> FileResponse:
+async def get_project_asset(
+    pid: str,
+    subdir: str,
+    filename: str,
+    request: Request,
+):
     allowed = {"images", "motion", "leader", "logo", "voiceovers", "footage"}
     if subdir not in allowed:
         raise HTTPException(status_code=400, detail="Invalid subdir")
@@ -2032,7 +2037,7 @@ async def get_project_asset(pid: str, subdir: str, filename: str) -> FileRespons
         raise HTTPException(status_code=404, detail="asset not found")
 
     media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-    return FileResponse(target, media_type=media_type, filename=target.name)
+    return _stream_file_response(target, request, media_type=media_type, filename=target.name)
 
 
 @app.post("/v1/projects/{pid}/room-classify")
@@ -2582,24 +2587,18 @@ def _iter_file_range(path: Path, start: int, end: int, chunk_size: int = 1024 * 
             yield chunk
 
 
-@app.get("/v1/projects/{pid}/outputs/video")
-async def download_video(
-    pid: str,
+def _stream_file_response(
+    target: Path,
     request: Request,
-    filename: Optional[str] = None,
-    db: Session = Depends(get_db),
-):
-    project = db.get(Project, pid)
-    preferred = filename or (project.last_output_name if project else None) or "video.mp4"
-    target = p_output(pid) / preferred
-    if not target.exists():
-        raise HTTPException(status_code=404, detail="video not found")
-
-    media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    *,
+    media_type: str,
+    filename: str,
+) -> FileResponse | StreamingResponse:
+    """Return an inline file response, honoring browser byte-range requests."""
     file_size = target.stat().st_size
     base_headers = {
         "Accept-Ranges": "bytes",
-        "Content-Disposition": f'inline; filename="{preferred}"',
+        "Content-Disposition": f'inline; filename="{filename}"',
     }
     range_header = request.headers.get("range")
     if not range_header:
@@ -2629,3 +2628,20 @@ async def download_video(
         },
         media_type=media_type,
     )
+
+
+@app.get("/v1/projects/{pid}/outputs/video")
+async def download_video(
+    pid: str,
+    request: Request,
+    filename: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    project = db.get(Project, pid)
+    preferred = filename or (project.last_output_name if project else None) or "video.mp4"
+    target = p_output(pid) / preferred
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="video not found")
+
+    media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    return _stream_file_response(target, request, media_type=media_type, filename=preferred)
