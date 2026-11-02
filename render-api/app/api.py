@@ -2334,10 +2334,10 @@ async def youtube_thumbnail(
 def _regenerate_title_card_thumbnail(pid: str) -> Path:
     state = read_project_state(pid) or {}
     scenes_path = p_input(pid) / "scenes.json"
-    if not scenes_path.exists():
-        raise FileNotFoundError("project scenes are missing")
-    scenes_doc = json.loads(scenes_path.read_text(encoding="utf-8"))
     thumbnail_style = state.get("thumbnailStyle") or (state.get("renderOptions") or {}).get("thumbnailStyle")
+    if not scenes_path.exists() and thumbnail_style != "black-agent-card":
+        raise FileNotFoundError("project scenes are missing")
+    scenes_doc = json.loads(scenes_path.read_text(encoding="utf-8")) if scenes_path.exists() else {}
     if thumbnail_style in {"black-agent-card", "first-frame"}:
         return generate_project_thumbnail(
             p_input(pid), p_output(pid), p_input(pid).parent / "work",

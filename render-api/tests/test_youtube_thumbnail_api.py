@@ -9,6 +9,27 @@ from app.schemas import YouTubeMetadataRequest, YouTubeThumbnailRequest, YouTube
 
 
 class YouTubeThumbnailApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_thumbnail_styles_work_for_source_footage_without_image_scenes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            input_dir = root / "input"
+            input_dir.mkdir()
+            output_dir = root / "output"
+            output_dir.mkdir()
+            (input_dir / "scenes.json").write_text(json.dumps({
+                "scenes": [], "sourceFootage": [{"filename": "tour.mov"}],
+            }))
+            for style in ("black-agent-card", "first-frame"):
+                state = {"title": "2438 White Oak", "thumbnailStyle": style}
+                with patch.object(api, "p_input", return_value=input_dir), patch.object(
+                    api, "p_output", return_value=output_dir
+                ), patch.object(api, "read_project_state", return_value=state), patch.object(
+                    api, "generate_project_thumbnail", return_value=output_dir / "thumbnail.jpg"
+                ) as generate:
+                    result = api._regenerate_title_card_thumbnail("footage-project")
+                self.assertEqual(result.name, "thumbnail.jpg")
+                self.assertEqual(generate.call_args.args[5], style)
+
     async def test_regenerate_thumbnail_creates_title_card_without_youtube_write(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

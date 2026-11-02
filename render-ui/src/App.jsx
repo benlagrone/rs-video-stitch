@@ -823,7 +823,7 @@ export function App() {
       setLeadCardRight1(savedHyperframes.leadCardRight1 || 'Brokerage: LeCrown Properties');
       setLeadCardRight2(savedHyperframes.leadCardRight2 || 'Broker Jie Huang');
       setRenderOptions(renderOptionsFromProject(state));
-      setThumbnailStyle(state.thumbnailStyle || 'black-agent-card');
+      setThumbnailStyle(state.thumbnailStyle || state.renderOptions?.thumbnailStyle || 'black-agent-card');
       setYoutubeTitle(state.youtubeTitle || '');
       setYoutubeDescription(state.youtubeDescription || savedOriginalScript);
       setYoutubeTags(state.youtubeTags || '');
