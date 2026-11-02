@@ -75,7 +75,7 @@ def _portrait(input_dir: Path, state: dict) -> tuple[Path, bool] | None:
         if candidate.is_file():
             return candidate, False
     base = Path(__file__).resolve()
-    candidates = [base.parents[2] / "media" / "leader.png", base.parents[3] / "media" / "leader.png", Path("/srv/media/leader.png")]
+    candidates = [parent / "media" / "leader.png" for parent in base.parents]
     if os.environ.get("LEADER_TEMPLATE_PATH"):
         candidates.insert(0, Path(os.environ["LEADER_TEMPLATE_PATH"]))
     for candidate in candidates:
