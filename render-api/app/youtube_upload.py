@@ -410,7 +410,7 @@ def youtube_authorization_url(profile: str = DEFAULT_PROFILE) -> dict[str, Any]:
     authorization_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
-        prompt="consent",
+        prompt="select_account consent",
         state=state,
     )
     return {
@@ -427,6 +427,14 @@ def _profile_from_state(state: str) -> str:
     return normalize_youtube_profile(prefix) if separator else DEFAULT_PROFILE
 
 
+def _channel_id_for_credentials(credentials: Any) -> str:
+    google = _google_modules()
+    youtube = google["build"]("youtube", "v3", credentials=credentials)
+    response = youtube.channels().list(part="id", mine=True).execute()
+    item = (response.get("items") or [None])[0]
+    return str((item or {}).get("id") or "")
+
+
 def complete_youtube_auth(code: str, state: str, profile: Optional[str] = None) -> str:
     profile = normalize_youtube_profile(profile or _profile_from_state(state))
     state_payload = _read_state(profile)
@@ -435,6 +443,14 @@ def complete_youtube_auth(code: str, state: str, profile: Optional[str] = None) 
         raise YouTubeUploadConfigurationError("YouTube OAuth state did not match")
     flow = _auth_flow(redirect_uri=state_payload.get("redirect_uri") or youtube_redirect_uri())
     flow.fetch_token(code=code)
+    channel_id = _channel_id_for_credentials(flow.credentials)
+    configured_identity = YOUTUBE_CHANNEL_PROFILES[profile]
+    expected_channel_id = configured_identity["expectedChannelId"]
+    if channel_id != expected_channel_id:
+        raise YouTubeUploadConfigurationError(
+            f"{configured_identity['label']} requires channel {expected_channel_id}, "
+            f"but Google returned {channel_id or 'no channel'}. Select the intended channel and reconnect."
+        )
     _save_credentials(_token_file_path(profile), flow.credentials)
     return profile
 

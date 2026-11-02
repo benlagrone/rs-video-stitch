@@ -147,6 +147,59 @@ class YouTubeProfileTests(unittest.TestCase):
             self.assertEqual(result["profile"], "mandarin")
             self.assertTrue(saved_state.startswith("mandarin."))
             self.assertEqual(youtube_upload._profile_from_state(saved_state), "mandarin")
+            self.assertEqual(auth_flow.return_value.authorization_url.call_args.kwargs["prompt"], "select_account consent")
+
+    def test_oauth_does_not_save_a_token_for_the_wrong_channel(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ,
+            {
+                "YOUTUBE_STATE_FILE": str(Path(temp_dir) / "youtube_oauth_state.txt"),
+                "YOUTUBE_TOKEN_FILE": str(Path(temp_dir) / "youtube_token.json"),
+            },
+            clear=False,
+        ), patch.object(youtube_upload, "_auth_flow") as auth_flow, patch.object(
+            youtube_upload,
+            "_channel_id_for_credentials",
+            return_value="UCn0cWV7cyNxzfXhUKgPcWeQ",
+        ), patch.object(youtube_upload, "_save_credentials") as save_credentials:
+            youtube_upload._write_state(
+                profile="english",
+                state="english.state",
+                redirect_uri="http://localhost:8082/v1/youtube/auth/callback",
+                manual_callback=False,
+            )
+            auth_flow.return_value.credentials = MagicMock()
+
+            with self.assertRaisesRegex(youtube_upload.YouTubeUploadConfigurationError, "LeCrown Properties requires channel"):
+                youtube_upload.complete_youtube_auth(code="code", state="english.state")
+
+        save_credentials.assert_not_called()
+
+    def test_oauth_saves_a_token_only_for_the_expected_channel(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            os.environ,
+            {
+                "YOUTUBE_STATE_FILE": str(Path(temp_dir) / "youtube_oauth_state.txt"),
+                "YOUTUBE_TOKEN_FILE": str(Path(temp_dir) / "youtube_token.json"),
+            },
+            clear=False,
+        ), patch.object(youtube_upload, "_auth_flow") as auth_flow, patch.object(
+            youtube_upload,
+            "_channel_id_for_credentials",
+            return_value="UC_grGcaDW3AUszA8_MVGyJg",
+        ), patch.object(youtube_upload, "_save_credentials") as save_credentials:
+            youtube_upload._write_state(
+                profile="english",
+                state="english.state",
+                redirect_uri="http://localhost:8082/v1/youtube/auth/callback",
+                manual_callback=False,
+            )
+            credentials = MagicMock()
+            auth_flow.return_value.credentials = credentials
+
+            self.assertEqual(youtube_upload.complete_youtube_auth(code="code", state="english.state"), "english")
+
+        save_credentials.assert_called_once_with(Path(temp_dir) / "youtube_token.json", credentials)
 
     def test_unknown_profile_is_rejected(self):
         with self.assertRaises(youtube_upload.YouTubeUploadConfigurationError):
