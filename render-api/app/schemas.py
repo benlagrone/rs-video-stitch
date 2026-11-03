@@ -339,6 +339,35 @@ class YouTubeAuthCompleteRequest(BaseModel):
     callbackUrl: str = Field(min_length=1)
 
 
+class TikTokPublishRequest(BaseModel):
+    filename: str = Field(default="video.mp4")
+    caption: str = Field(min_length=1, max_length=2200)
+    privacyLevel: Literal["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY"]
+    isAigc: bool = Field(default=True)
+    allowComment: bool = False
+    allowDuet: bool = False
+    allowStitch: bool = False
+    brandOrganic: bool = False
+    expectedCreatorUsername: str = Field(min_length=1)
+
+
+class TikTokVariantRequest(BaseModel):
+    filename: str = Field(default="video.mp4")
+
+
+class TikTokVariantResponse(BaseModel):
+    filename: str
+    width: int = 1080
+    height: int = 1920
+
+
+class TikTokPublishResponse(BaseModel):
+    publishId: str
+    status: str
+    profileUrl: Optional[str] = None
+    error: Optional[str] = None
+
+
 class RoomAnnotation(BaseModel):
     filename: str = Field(min_length=1)
     header: str = ""

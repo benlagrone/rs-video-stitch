@@ -631,6 +631,30 @@ def run(cmd: List[str], log: Optional[LogFunc] = None) -> None:
         raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{process.stdout}")
 
 
+def render_tiktok_variant(source: Path, destination: Path, log: Optional[LogFunc] = None) -> Path:
+    """Create a 9:16 version without cropping the landscape master video's subject."""
+    if not source.exists() or not source.is_file():
+        raise FileNotFoundError(f"Video file not found: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    filter_graph = (
+        "[0:v]split=2[background][foreground];"
+        "[background]scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,boxblur=20:10,setsar=1[background];"
+        "[foreground]scale=1080:1920:force_original_aspect_ratio=decrease,setsar=1[foreground];"
+        "[background][foreground]overlay=(W-w)/2:(H-h)/2,format=yuv420p[video]"
+    )
+    run(
+        [
+            "ffmpeg", "-y", "-i", str(source), "-filter_complex", filter_graph,
+            "-map", "[video]", "-map", "0:a?", "-c:v", "libx264", "-preset", "medium",
+            "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+            str(destination),
+        ],
+        log,
+    )
+    return destination
+
+
 def ffprobe_duration(path: Path) -> float:
     cmd = [
         "ffprobe",

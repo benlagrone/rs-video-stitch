@@ -1910,6 +1910,60 @@ textarea {
   white-space: pre-wrap;
 }
 
+.publish-checkbox {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.publish-checkbox input {
+  accent-color: var(--accent);
+  height: 16px;
+  width: 16px;
+  flex-shrink: 0;
+}
+
+.tiktok-review-caption {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tiktok-variant-panel {
+  background: color-mix(in srgb, var(--accent) 6%, var(--field));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+}
+
+.tiktok-variant-panel p {
+  line-height: 1.45;
+}
+
+.tiktok-variant-panel button {
+  justify-self: start;
+}
+
+.publish-review {
+  background: color-mix(in srgb, var(--accent) 9%, var(--field));
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.publish-review p {
+  line-height: 1.45;
+}
+
+.publish-review > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .preview-panel > pre,
 .logs-panel pre {
   background: var(--surface-strong);

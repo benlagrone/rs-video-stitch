@@ -112,6 +112,32 @@ mkdir -p ~/Videos/MediaStudio/{logs,projects}
 | `FORTRESS_OPTIMIZATION_MCP_TOKEN` | — | Server-held bearer token for GPU admission. Never returned to the browser. |
 | `FORTRESS_GPU_ADMISSION_REQUIRED` | `1` on `fortress.sextant` | Fail closed instead of calling a GPU provider when admission is unavailable. |
 
+### TikTok Direct Post
+
+MediaStudio can send a finished MP4 to TikTok through TikTok's Content Posting
+API. Register the MediaStudio developer app first, add the Content Posting API
+product, and configure its exact callback URL as
+`<TIKTOK_REDIRECT_URI>` (which must route to `/v1/tiktok/auth/callback`). Then
+set these server-side values; never place them in the browser bundle:
+
+| Variable | Description |
+| --- | --- |
+| `TIKTOK_CLIENT_KEY` | TikTok developer app client key. |
+| `TIKTOK_CLIENT_SECRET` | TikTok developer app client secret. |
+| `TIKTOK_REDIRECT_URI` | Registered callback URL for `/v1/tiktok/auth/callback`. |
+| `TIKTOK_TOKEN_FILE` | Optional server-only OAuth token path; defaults to `/videos/tiktok_token.json`. |
+| `TIKTOK_STATE_FILE` | Optional server-only OAuth state path; defaults to `/videos/tiktok_oauth_state.json`. |
+
+The Render Desk requires a final review before every TikTok publish. TikTok's
+creator-info response controls the available privacy options. New unaudited
+apps are limited by TikTok to private posts until their Direct Post client is
+audited.
+
+For an existing landscape YouTube master, the Render Desk can create a separate
+`tiktok_<source>.mp4` variant at 1080 × 1920. It centers the original video
+over a softened vertical background, preserving the full landscape frame and
+its audio; it never replaces the YouTube master.
+
 ### Optional xTTS Voice Synthesis
 
 - Set `XTTS_API_URL` (and optionally `XTTS_API_KEY`, `XTTS_LANGUAGE`) to point at your xTTS server.

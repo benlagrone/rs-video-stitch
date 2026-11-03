@@ -39,6 +39,22 @@ def _setup_project(tmpdir: Path, api_value: str, voice: str = "custom-voice") ->
 
 
 class RendererTTSTest(TestCase):
+    def test_tiktok_variant_preserves_the_landscape_master_over_a_vertical_background(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "youtube-master.mp4"
+            destination = Path(tmp) / "tiktok_youtube-master.mp4"
+            source.write_bytes(b"video")
+            with mock.patch.object(renderer, "run") as run:
+                result = renderer.render_tiktok_variant(source, destination)
+
+        self.assertEqual(result, destination)
+        command = run.call_args.args[0]
+        filter_graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("scale=1080:1920:force_original_aspect_ratio=decrease", filter_graph)
+        self.assertIn("boxblur=20:10", filter_graph)
+        self.assertIn("-map", command)
+        self.assertIn("0:a?", command)
+
     def test_timeline_headers_respects_explicit_label_visibility(self):
         headers = renderer._timeline_headers(
             {

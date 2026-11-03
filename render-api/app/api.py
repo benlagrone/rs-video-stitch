@@ -58,6 +58,10 @@ from app.schemas import (
     YouTubeThumbnailResponse,
     YouTubeUploadRequest,
     YouTubeUploadResponse,
+    TikTokVariantRequest,
+    TikTokVariantResponse,
+    TikTokPublishRequest,
+    TikTokPublishResponse,
 )
 from app.renderer import (
     DEFAULT_CRF,
@@ -72,6 +76,7 @@ from app.renderer import (
     _synthesize_azure_voice_proxy,
     _synthesize_flite,
     _synthesize_voice_gateway,
+    render_tiktok_variant,
 )
 from app.storage import (
     ensure_dirs,
@@ -101,6 +106,15 @@ from app.youtube_upload import (
     youtube_auth_status,
     youtube_authorization_url,
     youtube_channel_catalog,
+)
+from app.tiktok_upload import (
+    TikTokUploadConfigurationError,
+    TikTokUploadTransferError,
+    complete_tiktok_auth,
+    publish_video_to_tiktok,
+    tiktok_auth_status,
+    tiktok_authorization_url,
+    tiktok_publish_status,
 )
 from app.bible_workflow import (
     BIBLE_CAPTION_STYLE,
@@ -831,6 +845,38 @@ async def youtube_auth_callback(request: Request, code: str = "", state: str = "
         f"<h1>{html.escape(completed_profile.title())} YouTube authorization complete</h1>"
         "<p>You can close this tab and return to MediaStudio.</p>"
     )
+
+
+@app.get("/v1/tiktok/auth/status")
+async def tiktok_status() -> dict:
+    return await run_in_threadpool(tiktok_auth_status)
+
+
+@app.post("/v1/tiktok/auth/start")
+async def tiktok_auth_start() -> dict:
+    try:
+        return tiktok_authorization_url()
+    except TikTokUploadConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/v1/tiktok/auth/callback")
+async def tiktok_auth_callback(code: str = "", state: str = "", error: str = "") -> HTMLResponse:
+    if error:
+        return HTMLResponse(
+            "<h1>TikTok authorization failed</h1>"
+            f"<p>{html.escape(error)}</p><p>You can close this tab and return to MediaStudio.</p>",
+            status_code=400,
+        )
+    try:
+        await run_in_threadpool(complete_tiktok_auth, code, state)
+    except Exception as exc:  # noqa: BLE001
+        return HTMLResponse(
+            "<h1>TikTok authorization failed</h1>"
+            f"<p>{html.escape(str(exc))}</p><p>You can close this tab and return to MediaStudio.</p>",
+            status_code=400,
+        )
+    return HTMLResponse("<h1>TikTok authorization complete</h1><p>You can close this tab and return to MediaStudio.</p>")
 
 
 def _youtube_manual_callback_page(callback_url: str) -> str:
@@ -2280,6 +2326,101 @@ async def youtube_upload(
         thumbnailFilename=upload_state["thumbnailFilename"],
         thumbnailError=upload_state["thumbnailError"],
     )
+
+
+@app.post("/v1/projects/{pid}/tiktok/publish", response_model=TikTokPublishResponse)
+async def tiktok_publish(pid: str, req: TikTokPublishRequest) -> TikTokPublishResponse:
+    target = p_output(pid) / Path(req.filename).name
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="video not found")
+    try:
+        result = await run_in_threadpool(
+            publish_video_to_tiktok,
+            video_path=target,
+            caption=req.caption,
+            privacy_level=req.privacyLevel,
+            is_aigc=req.isAigc,
+            allow_comment=req.allowComment,
+            allow_duet=req.allowDuet,
+            allow_stitch=req.allowStitch,
+            brand_organic=req.brandOrganic,
+            expected_username=req.expectedCreatorUsername,
+        )
+    except TikTokUploadTransferError as exc:
+        # Keep the initialized publish ID so a status check never creates a duplicate post.
+        result = {"publishId": exc.publish_id, "status": exc.status, "error": str(exc)}
+    except TikTokUploadConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"TikTok publish failed: {exc}") from exc
+
+    state = read_project_state(pid) or {}
+    state["tiktokCaption"] = req.caption
+    state["tiktokPrivacy"] = req.privacyLevel
+    state["tiktokAigc"] = req.isAigc
+    state["tiktokAllowComment"] = req.allowComment
+    state["tiktokAllowDuet"] = req.allowDuet
+    state["tiktokAllowStitch"] = req.allowStitch
+    state["tiktokBrandOrganic"] = req.brandOrganic
+    state["tiktokVideoFilename"] = target.name
+    state["tiktokPublish"] = {
+        "publishId": result["publishId"],
+        "status": result["status"],
+        "profileUrl": result.get("profileUrl") or None,
+        "filename": target.name,
+        "submittedAt": time.time(),
+        "error": result.get("error"),
+    }
+    state["updatedAt"] = time.time()
+    save_project_state(pid, state, project_name=str(state.get("title") or pid))
+    return TikTokPublishResponse(**result)
+
+
+@app.post("/v1/projects/{pid}/tiktok/variant", response_model=TikTokVariantResponse)
+async def tiktok_variant(pid: str, req: TikTokVariantRequest) -> TikTokVariantResponse:
+    source_name = Path(req.filename).name
+    if source_name != req.filename or Path(source_name).suffix.lower() not in {".mp4", ".mov", ".m4v", ".webm", ".mpg", ".mpeg"}:
+        raise HTTPException(status_code=400, detail="a valid source video filename is required")
+    source = p_output(pid) / source_name
+    if not source.exists() or not source.is_file():
+        raise HTTPException(status_code=404, detail="video not found")
+    destination = p_output(pid) / f"tiktok_{Path(source_name).stem}.mp4"
+    try:
+        await run_in_threadpool(render_tiktok_variant, source, destination)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"TikTok variant failed: {exc}") from exc
+
+    state = read_project_state(pid) or {}
+    state["tiktokVariant"] = {
+        "sourceFilename": source_name,
+        "filename": destination.name,
+        "width": 1080,
+        "height": 1920,
+        "createdAt": time.time(),
+    }
+    state["updatedAt"] = time.time()
+    save_project_state(pid, state, project_name=str(state.get("title") or pid))
+    return TikTokVariantResponse(filename=destination.name)
+
+
+@app.get("/v1/projects/{pid}/tiktok/publish/{publish_id}")
+async def tiktok_publish_progress(pid: str, publish_id: str) -> dict:
+    state = read_project_state(pid) or {}
+    recorded_id = str((state.get("tiktokPublish") or {}).get("publishId") or "")
+    if not recorded_id or publish_id != recorded_id:
+        raise HTTPException(status_code=404, detail="TikTok publish record not found")
+    try:
+        status = await run_in_threadpool(tiktok_publish_status, publish_id)
+    except TikTokUploadConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"TikTok publish status failed: {exc}") from exc
+    state["tiktokPublish"] = {**(state.get("tiktokPublish") or {}), "status": status, "checkedAt": time.time()}
+    state["updatedAt"] = time.time()
+    save_project_state(pid, state, project_name=str(state.get("title") or pid))
+    return {"publishId": publish_id, "status": status}
 
 
 @app.post("/v1/projects/{pid}/youtube/thumbnail", response_model=YouTubeThumbnailResponse)

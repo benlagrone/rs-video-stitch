@@ -287,6 +287,25 @@ function projectStateFromValues(values) {
       thumbnailFilename: values.youtubeThumbnailFilename || null,
       thumbnailError: values.youtubeThumbnailError || null,
     } : undefined,
+    tiktokCaption: values.tiktokCaption,
+    tiktokPrivacy: values.tiktokPrivacy,
+    tiktokAigc: values.tiktokAigc,
+    tiktokAllowComment: values.tiktokAllowComment,
+    tiktokAllowDuet: values.tiktokAllowDuet,
+    tiktokAllowStitch: values.tiktokAllowStitch,
+    tiktokBrandOrganic: values.tiktokBrandOrganic,
+    tiktokVideoFilename: values.tiktokVideoFilename,
+    tiktokPublish: values.tiktokPublishId ? {
+      publishId: values.tiktokPublishId,
+      status: values.tiktokPublishStatus,
+      profileUrl: values.tiktokProfileUrl || null,
+    } : undefined,
+    tiktokVariant: values.tiktokVariantFilename ? {
+      sourceFilename: values.tiktokVariantSource,
+      filename: values.tiktokVariantFilename,
+      width: 1080,
+      height: 1920,
+    } : undefined,
   };
 }
 
@@ -360,6 +379,25 @@ export function App() {
   const [youtubeThumbnailApplied, setYoutubeThumbnailApplied] = useState(false);
   const [youtubeThumbnailFilename, setYoutubeThumbnailFilename] = useState('');
   const [youtubeThumbnailError, setYoutubeThumbnailError] = useState('');
+  const [tiktokAuth, setTiktokAuth] = useState(null);
+  const [tiktokCaption, setTiktokCaption] = useState('');
+  const [tiktokPrivacy, setTiktokPrivacy] = useState('');
+  const [tiktokAigc, setTiktokAigc] = useState(true);
+  const [tiktokAllowComment, setTiktokAllowComment] = useState(false);
+  const [tiktokAllowDuet, setTiktokAllowDuet] = useState(false);
+  const [tiktokAllowStitch, setTiktokAllowStitch] = useState(false);
+  const [tiktokBrandOrganic, setTiktokBrandOrganic] = useState(false);
+  const [tiktokVideoFilename, setTiktokVideoFilename] = useState('');
+  const [tiktokMusicConsent, setTiktokMusicConsent] = useState(false);
+  const [tiktokPublishId, setTiktokPublishId] = useState('');
+  const [tiktokPublishStatus, setTiktokPublishStatus] = useState('');
+  const [tiktokProfileUrl, setTiktokProfileUrl] = useState('');
+  const [tiktokVariantSource, setTiktokVariantSource] = useState('');
+  const [tiktokVariantFilename, setTiktokVariantFilename] = useState('');
+  const [isCreatingTikTokVariant, setIsCreatingTikTokVariant] = useState(false);
+  const [isConnectingTikTok, setIsConnectingTikTok] = useState(false);
+  const [isPublishingTikTok, setIsPublishingTikTok] = useState(false);
+  const [tiktokPublishReview, setTiktokPublishReview] = useState(false);
   const [thumbnailRefreshKey, setThumbnailRefreshKey] = useState('');
   const [youtubeCallbackUrl, setYoutubeCallbackUrl] = useState('');
   const [isConnectingYoutube, setIsConnectingYoutube] = useState(false);
@@ -559,6 +597,9 @@ export function App() {
       .catch(() => setYoutubeChannels([]));
   }, [apiBase, authToken]);
   useEffect(() => {
+    refreshTikTokAuth().catch(() => setTiktokAuth(null));
+  }, [apiBase, authToken]);
+  useEffect(() => {
     const previews = images.map((image) => ({
       name: image.name,
       url: image.url || (image.file ? URL.createObjectURL(image.file) : missingImageDataUrl(image.name)),
@@ -724,6 +765,21 @@ export function App() {
     setYoutubeThumbnailApplied(false);
     setYoutubeThumbnailFilename('');
     setYoutubeThumbnailError('');
+    setTiktokCaption('');
+    setTiktokPrivacy('');
+    setTiktokAigc(true);
+    setTiktokAllowComment(false);
+    setTiktokAllowDuet(false);
+    setTiktokAllowStitch(false);
+    setTiktokBrandOrganic(false);
+    setTiktokVideoFilename('');
+    setTiktokMusicConsent(false);
+    setTiktokPublishId('');
+    setTiktokPublishStatus('');
+    setTiktokProfileUrl('');
+    setTiktokVariantSource('');
+    setTiktokVariantFilename('');
+    setTiktokPublishReview(false);
     setThumbnailRefreshKey('');
     setYoutubeCallbackUrl('');
     setJob(null);
@@ -834,6 +890,21 @@ export function App() {
       setYoutubeThumbnailApplied(Boolean(state.youtubeUpload?.thumbnailApplied));
       setYoutubeThumbnailFilename(state.youtubeUpload?.thumbnailFilename || '');
       setYoutubeThumbnailError(state.youtubeUpload?.thumbnailError || '');
+      setTiktokCaption(state.tiktokCaption || '');
+      setTiktokPrivacy(state.tiktokPrivacy || '');
+      setTiktokAigc(state.tiktokAigc ?? true);
+      setTiktokAllowComment(Boolean(state.tiktokAllowComment));
+      setTiktokAllowDuet(Boolean(state.tiktokAllowDuet));
+      setTiktokAllowStitch(Boolean(state.tiktokAllowStitch));
+      setTiktokBrandOrganic(Boolean(state.tiktokBrandOrganic));
+      setTiktokVideoFilename(state.tiktokVideoFilename || state.tiktokVariant?.filename || state.outputName || 'video.mp4');
+      setTiktokMusicConsent(false);
+      setTiktokPublishReview(false);
+      setTiktokPublishId(state.tiktokPublish?.publishId || '');
+      setTiktokPublishStatus(state.tiktokPublish?.status || '');
+      setTiktokProfileUrl(state.tiktokPublish?.profileUrl || '');
+      setTiktokVariantSource(state.tiktokVariant?.sourceFilename || state.outputName || '');
+      setTiktokVariantFilename(state.tiktokVariant?.filename || '');
       setThumbnailRefreshKey(String(state.thumbnailGeneratedAt || ''));
       setOutputs(result.outputs || []);
       setVideoHref('');
@@ -1208,6 +1279,19 @@ export function App() {
             youtubeThumbnailApplied,
             youtubeThumbnailFilename,
             youtubeThumbnailError,
+            tiktokCaption,
+            tiktokPrivacy,
+            tiktokAigc,
+            tiktokAllowComment,
+            tiktokAllowDuet,
+            tiktokAllowStitch,
+            tiktokBrandOrganic,
+            tiktokVideoFilename,
+            tiktokPublishId,
+            tiktokPublishStatus,
+            tiktokProfileUrl,
+            tiktokVariantSource,
+            tiktokVariantFilename,
           }),
         }),
       });
@@ -1229,6 +1313,19 @@ export function App() {
   async function refreshYoutubeAuth() {
     const result = await request(`/v1/youtube/auth/status?profile=${encodeURIComponent(youtubeProfile)}`);
     setYoutubeAuth(result);
+  }
+
+  async function refreshTikTokAuth() {
+    try {
+      const result = await request('/v1/tiktok/auth/status');
+      setTiktokAuth(result);
+      const options = result.creator?.privacyLevelOptions || [];
+      setTiktokPrivacy((current) => options.includes(current) ? current : '');
+      return result;
+    } catch (err) {
+      setTiktokAuth({ configured: false, authenticated: false, error: err.message || String(err) });
+      return null;
+    }
   }
 
   async function refreshVersions({ force = false } = {}) {
@@ -1323,6 +1420,113 @@ export function App() {
       setError(`Could not prepare the authorization link: ${err.message || String(err)}`);
     } finally {
       setIsConnectingYoutube(false);
+    }
+  }
+
+  async function connectTikTok() {
+    setError('');
+    setIsConnectingTikTok(true);
+    try {
+      const result = await request('/v1/tiktok/auth/start', { method: 'POST' });
+      window.open(result.authUrl, '_blank', 'noopener,noreferrer');
+      setStatus('Authorize the LeCrown TikTok account in the new browser tab');
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const statusResult = await request('/v1/tiktok/auth/status');
+        setTiktokAuth(statusResult);
+        if (statusResult.authenticated) {
+          setStatus('TikTok connected');
+          return;
+        }
+      }
+      setStatus('TikTok authorization pending');
+    } catch (err) {
+      setError(err.message || String(err));
+      setStatus('TikTok authorization failed');
+    } finally {
+      setIsConnectingTikTok(false);
+    }
+  }
+
+  async function publishTikTok() {
+    if (!tiktokPublishReview) return;
+    setError('');
+    setIsPublishingTikTok(true);
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/tiktok/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tiktokPublishReview),
+      });
+      setTiktokPublishId(result.publishId);
+      setTiktokPublishStatus(result.status);
+      setTiktokProfileUrl(result.profileUrl || '');
+      setTiktokPublishReview(false);
+      if (result.error) setError(result.error);
+      setStatus(result.error ? 'TikTok upload failed; use Check publish status before retrying' : 'TikTok received the video and is processing it');
+    } catch (err) {
+      setError(err.message || String(err));
+      setStatus('TikTok publish failed');
+    } finally {
+      setIsPublishingTikTok(false);
+      refreshTikTokAuth().catch(() => {});
+    }
+  }
+
+  async function reviewTikTokPublish() {
+    const auth = await refreshTikTokAuth();
+    if (!auth?.authenticated || !auth.creator?.username) return;
+    if (!auth.creator.privacyLevelOptions.includes(tiktokPrivacy)) {
+      setError('Choose an available TikTok privacy setting before publishing.');
+      return;
+    }
+    setTiktokPublishReview({
+      filename: tiktokVideoFilename,
+      caption: tiktokCaption.trim(),
+      privacyLevel: tiktokPrivacy,
+      isAigc: tiktokAigc,
+      allowComment: tiktokAllowComment && !auth.creator.commentDisabled,
+      allowDuet: tiktokAllowDuet && !auth.creator.duetDisabled,
+      allowStitch: tiktokAllowStitch && !auth.creator.stitchDisabled,
+      brandOrganic: tiktokBrandOrganic,
+      expectedCreatorUsername: auth.creator.username,
+    });
+  }
+
+  async function createTikTokVariant() {
+    const source = tiktokVariantSource || outputName;
+    if (!source || isCreatingTikTokVariant) return;
+    setError('');
+    setIsCreatingTikTokVariant(true);
+    setStatus('Creating vertical TikTok variant');
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/tiktok/variant`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: source }),
+      });
+      setTiktokVariantSource(source);
+      setTiktokVariantFilename(result.filename);
+      setOutputs((current) => Array.from(new Set([...current, result.filename])));
+      setTiktokVideoFilename(result.filename);
+      setStatus('TikTok variant ready for review and publishing');
+    } catch (err) {
+      setError(err.message || String(err));
+      setStatus('TikTok variant failed');
+    } finally {
+      setIsCreatingTikTokVariant(false);
+    }
+  }
+
+  async function refreshTikTokPublishStatus() {
+    if (!tiktokPublishId) return;
+    setError('');
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/tiktok/publish/${encodeURIComponent(tiktokPublishId)}`);
+      setTiktokPublishStatus(result.status);
+      setStatus(`TikTok status: ${result.status}`);
+    } catch (err) {
+      setError(err.message || String(err));
     }
   }
 
@@ -2571,6 +2775,65 @@ export function App() {
                 {!youtubeThumbnailApplied && youtubeThumbnailError && <p>Thumbnail pending: {youtubeThumbnailError}</p>}
                 {!previewPosterName && <p>Generate or refresh a thumbnail before applying it.</p>}
                 {youtubeResult && <a href={youtubeResult} target="_blank" rel="noreferrer">{youtubeResult}</a>}
+              </div>
+              <div className="youtube-panel tiktok-panel">
+                <div className="output-heading">
+                  <h3>TikTok</h3>
+                  <button type="button" onClick={refreshTikTokAuth}>Check auth</button>
+                </div>
+                <div className="tiktok-variant-panel">
+                  <strong>Vertical TikTok variant</strong>
+                  <p>Creates a separate 1080 × 1920 MP4 with the landscape master centered over a softened background. The YouTube original stays unchanged.</p>
+                  <label>Source video<select value={tiktokVariantSource || outputName} onChange={(event) => setTiktokVariantSource(event.target.value)} disabled={isCreatingTikTokVariant}>
+                    {(outputs.length ? outputs : [outputName]).filter((file) => /\.(mp4|mov|m4v|webm|mpg|mpeg)$/i.test(file)).map((file) => <option key={file} value={file}>{file}</option>)}
+                  </select></label>
+                  <button type="button" onClick={createTikTokVariant} disabled={isCreatingTikTokVariant || !(tiktokVariantSource || outputName)}>{isCreatingTikTokVariant ? 'Creating vertical variant' : 'Create TikTok variant'}</button>
+                  {tiktokVariantFilename && <p className="success-text">TikTok variant ready: {tiktokVariantFilename}</p>}
+                </div>
+                <p>{tiktokAuth?.authenticated ? `Connected as ${tiktokAuth.creator?.nickname || tiktokAuth.creator?.username || 'TikTok account'}` : 'Not connected on server'}</p>
+                {!tiktokAuth?.configured && <p>TikTok setup is incomplete on the server. Account connection becomes available after setup.</p>}
+                {tiktokAuth?.error && <p role="alert">TikTok connection: {tiktokAuth.error}</p>}
+                {tiktokAuth?.creator?.username && <p>Posting account: @{tiktokAuth.creator.username}</p>}
+                {tiktokAuth?.creator?.maxVideoPostDurationSec && <p className="hint">This account allows videos up to {tiktokAuth.creator.maxVideoPostDurationSec} seconds.</p>}
+                <label>Video to publish<select value={tiktokVideoFilename} onChange={(event) => setTiktokVideoFilename(event.target.value)}>
+                  <option value="">Choose a finished video</option>
+                  {outputs.filter((file) => /\.(mp4|mov|m4v|webm|mpg|mpeg)$/i.test(file)).map((file) => <option key={file} value={file}>{file}</option>)}
+                </select></label>
+                {outputs.includes(tiktokVideoFilename) && <a href={outputHref(tiktokVideoFilename)} target="_blank" rel="noreferrer">Preview TikTok video</a>}
+                <div className="youtube-actions">
+                  <button type="button" onClick={connectTikTok} disabled={isConnectingTikTok || !tiktokAuth?.configured}>
+                    {isConnectingTikTok ? 'Connecting' : 'Connect TikTok'}
+                  </button>
+                  <button type="button" onClick={reviewTikTokPublish} disabled={!tiktokAuth?.authenticated || !tiktokCaption.trim() || !tiktokPrivacy || !outputs.includes(tiktokVideoFilename) || !tiktokMusicConsent || isPublishingTikTok}>
+                    {isPublishingTikTok ? 'Publishing' : 'Review & publish to TikTok'}
+                  </button>
+                  <button type="button" onClick={refreshTikTokPublishStatus} disabled={!tiktokPublishId || isPublishingTikTok}>
+                    Check publish status
+                  </button>
+                </div>
+                <label>Caption<textarea className="short-textarea" value={tiktokCaption} maxLength="2200" onChange={(event) => setTiktokCaption(event.target.value)} placeholder="Describe this LeCrown Properties video and add hashtags" /></label>
+                <p className="hint">{tiktokCaption.length}/2200 characters. TikTok may restrict public visibility until the developer app passes its audit.</p>
+                <label>Privacy<select value={tiktokPrivacy} onChange={(event) => setTiktokPrivacy(event.target.value)} disabled={!tiktokAuth?.authenticated}>
+                  <option value="">Choose who can view this post</option>
+                  {(tiktokAuth?.creator?.privacyLevelOptions || []).map((option) => <option key={option} value={option}>{option.replaceAll('_', ' ')}</option>)}
+                </select></label>
+                <label className="publish-checkbox"><input type="checkbox" checked={tiktokAllowComment && !tiktokAuth?.creator?.commentDisabled} disabled={!tiktokAuth?.authenticated || tiktokAuth?.creator?.commentDisabled} onChange={(event) => setTiktokAllowComment(event.target.checked)} /> Allow comments</label>
+                <label className="publish-checkbox"><input type="checkbox" checked={tiktokAllowDuet && !tiktokAuth?.creator?.duetDisabled} disabled={!tiktokAuth?.authenticated || tiktokAuth?.creator?.duetDisabled} onChange={(event) => setTiktokAllowDuet(event.target.checked)} /> Allow Duet</label>
+                <label className="publish-checkbox"><input type="checkbox" checked={tiktokAllowStitch && !tiktokAuth?.creator?.stitchDisabled} disabled={!tiktokAuth?.authenticated || tiktokAuth?.creator?.stitchDisabled} onChange={(event) => setTiktokAllowStitch(event.target.checked)} /> Allow Stitch</label>
+                <label className="publish-checkbox"><input type="checkbox" checked={tiktokBrandOrganic} onChange={(event) => setTiktokBrandOrganic(event.target.checked)} /> Promotes my own business</label>
+                {tiktokBrandOrganic && <p className="hint">TikTok will label this video as promotional content.</p>}
+                <label className="publish-checkbox"><input type="checkbox" checked={tiktokAigc} onChange={(event) => setTiktokAigc(event.target.checked)} /> Label this as AI-generated content</label>
+                <p className="hint">Keep the AI label enabled whenever the final video uses AI-generated or materially AI-altered content.</p>
+                <label className="publish-checkbox"><input type="checkbox" checked={tiktokMusicConsent} onChange={(event) => setTiktokMusicConsent(event.target.checked)} /> By posting, I agree to TikTok's <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">Music Usage Confirmation</a>.</label>
+                {tiktokPublishId && <p>TikTok publish {tiktokPublishId}: <strong>{tiktokPublishStatus || 'PROCESSING'}</strong></p>}
+                {tiktokProfileUrl && <a href={tiktokProfileUrl} target="_blank" rel="noreferrer">Open TikTok profile</a>}
+                {tiktokPublishReview && <div className="publish-review" role="dialog" aria-modal="true" aria-label="TikTok publishing review">
+                  <strong>Confirm TikTok publish</strong>
+                  <p>Post <strong>{tiktokPublishReview.filename}</strong> to <strong>@{tiktokPublishReview.expectedCreatorUsername}</strong> as {tiktokPublishReview.privacyLevel.replaceAll('_', ' ').toLowerCase()}.</p>
+                  <p className="tiktok-review-caption">{tiktokPublishReview.caption}</p>
+                  <p>AI content label: {tiktokPublishReview.isAigc ? 'On' : 'Off'}. Own-business promotion: {tiktokPublishReview.brandOrganic ? 'On' : 'Off'}.</p>
+                  <div><button type="button" onClick={() => setTiktokPublishReview(false)} disabled={isPublishingTikTok}>Cancel</button><button type="button" onClick={publishTikTok} disabled={isPublishingTikTok}>{isPublishingTikTok ? 'Publishing' : 'Confirm TikTok publish'}</button></div>
+                </div>}
               </div>
             </div>
           )}
