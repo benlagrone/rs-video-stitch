@@ -1926,6 +1926,7 @@ textarea {
 .tiktok-panel .publish-checkbox {
   align-items: center;
   display: flex;
+  flex-direction: row;
   gap: 8px;
   text-transform: none;
   letter-spacing: normal;
