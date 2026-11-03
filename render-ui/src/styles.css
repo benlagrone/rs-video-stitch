@@ -1910,13 +1910,29 @@ textarea {
   white-space: pre-wrap;
 }
 
-.publish-checkbox {
+.tiktok-panel,
+.tiktok-panel label,
+.tiktok-panel > *,
+.tiktok-variant-panel > * {
+  min-width: 0;
+}
+
+.tiktok-panel select {
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+}
+
+.tiktok-panel .publish-checkbox {
   align-items: center;
   display: flex;
   gap: 8px;
+  text-transform: none;
+  letter-spacing: normal;
+  line-height: 1.5;
 }
 
-.publish-checkbox input {
+.tiktok-panel .publish-checkbox input {
   accent-color: var(--accent);
   height: 16px;
   width: 16px;

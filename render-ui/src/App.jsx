@@ -2787,7 +2787,7 @@ export function App() {
                   <label>Source video<select value={tiktokVariantSource || outputName} onChange={(event) => setTiktokVariantSource(event.target.value)} disabled={isCreatingTikTokVariant}>
                     {(outputs.length ? outputs : [outputName]).filter((file) => /\.(mp4|mov|m4v|webm|mpg|mpeg)$/i.test(file)).map((file) => <option key={file} value={file}>{file}</option>)}
                   </select></label>
-                  <button type="button" onClick={createTikTokVariant} disabled={isCreatingTikTokVariant || !(tiktokVariantSource || outputName)}>{isCreatingTikTokVariant ? 'Creating vertical variant' : 'Create TikTok variant'}</button>
+                  <button type="button" className="secondary-action" onClick={createTikTokVariant} disabled={isCreatingTikTokVariant || !(tiktokVariantSource || outputName)}>{isCreatingTikTokVariant ? 'Creating vertical variant' : 'Create TikTok variant'}</button>
                   {tiktokVariantFilename && <p className="success-text">TikTok variant ready: {tiktokVariantFilename}</p>}
                 </div>
                 <p>{tiktokAuth?.authenticated ? `Connected as ${tiktokAuth.creator?.nickname || tiktokAuth.creator?.username || 'TikTok account'}` : 'Not connected on server'}</p>
@@ -2824,7 +2824,7 @@ export function App() {
                 {tiktokBrandOrganic && <p className="hint">TikTok will label this video as promotional content.</p>}
                 <label className="publish-checkbox"><input type="checkbox" checked={tiktokAigc} onChange={(event) => setTiktokAigc(event.target.checked)} /> Label this as AI-generated content</label>
                 <p className="hint">Keep the AI label enabled whenever the final video uses AI-generated or materially AI-altered content.</p>
-                <label className="publish-checkbox"><input type="checkbox" checked={tiktokMusicConsent} onChange={(event) => setTiktokMusicConsent(event.target.checked)} /> By posting, I agree to TikTok's <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">Music Usage Confirmation</a>.</label>
+                <label className="publish-checkbox"><input type="checkbox" checked={tiktokMusicConsent} onChange={(event) => setTiktokMusicConsent(event.target.checked)} /><span>By posting, I agree to TikTok's <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">Music Usage Confirmation</a>.</span></label>
                 {tiktokPublishId && <p>TikTok publish {tiktokPublishId}: <strong>{tiktokPublishStatus || 'PROCESSING'}</strong></p>}
                 {tiktokProfileUrl && <a href={tiktokProfileUrl} target="_blank" rel="noreferrer">Open TikTok profile</a>}
                 {tiktokPublishReview && <div className="publish-review" role="dialog" aria-modal="true" aria-label="TikTok publishing review">
