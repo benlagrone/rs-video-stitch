@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import tiktok_highlight as highlight
+from app import media_ai_policy
 
 
 class HighlightPlanTests(unittest.TestCase):
@@ -227,6 +228,7 @@ class HighlightEncodingTests(unittest.TestCase):
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=320x180:r=30:d=40", "-f", "lavfi", "-i", "sine=frequency=440:duration=40", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(master)], check=True)
             before_hash = hashlib.sha256(master.read_bytes()).hexdigest()
             before_mtime = master.stat().st_mtime_ns
+            media_ai_policy.write_media_provenance(master, ai_generated=False, reasons=["Deterministic test footage; no AI-generated media."])
             counter = []
 
             def graphics(output_dir, *, kind, duration, **_kwargs):
@@ -235,7 +237,7 @@ class HighlightEncodingTests(unittest.TestCase):
                 subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"color=c=navy:s=160x284:r=30:d={duration}", "-c:v", "libx264", "-preset", "ultrafast", str(card)], check=True)
                 return card
 
-            with patch.object(highlight, "p_input", return_value=input_dir), patch.object(highlight, "p_output", return_value=output), patch.object(highlight, "p_work", return_value=work), patch.object(highlight, "read_project_state", return_value={"title": "Property tour"}), patch("app.tiktok_highlight_graphics.render_highlight_graphics", side_effect=graphics):
+            with patch.object(highlight, "p_input", return_value=input_dir), patch.object(highlight, "p_output", return_value=output), patch.object(media_ai_policy, "p_output", return_value=output), patch.object(highlight, "p_work", return_value=work), patch.object(highlight, "read_project_state", return_value={"title": "Property tour"}), patch("app.tiktok_highlight_graphics.render_highlight_graphics", side_effect=graphics):
                 plan = highlight.plan_highlight("project", master.name, 30)
                 progress = []
                 result = highlight.render_highlight("project", plan, progress=lambda stage, value: progress.append(value))
@@ -255,3 +257,5 @@ class HighlightEncodingTests(unittest.TestCase):
             provenance = json.loads(result.with_suffix(".highlight.json").read_text())
             self.assertTrue(provenance["sourceUnchanged"])
             self.assertEqual(provenance["captionSource"], "project-text")
+            self.assertFalse(provenance["sourceAiMedia"]["isAigc"])
+            self.assertFalse(json.loads(result.with_suffix(".media.json").read_text())["aiGenerated"])
