@@ -343,16 +343,22 @@ class TikTokPublishRequest(BaseModel):
     filename: str = Field(default="video.mp4")
     caption: str = Field(min_length=1, max_length=2200)
     privacyLevel: Literal["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY"]
-    isAigc: bool = Field(default=True)
-    allowComment: bool = False
-    allowDuet: bool = False
-    allowStitch: bool = False
-    brandOrganic: bool = False
+    isAigc: Optional[bool] = None
+    allowComment: Optional[bool] = None
+    allowDuet: Optional[bool] = None
+    allowStitch: Optional[bool] = None
+    brandOrganic: Optional[bool] = None
     expectedCreatorUsername: str = Field(min_length=1)
 
 
 class TikTokVariantRequest(BaseModel):
     filename: str = Field(default="video.mp4")
+
+
+class TikTokMediaReviewRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    isAigc: bool
+    fingerprint: Dict[str, Any]
 
 
 class TikTokVariantResponse(BaseModel):

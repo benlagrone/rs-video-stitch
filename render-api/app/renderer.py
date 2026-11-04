@@ -1,6 +1,7 @@
 """Rendering pipeline built around FFmpeg."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -16,6 +17,7 @@ from urllib.parse import unquote, urlparse
 
 import requests
 
+from app.media_ai_policy import asset_path_ai_status, write_media_provenance
 from app.tts import TTSConfigurationError, synthesize_azure, synthesize_xtts
 
 DEFAULT_PRESET = os.getenv("DEFAULT_PRESET", "medium")
@@ -391,6 +393,57 @@ def _timeline_videos(scene: Dict[str, Any], images: List[str]) -> Dict[str, str]
         if isinstance(raw, dict) and raw.get("image") in images and raw.get("video"):
             videos[str(raw["image"])] = str(raw["video"])
     return videos
+
+
+def _record_media_asset(
+    inputs: List[Dict[str, Any]],
+    input_dir: Path,
+    path: Path,
+    kind: str,
+    generation: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Freeze origin evidence for a file that this render actually consumes."""
+    try:
+        relative_name = path.relative_to(input_dir).as_posix()
+    except ValueError:
+        relative_name = path.name
+    try:
+        provenance = json.loads((input_dir / "asset_provenance.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        provenance = {}
+    record = provenance.get(relative_name, provenance.get(path.name)) if isinstance(provenance, dict) else None
+    if generation:
+        record = {**(record if isinstance(record, dict) else {}), **generation}
+    assessment = asset_path_ai_status(path, provenance=record)
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    inputs.append({
+        "filename": relative_name,
+        "kind": kind,
+        "sha256": digest.hexdigest(),
+        **assessment,
+    })
+
+
+def _timeline_image_entry(scene: Dict[str, Any], image_name: str) -> Dict[str, Any]:
+    timeline = scene.get("timeline")
+    if not isinstance(timeline, list):
+        return {}
+    return next((entry for entry in reversed(timeline) if isinstance(entry, dict) and entry.get("image") == image_name), {})
+
+
+def _write_render_media_provenance(final_path: Path, inputs: List[Dict[str, Any]]) -> None:
+    # Only completed output files receive provenance.
+    if not final_path.is_file():
+        return
+    statuses = [item.get("isAigc") for item in inputs]
+    ai_generated = True if True in statuses else (False if statuses and all(value is False for value in statuses) else None)
+    reasons = list(dict.fromkeys(reason for item in inputs for reason in item.get("reasons", [])))
+    if not reasons:
+        reasons = ["The rendered media has no established origin evidence."]
+    write_media_provenance(final_path, ai_generated=ai_generated, reasons=reasons, inputs=inputs)
 
 
 def _default_image_durations(
@@ -1509,6 +1562,7 @@ def _render_source_footage_project(
     prepared_clips: List[Path] = []
     posters: List[Path] = []
     normalized_footage: List[Dict[str, Any]] = []
+    media_inputs: List[Dict[str, Any]] = []
     for index, item in enumerate(footage):
         filename = Path(str(item.get("filename") or "")).name
         if not filename or Path(filename).suffix.lower() not in supported_extensions:
@@ -1516,6 +1570,7 @@ def _render_source_footage_project(
         source = input_dir / "footage" / filename
         if not source.is_file():
             raise FileNotFoundError(f"Missing source footage: {filename}")
+        _record_media_asset(media_inputs, input_dir, source, "source-footage")
         clip_dir = work_dir / "footage"
         clip_dir.mkdir(parents=True, exist_ok=True)
         prepared = _prepare_footage_clip(
@@ -1557,6 +1612,7 @@ def _render_source_footage_project(
             requested_background = input_dir / "leader" / Path(str(intro_background_image)).name
             if requested_background.exists():
                 intro_background = requested_background
+                _record_media_asset(media_inputs, input_dir, intro_background, "intro-background")
         if lead_card_mode == "hyperframes":
             intro_file = _render_hyperframes_clip(
                 str(hyperframes_binding.get("leadCard") or "lecrown-lead-card"),
@@ -1659,6 +1715,7 @@ def _render_source_footage_project(
     if manifest:
         _log(log, f"HyperFrames render map: {manifest.name}")
     _generate_selected_thumbnail(input_dir, output_dir, work_dir, scenes_doc, opts, output_name, log)
+    _write_render_media_provenance(final_path, media_inputs)
     update("FINALIZE", 0.98)
     return final_path
 
@@ -1808,6 +1865,7 @@ def render_project(
     update("VALIDATE", 0.05)
 
     scene_files = []
+    media_inputs: List[Dict[str, Any]] = []
 
     for index, scene in enumerate(scenes):
         idx = f"{index:02d}"
@@ -1827,6 +1885,7 @@ def render_project(
             voice_path = next((c for c in candidates if c.exists()), None)
 
         audio_wav = work_dir / f"scene_{idx}.wav"
+        synthesized_provider: Optional[str] = None
         update("AUDIO_PREP", 0.1 + index * 0.02)
         if voice_path is None:
             if tts_api == "none":
@@ -1879,6 +1938,7 @@ def render_project(
                             language=tts_language,
                             log=log,
                         )
+                    synthesized_provider = tts_api
                 except TTSConfigurationError as exc:
                     if tts_api in {"voice-gateway", "vibevoice-proxy", "azure-proxy"}:
                         raise RuntimeError(
@@ -1890,6 +1950,7 @@ def render_project(
                     )
                     try:
                         _synthesize_flite(voice_text, audio_wav, tts_voice, log)
+                        synthesized_provider = "flite"
                     except Exception as flite_exc:  # noqa: BLE001
                         duration = estimate_seconds(voice_text)
                         _log(
@@ -1911,6 +1972,7 @@ def render_project(
                 duration = estimate_seconds(voice_text)
                 _write_silence(audio_wav, duration, log)
         else:
+            _record_media_asset(media_inputs, input_dir, voice_path, "prerecorded-narration")
             run(
                 [
                     "ffmpeg",
@@ -1925,6 +1987,17 @@ def render_project(
                 ],
                 log,
             )
+
+        if synthesized_provider:
+            media_inputs.append({
+                "filename": f"work/{audio_wav.name}",
+                "kind": "synthesized-narration",
+                "provider": synthesized_provider,
+                "status": "ai",
+                "isAigc": True,
+                "reasons": [f"Narration for scene {idx} was synthesized with {synthesized_provider}."],
+                "sha256": hashlib.sha256(audio_wav.read_bytes()).hexdigest() if audio_wav.is_file() else None,
+            })
 
         audio_duration = ffprobe_duration(audio_wav) or estimate_seconds(voice_text)
         timeline_durations = _timeline_durations(
@@ -1977,10 +2050,13 @@ def render_project(
             frames = max(1, round(duration_seconds * fps))
             segment = temp_dir / f"seg_{img_index:02d}.mp4"
             motion_name = image_videos.get(image_name)
+            timeline_entry = _timeline_image_entry(scene, image_name)
             if motion_name:
                 motion_path = input_dir / "motion" / motion_name
                 if not motion_path.exists():
                     raise FileNotFoundError(f"Missing motion clip for scene {idx}: {motion_name}")
+                generation = {"motionGeneration": timeline_entry["motionGeneration"]} if timeline_entry.get("video") == motion_name and timeline_entry.get("motionGeneration") else None
+                _record_media_asset(media_inputs, input_dir, motion_path, "scene-motion", generation)
                 motion_duration = ffprobe_duration(motion_path)
                 visual_duration = max(duration_seconds, motion_duration)
                 speed_factor = visual_duration / motion_duration if motion_duration > 0 else 1.0
@@ -2004,6 +2080,8 @@ def render_project(
                 ], log)
                 duration_seconds = visual_duration
             else:
+                generation = {"imageGeneration": timeline_entry["imageGeneration"]} if timeline_entry.get("imageGeneration") else None
+                _record_media_asset(media_inputs, input_dir, image_path, "scene-image", generation)
                 filter_complex = _fit_image_frame_filter("0:v", "v")
                 run(
                     [
@@ -2155,6 +2233,8 @@ def render_project(
                     intro_background = requested_background
                 else:
                     _log(log, f"Requested intro background {requested_background.name} is missing; using first scene")
+            generation = _timeline_image_entry(scenes[0], first_image_name).get("imageGeneration") if intro_background == first_image else None
+            _record_media_asset(media_inputs, input_dir, intro_background, "intro-background", {"imageGeneration": generation} if generation else None)
             if lead_card_mode == "hyperframes":
                 intro_file = _render_hyperframes_clip(
                     str(hyperframes_binding.get("leadCard") or "lecrown-lead-card"),
@@ -2217,6 +2297,9 @@ def render_project(
             next_images = scenes[index + 1].get("images") or []
             if not current_images or not next_images:
                 raise ValueError(f"Cannot render HyperFrames transition after scene {index:02d}: missing adjacent image")
+            for adjacent_scene, adjacent_name in ((scenes[index], current_images[-1]), (scenes[index + 1], next_images[0])):
+                generation = _timeline_image_entry(adjacent_scene, adjacent_name).get("imageGeneration")
+                _record_media_asset(media_inputs, input_dir, input_dir / "images" / adjacent_name, "transition-image", {"imageGeneration": generation} if generation else None)
             transition_file = _render_hyperframes_clip(
                 str(hyperframes_binding.get("sceneTransition") or "lecrown-scene-transition"),
                 {
@@ -2296,5 +2379,6 @@ def render_project(
         _log(log, f"HyperFrames render map: {hyperframes_manifest.name}")
 
     _generate_selected_thumbnail(input_dir, output_dir, work_dir, scenes_doc, opts, output_name, log)
+    _write_render_media_provenance(final_path, media_inputs)
     update("FINALIZE", 0.98)
     return final_path

@@ -21,6 +21,7 @@ import { YouTubeChannelSelector } from './YouTubeChannelSelector.jsx';
 import { VoiceSamples } from './VoiceSamples.jsx';
 import { ThumbnailStyleSelector } from './ThumbnailStyleSelector.jsx';
 import { TikTokHighlightPanel } from './TikTokHighlightPanel.jsx';
+import { LECROWN_TIKTOK_DEFAULTS, resolvedTikTokAi, tikTokPreferences, tikTokVideoKey } from './tiktokSettings.js';
 
 const DEFAULT_RENDER_OPTIONS = {
   fps: 30,
@@ -291,6 +292,8 @@ function projectStateFromValues(values) {
     tiktokCaption: values.tiktokCaption,
     tiktokPrivacy: values.tiktokPrivacy,
     tiktokAigc: values.tiktokAigc,
+    tiktokDefaultsVersion: values.tiktokDefaultsVersion,
+    tiktokDefaultsProfile: values.tiktokDefaultsProfile,
     tiktokAllowComment: values.tiktokAllowComment,
     tiktokAllowDuet: values.tiktokAllowDuet,
     tiktokAllowStitch: values.tiktokAllowStitch,
@@ -383,12 +386,21 @@ export function App() {
   const [tiktokAuth, setTiktokAuth] = useState(null);
   const [tiktokCaption, setTiktokCaption] = useState('');
   const [tiktokPrivacy, setTiktokPrivacy] = useState('');
-  const [tiktokAigc, setTiktokAigc] = useState(true);
-  const [tiktokAllowComment, setTiktokAllowComment] = useState(false);
+  const [tiktokAigc, setTiktokAigc] = useState(null);
+  const [tiktokDefaultsVersion, setTiktokDefaultsVersion] = useState(2);
+  const [tiktokDefaultsProfile, setTiktokDefaultsProfile] = useState('lecrown');
+  const [tiktokAllowComment, setTiktokAllowComment] = useState(LECROWN_TIKTOK_DEFAULTS.allowComment);
   const [tiktokAllowDuet, setTiktokAllowDuet] = useState(false);
   const [tiktokAllowStitch, setTiktokAllowStitch] = useState(false);
-  const [tiktokBrandOrganic, setTiktokBrandOrganic] = useState(false);
+  const [tiktokBrandOrganic, setTiktokBrandOrganic] = useState(LECROWN_TIKTOK_DEFAULTS.brandOrganic);
   const [tiktokVideoFilename, setTiktokVideoFilename] = useState('');
+  const [tiktokMediaPolicy, setTiktokMediaPolicy] = useState(null);
+  const [tiktokSettingsPending, setTiktokSettingsPending] = useState(false);
+  const [tiktokSettingsError, setTiktokSettingsError] = useState('');
+  const [tiktokPolicyEpoch, setTiktokPolicyEpoch] = useState(0);
+  const [tiktokOriginReviewOpen, setTiktokOriginReviewOpen] = useState(false);
+  const tiktokSavedPreferences = useRef({});
+  const tiktokPreferencesApplied = useRef('');
   const [tiktokMusicConsent, setTiktokMusicConsent] = useState(false);
   const [tiktokPublishId, setTiktokPublishId] = useState('');
   const [tiktokPublishStatus, setTiktokPublishStatus] = useState('');
@@ -434,6 +446,10 @@ export function App() {
   }, [projectId, title]);
   const highlightProject = useRef(resolvedProjectId);
   highlightProject.current = resolvedProjectId;
+  const selectedTikTokVideo = useRef('');
+  selectedTikTokVideo.current = tikTokVideoKey(resolvedProjectId, tiktokVideoFilename);
+  const currentTikTokAi = tiktokMediaPolicy?.key === selectedTikTokVideo.current ? tiktokMediaPolicy.ai : null;
+  const tiktokAiResolved = !tiktokSettingsPending && !tiktokSettingsError && resolvedTikTokAi(currentTikTokAi) !== null;
   const filteredProjects = useMemo(() => {
     const query = projectFilter.trim().toLocaleLowerCase();
     if (!query) return savedProjects;
@@ -603,6 +619,44 @@ export function App() {
     refreshTikTokAuth().catch(() => setTiktokAuth(null));
   }, [apiBase, authToken]);
   useEffect(() => {
+    let cancelled = false;
+    const key = tikTokVideoKey(resolvedProjectId, tiktokVideoFilename);
+    setTiktokPublishReview(false);
+    setTiktokOriginReviewOpen(false);
+    setTiktokAigc(null);
+    setTiktokMediaPolicy(null);
+    setTiktokSettingsError('');
+    if (isLoadingProject || !tiktokVideoFilename || !outputs.includes(tiktokVideoFilename)) {
+      setTiktokSettingsPending(isLoadingProject);
+      return () => { cancelled = true; };
+    }
+    setTiktokSettingsPending(true);
+    request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/tiktok/settings?filename=${encodeURIComponent(tiktokVideoFilename)}`)
+      .then((policy) => {
+        if (cancelled || selectedTikTokVideo.current !== key) return;
+        const preferenceKey = `${resolvedProjectId}:${policy.profile}`;
+        if (tiktokPreferencesApplied.current !== preferenceKey) {
+          const preferences = tikTokPreferences(tiktokSavedPreferences.current, policy);
+          setTiktokDefaultsVersion(preferences.version);
+          setTiktokDefaultsProfile(preferences.profile);
+          setTiktokAllowComment(preferences.allowComment);
+          setTiktokAllowDuet(preferences.allowDuet);
+          setTiktokAllowStitch(preferences.allowStitch);
+          setTiktokBrandOrganic(preferences.brandOrganic);
+          tiktokPreferencesApplied.current = preferenceKey;
+        }
+        setTiktokMediaPolicy({ key, ai: policy.ai });
+        setTiktokAigc(resolvedTikTokAi(policy.ai));
+      })
+      .catch((err) => {
+        if (!cancelled && selectedTikTokVideo.current === key) setTiktokSettingsError(err.message || String(err));
+      })
+      .finally(() => {
+        if (!cancelled && selectedTikTokVideo.current === key) setTiktokSettingsPending(false);
+      });
+    return () => { cancelled = true; };
+  }, [resolvedProjectId, tiktokVideoFilename, apiBase, authToken, outputs, tiktokPolicyEpoch, isLoadingProject]);
+  useEffect(() => {
     const previews = images.map((image) => ({
       name: image.name,
       url: image.url || (image.file ? URL.createObjectURL(image.file) : missingImageDataUrl(image.name)),
@@ -770,11 +824,17 @@ export function App() {
     setYoutubeThumbnailError('');
     setTiktokCaption('');
     setTiktokPrivacy('');
-    setTiktokAigc(true);
-    setTiktokAllowComment(false);
+    setTiktokAigc(null);
+    setTiktokDefaultsVersion(2);
+    setTiktokDefaultsProfile('lecrown');
+    tiktokSavedPreferences.current = {};
+    tiktokPreferencesApplied.current = '';
+    setTiktokMediaPolicy(null);
+    setTiktokOriginReviewOpen(false);
+    setTiktokAllowComment(LECROWN_TIKTOK_DEFAULTS.allowComment);
     setTiktokAllowDuet(false);
     setTiktokAllowStitch(false);
-    setTiktokBrandOrganic(false);
+    setTiktokBrandOrganic(LECROWN_TIKTOK_DEFAULTS.brandOrganic);
     setTiktokVideoFilename('');
     setTiktokMusicConsent(false);
     setTiktokPublishId('');
@@ -895,11 +955,19 @@ export function App() {
       setYoutubeThumbnailError(state.youtubeUpload?.thumbnailError || '');
       setTiktokCaption(state.tiktokCaption || '');
       setTiktokPrivacy(state.tiktokPrivacy || '');
-      setTiktokAigc(state.tiktokAigc ?? true);
-      setTiktokAllowComment(Boolean(state.tiktokAllowComment));
-      setTiktokAllowDuet(Boolean(state.tiktokAllowDuet));
-      setTiktokAllowStitch(Boolean(state.tiktokAllowStitch));
-      setTiktokBrandOrganic(Boolean(state.tiktokBrandOrganic));
+      const tiktokPreferences = tikTokPreferences(state);
+      tiktokSavedPreferences.current = state;
+      tiktokPreferencesApplied.current = '';
+      setTiktokDefaultsVersion(tiktokPreferences.version);
+      setTiktokDefaultsProfile(tiktokPreferences.profile);
+      setTiktokAigc(null);
+      setTiktokMediaPolicy(null);
+      setTiktokOriginReviewOpen(false);
+      setTiktokAllowComment(tiktokPreferences.allowComment);
+      setTiktokAllowDuet(tiktokPreferences.allowDuet);
+      setTiktokAllowStitch(tiktokPreferences.allowStitch);
+      setTiktokBrandOrganic(tiktokPreferences.brandOrganic);
+      setTiktokPolicyEpoch((epoch) => epoch + 1);
       setTiktokVideoFilename(state.tiktokVideoFilename || state.tiktokVariant?.filename || state.outputName || 'video.mp4');
       setTiktokMusicConsent(false);
       setTiktokPublishReview(false);
@@ -1285,6 +1353,8 @@ export function App() {
             tiktokCaption,
             tiktokPrivacy,
             tiktokAigc,
+            tiktokDefaultsVersion,
+            tiktokDefaultsProfile,
             tiktokAllowComment,
             tiktokAllowDuet,
             tiktokAllowStitch,
@@ -1452,7 +1522,8 @@ export function App() {
   }
 
   async function publishTikTok() {
-    if (!tiktokPublishReview) return;
+    if (!tiktokPublishReview || !tiktokAiResolved
+      || tiktokPublishReview.filename !== tiktokVideoFilename) return;
     setError('');
     setIsPublishingTikTok(true);
     try {
@@ -1477,23 +1548,66 @@ export function App() {
   }
 
   async function reviewTikTokPublish() {
-    const auth = await refreshTikTokAuth();
-    if (!auth?.authenticated || !auth.creator?.username) return;
-    if (!auth.creator.privacyLevelOptions.includes(tiktokPrivacy)) {
-      setError('Choose an available TikTok privacy setting before publishing.');
-      return;
+    const filename = tiktokVideoFilename;
+    const key = tikTokVideoKey(resolvedProjectId, filename);
+    setTiktokSettingsPending(true);
+    setTiktokSettingsError('');
+    try {
+      const [auth, policy] = await Promise.all([
+        refreshTikTokAuth(),
+        request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/tiktok/settings?filename=${encodeURIComponent(filename)}`),
+      ]);
+      if (selectedTikTokVideo.current !== key) return;
+      setTiktokMediaPolicy({ key, ai: policy.ai });
+      const isAigc = resolvedTikTokAi(policy.ai);
+      setTiktokAigc(isAigc);
+      if (isAigc === null) {
+        setTiktokSettingsError('Review whether this selected video contains AI-generated media before publishing.');
+        return;
+      }
+      if (!auth?.authenticated || !auth.creator?.username) return;
+      if (!auth.creator.privacyLevelOptions.includes(tiktokPrivacy)) {
+        setError('Choose an available TikTok privacy setting before publishing.');
+        return;
+      }
+      setTiktokPublishReview({
+        filename,
+        caption: tiktokCaption.trim(),
+        privacyLevel: tiktokPrivacy,
+        isAigc,
+        allowComment: tiktokAllowComment && !auth.creator.commentDisabled,
+        allowDuet: tiktokAllowDuet && !auth.creator.duetDisabled,
+        allowStitch: tiktokAllowStitch && !auth.creator.stitchDisabled,
+        brandOrganic: tiktokBrandOrganic,
+        expectedCreatorUsername: auth.creator.username,
+      });
+    } catch (err) {
+      if (selectedTikTokVideo.current === key) setTiktokSettingsError(err.message || String(err));
+    } finally {
+      if (selectedTikTokVideo.current === key) setTiktokSettingsPending(false);
     }
-    setTiktokPublishReview({
-      filename: tiktokVideoFilename,
-      caption: tiktokCaption.trim(),
-      privacyLevel: tiktokPrivacy,
-      isAigc: tiktokAigc,
-      allowComment: tiktokAllowComment && !auth.creator.commentDisabled,
-      allowDuet: tiktokAllowDuet && !auth.creator.duetDisabled,
-      allowStitch: tiktokAllowStitch && !auth.creator.stitchDisabled,
-      brandOrganic: tiktokBrandOrganic,
-      expectedCreatorUsername: auth.creator.username,
-    });
+  }
+
+  async function reviewTikTokMedia(isAigc) {
+    const filename = tiktokVideoFilename;
+    const key = tikTokVideoKey(resolvedProjectId, filename);
+    setTiktokSettingsPending(true);
+    setTiktokSettingsError('');
+    setTiktokPublishReview(false);
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/tiktok/media-review`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, isAigc, fingerprint: currentTikTokAi.fingerprint }),
+      });
+      if (selectedTikTokVideo.current !== key) return;
+      setTiktokMediaPolicy({ key, ai: result.ai });
+      setTiktokAigc(resolvedTikTokAi(result.ai));
+      setTiktokOriginReviewOpen(false);
+    } catch (err) {
+      if (selectedTikTokVideo.current === key) setTiktokSettingsError(err.message || String(err));
+    } finally {
+      if (selectedTikTokVideo.current === key) setTiktokSettingsPending(false);
+    }
   }
 
   async function createTikTokVariant() {
@@ -2828,7 +2942,7 @@ export function App() {
                   <button type="button" onClick={connectTikTok} disabled={isConnectingTikTok || !tiktokAuth?.configured}>
                     {isConnectingTikTok ? 'Connecting' : 'Connect TikTok'}
                   </button>
-                  <button type="button" onClick={reviewTikTokPublish} disabled={!tiktokAuth?.authenticated || !tiktokCaption.trim() || !tiktokPrivacy || !outputs.includes(tiktokVideoFilename) || !tiktokMusicConsent || isPublishingTikTok}>
+                  <button type="button" onClick={reviewTikTokPublish} disabled={!tiktokAuth?.authenticated || !tiktokCaption.trim() || !tiktokPrivacy || !outputs.includes(tiktokVideoFilename) || !tiktokMusicConsent || !tiktokAiResolved || isPublishingTikTok}>
                     {isPublishingTikTok ? 'Publishing' : 'Review & publish to TikTok'}
                   </button>
                   <button type="button" onClick={refreshTikTokPublishStatus} disabled={!tiktokPublishId || isPublishingTikTok}>
@@ -2841,13 +2955,27 @@ export function App() {
                   <option value="">Choose who can view this post</option>
                   {(tiktokAuth?.creator?.privacyLevelOptions || []).map((option) => <option key={option} value={option}>{option.replaceAll('_', ' ')}</option>)}
                 </select></label>
-                <label className="publish-checkbox"><input type="checkbox" checked={tiktokAllowComment && !tiktokAuth?.creator?.commentDisabled} disabled={!tiktokAuth?.authenticated || tiktokAuth?.creator?.commentDisabled} onChange={(event) => setTiktokAllowComment(event.target.checked)} /> Allow comments</label>
-                <label className="publish-checkbox"><input type="checkbox" checked={tiktokAllowDuet && !tiktokAuth?.creator?.duetDisabled} disabled={!tiktokAuth?.authenticated || tiktokAuth?.creator?.duetDisabled} onChange={(event) => setTiktokAllowDuet(event.target.checked)} /> Allow Duet</label>
-                <label className="publish-checkbox"><input type="checkbox" checked={tiktokAllowStitch && !tiktokAuth?.creator?.stitchDisabled} disabled={!tiktokAuth?.authenticated || tiktokAuth?.creator?.stitchDisabled} onChange={(event) => setTiktokAllowStitch(event.target.checked)} /> Allow Stitch</label>
-                <label className="publish-checkbox"><input type="checkbox" checked={tiktokBrandOrganic} onChange={(event) => setTiktokBrandOrganic(event.target.checked)} /> Promotes my own business</label>
+                {tiktokDefaultsProfile === 'lecrown' && <p className="hint">LeCrown defaults: comments on, Duet and Stitch off, and own-business promotion on. You can edit these for this project.</p>}
+                <label className="publish-checkbox"><input type="checkbox" checked={tiktokAllowComment && !tiktokAuth?.creator?.commentDisabled} disabled={tiktokSettingsPending || !tiktokAuth?.authenticated || tiktokAuth?.creator?.commentDisabled} onChange={(event) => setTiktokAllowComment(event.target.checked)} /> Allow comments</label>
+                <label className="publish-checkbox"><input type="checkbox" checked={tiktokAllowDuet && !tiktokAuth?.creator?.duetDisabled} disabled={tiktokSettingsPending || !tiktokAuth?.authenticated || tiktokAuth?.creator?.duetDisabled} onChange={(event) => setTiktokAllowDuet(event.target.checked)} /> Allow Duet</label>
+                <label className="publish-checkbox"><input type="checkbox" checked={tiktokAllowStitch && !tiktokAuth?.creator?.stitchDisabled} disabled={tiktokSettingsPending || !tiktokAuth?.authenticated || tiktokAuth?.creator?.stitchDisabled} onChange={(event) => setTiktokAllowStitch(event.target.checked)} /> Allow Stitch</label>
+                <label className="publish-checkbox"><input type="checkbox" checked={tiktokBrandOrganic} disabled={tiktokSettingsPending} onChange={(event) => setTiktokBrandOrganic(event.target.checked)} /> Promotes my own business</label>
                 {tiktokBrandOrganic && <p className="hint">TikTok will label this video as promotional content.</p>}
-                <label className="publish-checkbox"><input type="checkbox" checked={tiktokAigc} onChange={(event) => setTiktokAigc(event.target.checked)} /> Label this as AI-generated content</label>
-                <p className="hint">Keep the AI label enabled whenever the final video uses AI-generated or materially AI-altered content.</p>
+                <label className="publish-checkbox"><input type="checkbox" checked={resolvedTikTokAi(currentTikTokAi) === true} disabled aria-describedby="tiktok-ai-assessment" /> Label this as AI-generated content</label>
+                <p className="hint" id="tiktok-ai-assessment" role="status">
+                  {tiktokSettingsPending ? 'Checking the selected video’s media history…'
+                    : !outputs.includes(tiktokVideoFilename) ? 'Choose a finished video to determine its AI label.'
+                      : currentTikTokAi?.status === 'ai' ? 'Automatically on: this video contains AI-generated media.'
+                        : currentTikTokAi?.status === 'original' ? 'Automatically off: this video uses original recorded media.'
+                          : 'This video’s media origin is not recorded. Confirm whether it contains AI-generated images, video or voice.'}
+                  {!tiktokSettingsPending && currentTikTokAi?.reasons?.length > 0 && ` ${currentTikTokAi.reasons.join(' ')}`}
+                </p>
+                {!tiktokSettingsPending && currentTikTokAi?.basis === 'operator-review' && !currentTikTokAi.required && !tiktokOriginReviewOpen && <button type="button" onClick={() => setTiktokOriginReviewOpen(true)}>Review media origin</button>}
+                {outputs.includes(tiktokVideoFilename) && (currentTikTokAi?.status === 'unknown' || tiktokOriginReviewOpen) && <div className="youtube-actions">
+                  <button type="button" onClick={() => reviewTikTokMedia(true)} disabled={tiktokSettingsPending}>Contains AI-generated media</button>
+                  <button type="button" onClick={() => reviewTikTokMedia(false)} disabled={tiktokSettingsPending}>Uses original recorded media</button>
+                </div>}
+                {tiktokSettingsError && <div role="alert"><p>{tiktokSettingsError}</p><button type="button" onClick={() => setTiktokPolicyEpoch((value) => value + 1)} disabled={tiktokSettingsPending}>Check media history</button></div>}
                 <label className="publish-checkbox"><input type="checkbox" checked={tiktokMusicConsent} onChange={(event) => setTiktokMusicConsent(event.target.checked)} /><span>By posting, I agree to TikTok's <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">Music Usage Confirmation</a>.</span></label>
                 {tiktokPublishId && <p>TikTok publish {tiktokPublishId}: <strong>{tiktokPublishStatus || 'PROCESSING'}</strong></p>}
                 {tiktokProfileUrl && <a href={tiktokProfileUrl} target="_blank" rel="noreferrer">Open TikTok profile</a>}
@@ -2856,7 +2984,7 @@ export function App() {
                   <p>Post <strong>{tiktokPublishReview.filename}</strong> to <strong>@{tiktokPublishReview.expectedCreatorUsername}</strong> as {tiktokPublishReview.privacyLevel.replaceAll('_', ' ').toLowerCase()}.</p>
                   <p className="tiktok-review-caption">{tiktokPublishReview.caption}</p>
                   <p>AI content label: {tiktokPublishReview.isAigc ? 'On' : 'Off'}. Own-business promotion: {tiktokPublishReview.brandOrganic ? 'On' : 'Off'}.</p>
-                  <div><button type="button" onClick={() => setTiktokPublishReview(false)} disabled={isPublishingTikTok}>Cancel</button><button type="button" onClick={publishTikTok} disabled={isPublishingTikTok}>{isPublishingTikTok ? 'Publishing' : 'Confirm TikTok publish'}</button></div>
+                  <div><button type="button" onClick={() => setTiktokPublishReview(false)} disabled={isPublishingTikTok}>Cancel</button><button type="button" onClick={publishTikTok} disabled={isPublishingTikTok || !tiktokAiResolved || tiktokPublishReview.filename !== tiktokVideoFilename}>{isPublishingTikTok ? 'Publishing' : 'Confirm TikTok publish'}</button></div>
                 </div>}
               </div>
             </div>

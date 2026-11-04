@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from app.media_ai_policy import artifact_ai_status, write_media_provenance
 from app.storage import p_input, p_output, p_work, read_project_state
 
 FPS = 30
@@ -321,6 +322,11 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
     plan = validate_plan(project_id, plan)
     source = _source_path(project_id, plan["sourceFilename"])
     before = {"fingerprint": _fingerprint(source), "sha256": _hash(source)}
+    source_ai_media = {
+        "filename": source.name,
+        "sha256": before["sha256"],
+        **artifact_ai_status(project_id, source.name),
+    }
     token = uuid.uuid4().hex[:10]
     work = p_work(project_id) / "tiktok_highlights" / token
     work.mkdir(parents=True, exist_ok=False)
@@ -396,10 +402,17 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
         if _fingerprint(source) != before["fingerprint"] or _hash(source) != before["sha256"]:
             raise RuntimeError("The source video changed during highlight rendering; output was not published")
         provenance = {"version": 1, "filename": filename, "sourceFilename": source.name, "sourceSha256": before["sha256"], "sourceFingerprint": before["fingerprint"], "sourceUnchanged": True, "durationSeconds": actual, "width": 1080, "height": 1920, "captionSource": "project-text", "captionDescription": "Feature captions from project text, not a verbatim speech transcript", "plan": plan, "createdAt": time.time()}
+        provenance["sourceAiMedia"] = source_ai_media
         # Only complete, validated files become selectable project outputs.
         (output / f"{destination.stem}.highlight.json").write_text(json.dumps(provenance, ensure_ascii=False, indent=2), encoding="utf-8")
         (output / f"{destination.stem}.srt").write_text("\n\n".join(f"{index + 1}\n{_srt_time(start)} --> {_srt_time(end)}\n{text}" for index, (start, end, text) in enumerate(captions)) + "\n", encoding="utf-8")
         temporary_output.replace(destination)
+        write_media_provenance(
+            destination,
+            ai_generated=source_ai_media["isAigc"],
+            reasons=source_ai_media["reasons"],
+            source=source_ai_media,
+        )
         update("HIGHLIGHT_FINALIZE", 0.98)
         return destination
     except Exception:

@@ -12,6 +12,11 @@ from app.tiktok_upload import TikTokUploadTransferError
 
 
 class TikTokApiTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        origin = patch.object(api, "artifact_ai_status", return_value={"status": "original", "isAigc": False})
+        origin.start()
+        self.addCleanup(origin.stop)
+
     def request(self):
         return TikTokPublishRequest(
             filename="tour.mp4", caption="2438 White Oak #Houston",

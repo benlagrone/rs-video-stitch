@@ -133,6 +133,17 @@ creator-info response controls the available privacy options. New unaudited
 apps are limited by TikTok to private posts until their Direct Post client is
 audited.
 
+LeCrown projects default to comments enabled, Duet and Stitch disabled, and
+**Promotes my own business** enabled. Saved choices remain editable per project.
+The AI disclosure follows the selected MP4's file-bound media history: generated
+imagery, motion, or synthesized narration enables it; original recorded media
+keeps it off. Script assistance, room classification, ordinary graphics, and
+HyperFrames animation alone do not enable it. Older files without media history
+offer a one-time **Review media origin** choice before publishing. New renders
+record their actual inputs in a `.media.json` sidecar; vertical edits inherit the
+verified source version's status. Later editor changes cannot reclassify an
+already rendered video.
+
 For an existing landscape YouTube master, the Render Desk can create a separate
 `tiktok_<source>.mp4` variant at 1080 × 1920. It centers the original video
 over a softened vertical background, preserving the full landscape frame and

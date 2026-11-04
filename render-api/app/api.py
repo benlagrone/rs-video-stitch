@@ -11,6 +11,7 @@ import uuid
 import time
 import csv
 import html
+import hashlib
 import re
 from copy import deepcopy
 from pathlib import Path
@@ -64,6 +65,7 @@ from app.schemas import (
     TikTokPublishResponse,
     TikTokHighlightPlanRequest,
     TikTokHighlightRenderRequest,
+    TikTokMediaReviewRequest,
 )
 from app.renderer import (
     DEFAULT_CRF,
@@ -119,6 +121,7 @@ from app.tiktok_upload import (
     tiktok_publish_status,
 )
 from app.tiktok_highlight import plan_highlight, validate_plan
+from app.media_ai_policy import artifact_ai_status, is_lecrown_project, write_media_provenance
 from app.bible_workflow import (
     BIBLE_CAPTION_STYLE,
     BIBLE_CHANNEL_ICON,
@@ -2434,11 +2437,70 @@ async def tiktok_highlight_render(pid: str, req: TikTokHighlightRenderRequest, d
     return {"jobId": job_id}
 
 
+def _tiktok_publishing_defaults(pid: str, state: dict) -> dict:
+    lecrown = is_lecrown_project(pid, state)
+    return {
+        "profile": "lecrown" if lecrown else "generic",
+        "defaultsVersion": 2,
+        "defaults": {"allowComment": lecrown, "allowDuet": False, "allowStitch": False, "brandOrganic": lecrown},
+    }
+
+
+@app.get("/v1/projects/{pid}/tiktok/settings")
+async def tiktok_settings(pid: str, filename: str = "") -> dict:
+    state = read_project_state(pid) or {}
+    try:
+        assessment = await run_in_threadpool(artifact_ai_status, pid, filename) if filename else {
+            "status": "unknown", "isAigc": None, "reasons": ["Choose a video to check its media origin."],
+            "basis": "unknown", "required": False,
+        }
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {**_tiktok_publishing_defaults(pid, state), "ai": assessment}
+
+
+@app.post("/v1/projects/{pid}/tiktok/media-review")
+async def tiktok_media_review(pid: str, req: TikTokMediaReviewRequest) -> dict:
+    try:
+        previous = await run_in_threadpool(artifact_ai_status, pid, req.filename)
+        if previous.get("fingerprint") != req.fingerprint:
+            raise HTTPException(status_code=409, detail="The video changed during this review. Check its media history again.")
+        if previous.get("required"):
+            if not req.isAigc:
+                raise HTTPException(status_code=409, detail="This render records AI-generated media. Its AI label must remain enabled.")
+            # A confirmation must not replace render evidence with an editable
+            # operator review and allow a later request to clear that evidence.
+            return {"ai": previous}
+        target = p_output(pid) / req.filename
+        await run_in_threadpool(
+            write_media_provenance, target, ai_generated=req.isAigc,
+            reasons=["Media origin confirmed for this video: " + ("includes AI-generated media." if req.isAigc else "original recorded media with ordinary editing.")],
+            source={"kind": "operator-review"},
+            expected_fingerprint=req.fingerprint,
+        )
+        return {"ai": await run_in_threadpool(artifact_ai_status, pid, req.filename)}
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.post("/v1/projects/{pid}/tiktok/publish", response_model=TikTokPublishResponse)
 async def tiktok_publish(pid: str, req: TikTokPublishRequest) -> TikTokPublishResponse:
     target = p_output(pid) / Path(req.filename).name
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="video not found")
+    try:
+        assessment = await run_in_threadpool(artifact_ai_status, pid, req.filename)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if assessment.get("isAigc") is None:
+        raise HTTPException(status_code=400, detail="Confirm the selected video's media origin before publishing.")
+    if req.isAigc is not None and req.isAigc != assessment["isAigc"]:
+        raise HTTPException(status_code=409, detail="The video's AI assessment changed. Refresh the publishing review.")
+    defaults = _tiktok_publishing_defaults(pid, read_project_state(pid) or {})["defaults"]
+    req.isAigc = bool(assessment["isAigc"])
+    for field in ("allowComment", "allowDuet", "allowStitch", "brandOrganic"):
+        if getattr(req, field) is None:
+            setattr(req, field, defaults[field])
     try:
         result = await run_in_threadpool(
             publish_video_to_tiktok,
@@ -2469,6 +2531,8 @@ async def tiktok_publish(pid: str, req: TikTokPublishRequest) -> TikTokPublishRe
     state["tiktokAllowStitch"] = req.allowStitch
     state["tiktokBrandOrganic"] = req.brandOrganic
     state["tiktokVideoFilename"] = target.name
+    state["tiktokDefaultsVersion"] = 2
+    state["tiktokDefaultsProfile"] = _tiktok_publishing_defaults(pid, state)["profile"]
     state["tiktokPublish"] = {
         "publishId": result["publishId"],
         "status": result["status"],
@@ -2492,7 +2556,27 @@ async def tiktok_variant(pid: str, req: TikTokVariantRequest) -> TikTokVariantRe
         raise HTTPException(status_code=404, detail="video not found")
     destination = p_output(pid) / f"tiktok_{Path(source_name).stem}.mp4"
     try:
+        assessment = await run_in_threadpool(artifact_ai_status, pid, source_name)
+        def source_identity() -> tuple[dict, str]:
+            stat = source.stat()
+            with source.open("rb") as handle:
+                digest = hashlib.file_digest(handle, "sha256").hexdigest()
+            return {"size": stat.st_size, "mtimeNs": str(stat.st_mtime_ns)}, digest
+        identity, digest = await run_in_threadpool(source_identity)
+        if assessment.get("fingerprint") != identity:
+            raise ValueError("The source video changed. Check its media history again.")
         await run_in_threadpool(render_tiktok_variant, source, destination)
+        final_identity, final_digest = await run_in_threadpool(source_identity)
+        if (identity, digest) != (final_identity, final_digest):
+            destination.unlink(missing_ok=True)
+            raise ValueError("The source video changed during conversion. Create the vertical variant again.")
+        def record_variant_origin() -> None:
+            write_media_provenance(
+                destination, ai_generated=assessment.get("isAigc"),
+                reasons=["Vertical framing preserves the source video's media.", *assessment.get("reasons", [])],
+                source={"kind": "deterministic-derivative", "filename": source.name, "sha256": digest},
+            )
+        await run_in_threadpool(record_variant_origin)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
