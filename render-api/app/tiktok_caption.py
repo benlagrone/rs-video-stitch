@@ -51,8 +51,10 @@ def _prompt(context: dict) -> str:
         "Write one ready-to-edit TikTok POST CAPTION for the supplied video. This is the post description, not subtitles or scene narration.\n"
         f"Write the hook, body and call to action in {language}; do not translate into another language. Proper names and addresses may retain their original spelling.\n"
         "Start with a concise, engaging hook. Include two or three useful supported details and a short call to action, followed by 3 to 5 relevant hashtags.\n"
-        "Aim for 60 to 120 English words, or 100 to 220 Chinese characters, plus hashtags. Stay below 2200 UTF-16 units.\n"
+        "Use only 2 to 3 short sentences of details plus the call to action. Aim for 60 to 120 English words, or 100 to 220 Chinese characters, plus hashtags. Stay below 2200 UTF-16 units.\n"
         "Use only the supplied facts. Never invent prices, measurements, room counts, scarcity, school or transit claims, incentives, phone numbers, email addresses or URLs.\n"
+        "Do not add readiness, visibility or condition claims such as move-in ready, turnkey, fully equipped or excellent exposure unless the source explicitly states them. Hashtags must follow the same rule.\n"
+        "Preserve the categories and relationships in the source: a neighboring school or academy is not a hospital. Do not combine nearby healthcare facilities and other neighboring businesses into one category. Omit a named institution if its role cannot be stated accurately.\n"
         "For a listing, invite the viewer to contact the supplied representative or schedule a showing. Preserve agent roles: do not call a showing agent the listing agent. Contact details are optional; include only those explicitly supplied below.\n"
         "For other video types, use a relevant brief call to action without introducing a property broker.\n"
         "Do not include placeholders, notes, Markdown fences, a heading, character counts, or explanations. Return only the caption.\n"
@@ -90,6 +92,14 @@ def _validation_error(caption: str, context: dict) -> str:
     if context["language"] == "en-US" and chinese / max(1, chinese + latin) > 0.3:
         return "Write the caption body in English."
     facts = json.dumps(context, ensure_ascii=False)
+    # Marketing rewrites must not turn an existing setup into a promise about
+    # readiness or exposure. Check hashtags too, since they can make the claim.
+    compact_caption = re.sub(r"[\W_]+", "", caption).casefold()
+    compact_facts = re.sub(r"[\W_]+", "", facts).casefold()
+    for claim in ("move-in ready", "turnkey", "fully equipped", "excellent exposure", "high visibility", "拎包入住", "即刻入驻"):
+        claim_key = re.sub(r"[\W_]+", "", claim).casefold()
+        if claim_key in compact_caption and claim_key not in compact_facts:
+            return f"Remove the unsupported claim {claim!r}, including any hashtag making that claim."
     if _numbers(caption) - _numbers(facts):
         return "Remove every numerical detail not explicitly supplied in the source facts."
     for email in re.findall(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", caption):
