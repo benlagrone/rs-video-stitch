@@ -2401,6 +2401,15 @@ async def tiktok_highlight_plan(pid: str, req: TikTokHighlightPlanRequest, db: S
     return {"plan": plan}
 
 
+def _freeze_spoken_caption_choice(pid: str, plan: dict) -> None:
+    """Store the caption choice with the plan instead of reading it mid-render."""
+    saved_options = (read_project_state(pid) or {}).get("renderOptions") or {}
+    enabled = plan.get("spokenCaptionsEnabled", saved_options.get("captionsEnabled") is True)
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=422, detail="spokenCaptionsEnabled must be a boolean")
+    plan["spokenCaptionsEnabled"] = enabled
+
+
 @app.put("/v1/projects/{pid}/tiktok/highlight/plan")
 async def tiktok_highlight_save(pid: str, req: TikTokHighlightRenderRequest, db: Session = Depends(get_db)) -> dict:
     if _active_highlight_job(pid, db):
@@ -2409,6 +2418,7 @@ async def tiktok_highlight_save(pid: str, req: TikTokHighlightRenderRequest, db:
         plan = await run_in_threadpool(validate_plan, pid, req.plan)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _freeze_spoken_caption_choice(pid, plan)
     state = _read_highlight_state(pid)
     state.update(plan=plan, updatedAt=time.time())
     _save_highlight_state(pid, state)
@@ -2424,6 +2434,7 @@ async def tiktok_highlight_render(pid: str, req: TikTokHighlightRenderRequest, d
         plan = await run_in_threadpool(validate_plan, pid, req.plan)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _freeze_spoken_caption_choice(pid, plan)
     project = db.get(Project, pid)
     if project is None:
         project = Project(id=pid)
@@ -2576,6 +2587,9 @@ async def tiktok_variant(pid: str, req: TikTokVariantRequest) -> TikTokVariantRe
     if not source.exists() or not source.is_file():
         raise HTTPException(status_code=404, detail="video not found")
     destination = p_output(pid) / f"tiktok_{Path(source_name).stem}.mp4"
+    project_state = read_project_state(pid) or {}
+    saved_options = project_state.get("renderOptions") or {}
+    captions_enabled = req.captionsEnabled if req.captionsEnabled is not None else saved_options.get("captionsEnabled") is True
     try:
         assessment = await run_in_threadpool(artifact_ai_status, pid, source_name)
         def source_identity() -> tuple[dict, str]:
@@ -2586,7 +2600,14 @@ async def tiktok_variant(pid: str, req: TikTokVariantRequest) -> TikTokVariantRe
         identity, digest = await run_in_threadpool(source_identity)
         if assessment.get("fingerprint") != identity:
             raise ValueError("The source video changed. Check its media history again.")
-        await run_in_threadpool(render_tiktok_variant, source, destination)
+        if captions_enabled or source.with_suffix(".captions.json").is_file():
+            await run_in_threadpool(
+                render_tiktok_variant, source, destination,
+                captions_enabled=captions_enabled, project_id=pid,
+                language=saved_options.get("ttsLanguage") or project_state.get("language"),
+            )
+        else:
+            await run_in_threadpool(render_tiktok_variant, source, destination)
         final_identity, final_digest = await run_in_threadpool(source_identity)
         if (identity, digest) != (final_identity, final_digest):
             destination.unlink(missing_ok=True)
@@ -2610,6 +2631,7 @@ async def tiktok_variant(pid: str, req: TikTokVariantRequest) -> TikTokVariantRe
         "width": 1080,
         "height": 1920,
         "createdAt": time.time(),
+        "captionsEnabled": captions_enabled,
     }
     state["updatedAt"] = time.time()
     save_project_state(pid, state, project_name=str(state.get("title") or pid))

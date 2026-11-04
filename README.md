@@ -34,6 +34,31 @@ Animation-prompt writing is camera-aware. Locked composition rejects or rewrites
 
 ## Architecture
 
+### Video captions
+
+Enable **Narration → Video captions (subtitles) → Burn captions into video**, then
+save and render. The same choice applies to new vertical TikTok versions and
+highlights; it is separate from the TikTok post-description caption tool.
+
+Stitched footage uses timestamped Whisper transcription of the assembled audio,
+including the pauses introduced by opening and transition cards. MediaStudio
+calls the existing Fortress voice gateway server-side in short overlapping
+chunks; provider credentials stay in the gateway. Audio and model fingerprints
+prevent a transcript from being reused for a different recording.
+
+Photo videos use the exact scene narration script, divided into short phrases
+over each measured narration duration. This phrase timing is proportional,
+rather than word-level forced alignment. Captions use a CJK-capable font and
+produce matching `.srt`, `.ass`, and `.captions.json` files in Downloads. Silent
+cards stay blank. Requested captions fail clearly if no speech/script is found.
+
+Photo-based TikTok versions reuse cues bound to the exact captioned master;
+render older photo masters with captions first. A verified retained clean
+master prevents cropped or doubled subtitles. Disabling captions for a new
+version uses that clean source, and old generated subtitle bundles are archived
+under the project's work directory rather than left beside a new uncaptioned
+video.
+
 - **render-api service** – FastAPI app handling project + asset management, render job creation, job status, and artifact streaming.
 
 - **render-worker service** – Python worker loop that polls queued jobs, runs the FFmpeg pipeline, emits progress/logs, and records artifacts. When the API runs outside Docker it can spawn the same worker in-process for convenience.

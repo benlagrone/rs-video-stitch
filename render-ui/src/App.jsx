@@ -37,6 +37,7 @@ const DEFAULT_RENDER_OPTIONS = {
   voiceDir: null,
   music: null,
   ducking: false,
+  captionsEnabled: false,
   introEnabled: false,
   introTitle: '',
   introLeaderImage: null,
@@ -1700,7 +1701,7 @@ export function App() {
       const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/tiktok/variant`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: source }),
+        body: JSON.stringify({ filename: source, captionsEnabled: Boolean(renderOptions.captionsEnabled) }),
       });
       setTiktokVariantSource(source);
       setTiktokVariantFilename(result.filename);
@@ -2433,6 +2434,23 @@ export function App() {
           {activeVoiceProvider && <span className="voice-source-note">Source: {activeVoiceProvider.label}</span>}
           <label>Language<input value={language} onChange={(event) => { setLanguage(event.target.value); setYoutubeProfile(youtubeProfileForLanguage(event.target.value)); }} /></label>
 
+          <h2>Video captions (subtitles)</h2>
+          <label className="check-row"><input
+            type="checkbox"
+            checked={Boolean(renderOptions.captionsEnabled)}
+            aria-describedby="video-caption-source"
+            onChange={(event) => {
+              const enabled = event.target.checked;
+              setRenderOptions((current) => ({ ...current, captionsEnabled: enabled }));
+            }}
+          />Burn captions into video</label>
+          <p className="hint" id="video-caption-source">
+            {sourceFootage.length
+              ? 'Whisper transcribes the recorded audio for timed captions in the stitched video.'
+              : 'Captions use the same scene narration script used to generate the voice.'}
+            {' '}Applies to the main render and newly created TikTok variants and highlights. Save the project and render to apply captions.
+          </p>
+
           <div className="settings-section-heading">
             <h2>Intro</h2>
             <button type="button" onClick={generateLeadCard} disabled={isGeneratingIntro || (!title.trim() && !script.trim())}>
@@ -3009,6 +3027,7 @@ export function App() {
                   projectId={resolvedProjectId}
                   outputs={outputs}
                   defaultSource={outputName}
+                  spokenCaptionsEnabled={Boolean(renderOptions.captionsEnabled)}
                   request={request}
                   outputHref={outputHref}
                   onCreated={handleTikTokHighlightCreated}

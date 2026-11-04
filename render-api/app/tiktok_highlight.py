@@ -272,6 +272,8 @@ def validate_plan(project_id: str, plan: dict) -> dict:
         raise ValueError("Add the broker, brokerage, and contact phone number")
     result["contact"] = contact
     result["captionSource"] = "project-text"
+    if "spokenCaptionsEnabled" in result and not isinstance(result["spokenCaptionsEnabled"], bool):
+        raise ValueError("Spoken captions must be enabled or disabled")
     return result
 
 
@@ -397,6 +399,15 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
 
     plan = validate_plan(project_id, plan)
     source = _source_path(project_id, plan["sourceFilename"])
+    spoken_enabled = plan.get("spokenCaptionsEnabled", False)
+    prepared_captions = None
+    render_source = source
+    if spoken_enabled or source.with_suffix(".captions.json").is_file():
+        from app.caption_variants import prepare_derivative_captions
+
+        prepared_captions = prepare_derivative_captions(project_id, source, enabled=spoken_enabled, language=plan.get("language"))
+        if prepared_captions is not None:
+            render_source = prepared_captions.clean_source
     before = {"fingerprint": _fingerprint(source), "sha256": _hash(source)}
     source_ai_media = {
         "filename": source.name,
@@ -413,7 +424,7 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
     filename = f"tiktok_highlight_{source.stem[:110]}_{token}.mp4"
     destination = output / filename
     temporary_output = output / f".{filename}.partial.mp4"
-    source_info = _probe(source)
+    source_info = _probe(render_source)
     has_audio = any(stream.get("codec_type") == "audio" for stream in source_info.get("streams", []))
     last_progress = 0.0
 
@@ -425,6 +436,7 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
     update("HIGHLIGHT_VALIDATE", 0.03)
     pieces: list[Path] = []
     captions: list[tuple[float, float, str]] = []
+    spoken_windows: list[tuple[float, float, float]] = []
     native_media: list[dict] = []
     native_snapshots: dict[Path, dict] = {}
     visual_sources: list[dict] = []
@@ -454,11 +466,11 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
         if section["kind"] == "image":
             return Path(section["assetPath"])
         path = work / f"{name}.jpg"
-        asset = Path(section["assetPath"]) if section["kind"] != "master" else source
+        asset = Path(section["assetPath"]) if section["kind"] != "master" else render_source
         offset = section.get("assetStart", second)
         crop = None
         if section["kind"] == "master":
-            crop = analyze_framing(source, second, 1 / FPS, probe=source_info)[0].get("crop")
+            crop = analyze_framing(render_source, second, 1 / FPS, probe=source_info)[0].get("crop")
         command = ["ffmpeg", "-v", "error", "-y", "-ss", f"{offset:.6f}", "-i", str(asset)]
         if crop:
             command += ["-vf", f"crop={crop['width']}:{crop['height']}:{crop['x']}:{crop['y']}"]
@@ -477,7 +489,7 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
     try:
         update("HIGHLIGHT_MAP", 0.04)
         mapping = native_source_map(
-            project_id, source, _read_json(p_input(project_id) / "scenes.json"),
+            project_id, render_source, _read_json(p_input(project_id) / "scenes.json"),
             read_project_state(project_id) or {}, probe_duration=_duration,
             windows=[(segment["sourceStart"], segment["sourceEnd"]) for segment in plan["segments"]],
         )
@@ -487,7 +499,7 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
             ass = work / f"caption_{index:02d}.ass"
             _write_ass(ass, segment["caption"], duration)
             clip = work / f"footage_{index:02d}.mp4"
-            sections = _visual_sections(source, mapping, segment["sourceStart"], segment["sourceEnd"], source_info)
+            sections = _visual_sections(render_source, mapping, segment["sourceStart"], segment["sourceEnd"], source_info)
             for section in sections:
                 record_native(section)
                 visual_sources.append({
@@ -496,7 +508,8 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
                     "assetStart": section.get("assetStart", 0), "crop": section.get("crop"),
                     "framing": section["framing"],
                 })
-            _render_body_section(source, sections, clip, ass, segment["sourceStart"], duration, has_audio, log)
+            spoken_windows.append((segment["sourceStart"], segment["sourceEnd"], cursor))
+            _render_body_section(render_source, sections, clip, ass, segment["sourceStart"], duration, has_audio, log)
             pieces.append(clip)
             captions.extend((cursor + start, cursor + end, text) for start, end, text in _caption_schedule(segment["caption"], duration))
             cursor += duration
@@ -528,10 +541,32 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
         provenance["nativeAiMedia"] = native_media
         provenance["visualSources"] = visual_sources
         provenance["framingMode"] = "smart-native" if native_media else "adaptive-master"
+        if prepared_captions is not None:
+            from app.caption_variants import verify_derivative_source
+
+            verify_derivative_source(prepared_captions)
+        spoken_report = None
+        if spoken_enabled:
+            from app.caption_variants import apply_derivative_captions
+
+            update("CAPTION_TRANSCRIBE" if prepared_captions.source_type == "whisper" else "CAPTION_TIMING", 0.93)
+            spoken_report = apply_derivative_captions(
+                prepared_captions, temporary_output, destination, windows=spoken_windows,
+                progress_cb=lambda fraction: update("CAPTION_BURN" if fraction >= 0.9 else ("CAPTION_TRANSCRIBE" if prepared_captions.source_type == "whisper" else "CAPTION_TIMING"), 0.93 + 0.04 * fraction), log=log,
+            )
+            temporary_output.unlink(missing_ok=True)
+            provenance["spokenCaptions"] = {"enabled": True, "source": spoken_report["source"], "cueCount": spoken_report["cueCount"]}
+        else:
+            temporary_output.replace(destination)
+            if destination.with_suffix(".captions.json").is_file():
+                from app.caption_variants import retire_caption_sidecars
+
+                retire_caption_sidecars(destination)
+        feature_name = f"{destination.stem}.features.srt" if spoken_enabled else f"{destination.stem}.srt"
+        provenance["featureCaptionFile"] = feature_name
         # Only complete, validated files become selectable project outputs.
         (output / f"{destination.stem}.highlight.json").write_text(json.dumps(provenance, ensure_ascii=False, indent=2), encoding="utf-8")
-        (output / f"{destination.stem}.srt").write_text("\n\n".join(f"{index + 1}\n{_srt_time(start)} --> {_srt_time(end)}\n{text}" for index, (start, end, text) in enumerate(captions)) + "\n", encoding="utf-8")
-        temporary_output.replace(destination)
+        (output / feature_name).write_text("\n\n".join(f"{index + 1}\n{_srt_time(start)} --> {_srt_time(end)}\n{text}" for index, (start, end, text) in enumerate(captions)) + "\n", encoding="utf-8")
         write_media_provenance(
             destination,
             ai_generated=output_ai_generated,

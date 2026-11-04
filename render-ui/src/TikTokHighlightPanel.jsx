@@ -13,6 +13,9 @@ const STAGES = {
   HIGHLIGHT_GRAPHICS: 'Rendering vertical HyperFrames',
   CAPTIONS: 'Adding project-text captions',
   HIGHLIGHT_CAPTIONS: 'Adding project-text captions',
+  CAPTION_TRANSCRIBE: 'Transcribing recorded audio with Whisper',
+  CAPTION_TIMING: 'Timing narration-script captions',
+  CAPTION_BURN: 'Burning captions into video',
   CONCAT: 'Assembling the highlight',
   HIGHLIGHT_ASSEMBLE: 'Assembling the highlight',
   FINALIZE: 'Checking the completed highlight',
@@ -20,7 +23,7 @@ const STAGES = {
 const prettyStage = (stage) => STAGES[stage] || String(stage || 'Preparing highlight').replaceAll('_', ' ').toLowerCase();
 const message = (error) => error?.message || String(error);
 
-export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = '', request, onCreated, outputHref }) {
+export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = '', spokenCaptionsEnabled = false, request, onCreated, outputHref }) {
   const [source, setSource] = useState('');
   const [targetDuration, setTargetDuration] = useState(45);
   const [plan, setPlan] = useState(null);
@@ -154,6 +157,7 @@ export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = 
 
   async function generatePlan(renderAutomatically = false) {
     const expectedProject = projectId;
+    const renderCaptionsEnabled = Boolean(spokenCaptionsEnabled);
     setBusy(renderAutomatically ? 'automatic' : 'planning');
     setError('');
     setNotice('');
@@ -169,7 +173,7 @@ export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = 
         setBusy('queueing');
         const queued = await callbacks.current.request(`${base}/render`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ plan: result.plan }),
+          body: JSON.stringify({ plan: { ...result.plan, spokenCaptionsEnabled: renderCaptionsEnabled } }),
         });
         if (currentProject.current !== expectedProject) return;
         setFilename('');
@@ -189,15 +193,16 @@ export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = 
 
   async function savePlan() {
     const expectedProject = projectId;
+    const savedPlan = { ...normalizeHighlightPlan(plan), spokenCaptionsEnabled: Boolean(spokenCaptionsEnabled) };
     setBusy('saving');
     setError('');
     try {
       const result = await callbacks.current.request(`${base}/plan`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan: normalizeHighlightPlan(plan) }),
+        body: JSON.stringify({ plan: savedPlan }),
       });
       if (currentProject.current !== expectedProject) return;
-      setPlan(result.plan || normalizeHighlightPlan(plan));
+      setPlan(result.plan || savedPlan);
       setDirty(false);
       setNotice('Highlight plan saved. Render it to update the highlight video.');
     } catch (err) {
@@ -215,7 +220,7 @@ export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = 
     try {
       const result = await callbacks.current.request(`${base}/render`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan: normalizeHighlightPlan(plan) }),
+        body: JSON.stringify({ plan: { ...normalizeHighlightPlan(plan), spokenCaptionsEnabled: Boolean(spokenCaptionsEnabled) } }),
       });
       if (currentProject.current !== expectedProject) return;
       setDirty(false);
@@ -240,7 +245,7 @@ export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = 
       <div className="tiktok-highlight__heading">
         <h4>Automatic TikTok highlight</h4><span>30–60 seconds · 9:16</span>
       </div>
-      <p>Build a separate highlight with vertical HyperFrames, project-text captions and Jie’s contact card. Each shot uses its original portrait or landscape framing; verified padding is removed. Your original YouTube video stays unchanged.</p>
+      <p>Build a separate highlight with vertical HyperFrames, project-text captions and Jie’s contact card. Each shot uses its original portrait or landscape framing; verified padding is removed. Your original YouTube video stays unchanged. Spoken subtitles follow the Video captions setting above.</p>
       <div className="tiktok-highlight__controls">
         <label className="tiktok-highlight__field">Highlight source video
           <select value={source} onChange={(event) => { setSource(event.target.value); setPlan(null); setDirty(false); setNotice(''); }} disabled={editingDisabled}>

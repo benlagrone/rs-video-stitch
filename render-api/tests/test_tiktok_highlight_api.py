@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
@@ -78,6 +79,24 @@ class TikTokHighlightApiTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as error:
             await api.tiktok_highlight_save("property", self.request(), self.db)
         self.assertEqual(error.exception.status_code, 409)
+
+    async def test_spoken_caption_choice_is_frozen_when_the_highlight_is_queued(self):
+        saved = {"renderOptions": {"captionsEnabled": True}}
+        with patch.object(api, "validate_plan", side_effect=lambda _pid, plan: deepcopy(plan)), patch.object(api, "read_project_state", return_value=saved):
+            result = await api.tiktok_highlight_render("property", self.request(), self.db)
+        saved["renderOptions"]["captionsEnabled"] = False
+        job = self.db.get(Job, result["jobId"])
+        self.assertTrue(job.payload["plan"]["spokenCaptionsEnabled"])
+        self.assertEqual(self.master_state.read_bytes(), self.original_state)
+
+    async def test_explicit_caption_choice_overrides_saved_setting_and_rejects_strings(self):
+        with patch.object(api, "read_project_state", return_value={"renderOptions": {"captionsEnabled": True}}):
+            plan = {"spokenCaptionsEnabled": False}
+            api._freeze_spoken_caption_choice("property", plan)
+            self.assertFalse(plan["spokenCaptionsEnabled"])
+            with self.assertRaises(HTTPException) as error:
+                api._freeze_spoken_caption_choice("property", {"spokenCaptionsEnabled": "false"})
+            self.assertEqual(error.exception.status_code, 422)
 
     async def test_finished_artifact_and_caption_sidecar_are_read_back_from_job(self):
         with patch.object(api, "validate_plan", return_value=self.plan):

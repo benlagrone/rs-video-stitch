@@ -29,6 +29,9 @@ test('translates worker stages into operator-friendly labels', () => {
   assert.equal(renderStageLabel('AUDIO_PREP'), 'Preparing narration and scene media');
   assert.equal(renderStageLabel('SCENE_BUILD[04]'), 'Building scene 5');
   assert.equal(renderStageLabel('CONCAT'), 'Assembling the final video');
+  assert.equal(renderStageLabel('CAPTION_TRANSCRIBE'), 'Transcribing recorded audio with Whisper');
+  assert.equal(renderStageLabel('CAPTION_TIMING'), 'Timing narration-script captions');
+  assert.equal(renderStageLabel('CAPTION_BURN'), 'Burning captions into video');
 });
 
 test('keeps completed phases visible when a later phase fails', () => {

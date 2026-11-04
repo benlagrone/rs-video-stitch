@@ -149,6 +149,7 @@ class RenderOptions(BaseModel):
     ducking: bool = Field(default=False)
     titleStyle: Optional[TitleStyle] = None
     scriptureCaptionEnabled: bool = Field(default=False)
+    captionsEnabled: bool = Field(default=False)
     introEnabled: bool = Field(default=False)
     introTitle: Optional[str] = None
     introBackgroundImage: Optional[str] = None
@@ -372,6 +373,7 @@ class TikTokPublishRequest(BaseModel):
 
 class TikTokVariantRequest(BaseModel):
     filename: str = Field(default="video.mp4")
+    captionsEnabled: Optional[bool] = None
 
 
 class TikTokMediaReviewRequest(BaseModel):

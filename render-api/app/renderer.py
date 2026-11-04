@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -700,13 +701,46 @@ def run(cmd: List[str], log: Optional[LogFunc] = None) -> None:
         raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{process.stdout}")
 
 
-def render_tiktok_variant(source: Path, destination: Path, log: Optional[LogFunc] = None) -> Path:
+def render_tiktok_variant(
+    source: Path,
+    destination: Path,
+    log: Optional[LogFunc] = None,
+    *,
+    captions_enabled: bool = False,
+    project_id: Optional[str] = None,
+    language: Optional[str] = None,
+) -> Path:
     """Frame each orientation directly, removing only verified existing padding."""
     from app.vertical_framing import analyze_framing, vertical_filter
 
     if not source.exists() or not source.is_file():
         raise FileNotFoundError(f"Video file not found: {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if captions_enabled and not project_id:
+        raise ValueError("A project is required to add captions to a TikTok variant")
+    if project_id and (captions_enabled or source.with_suffix(".captions.json").is_file()):
+        from app.caption_variants import (
+            apply_derivative_captions,
+            prepare_derivative_captions,
+            verify_derivative_source,
+        )
+
+        prepared = prepare_derivative_captions(project_id, source, enabled=captions_enabled, language=language)
+        if prepared is None and captions_enabled:
+            raise ValueError("Captions were requested, but no verified caption source was available")
+        if prepared is not None:
+            # Reframe clean pixels first. Cropping a master with burned-in text
+            # would cut words off or duplicate them beneath vertical captions.
+            with tempfile.TemporaryDirectory(prefix=".tiktok-captions-", dir=destination.parent) as temporary:
+                framed = Path(temporary) / destination.name
+                render_tiktok_variant(prepared.clean_source, framed, log)
+                if captions_enabled:
+                    apply_derivative_captions(prepared, framed, destination, log=log)
+                else:
+                    verify_derivative_source(prepared)
+                    os.replace(framed, destination)
+                    _retire_spoken_caption_sidecars(destination)
+            return destination
     duration = ffprobe_duration(source)
     framing = analyze_framing(source, 0.0, duration)
     if len(framing) == 1:
@@ -738,6 +772,7 @@ def render_tiktok_variant(source: Path, destination: Path, log: Optional[LogFunc
                 "-map", "0:v:0", "-map", "1:a?", "-t", f"{duration:.6f}", "-c:v", "copy",
                 "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(destination),
             ], log)
+    _retire_spoken_caption_sidecars(destination)
     return destination
 
 
@@ -1541,6 +1576,96 @@ def _generate_selected_thumbnail(input_dir, output_dir, work_dir, scenes_doc, op
     )
 
 
+def _retire_spoken_caption_sidecars(destination: Path) -> None:
+    """A successful captions-off replacement must not advertise old subtitles."""
+    if destination.with_suffix(".captions.json").is_file():
+        from app.caption_variants import retire_caption_sidecars
+
+        retire_caption_sidecars(destination)
+
+
+def _caption_content_windows(scene_files: List[Path], content_files: List[Path]) -> List[tuple[float, float]]:
+    """Locate recorded clips on the assembled clock, excluding inserted cards."""
+    content = set(content_files)
+    windows: List[tuple[float, float]] = []
+    cursor = 0.0
+    for clip in scene_files:
+        duration = ffprobe_duration(clip)
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError(f"Cannot time captions: rendered clip {clip.name} has no duration")
+        if clip in content:
+            windows.append((cursor, cursor + duration))
+        cursor += duration
+    return windows
+
+
+def _apply_spoken_captions(
+    source: Path,
+    destination: Path,
+    work_dir: Path,
+    scene_files: List[Path],
+    *,
+    narration_scripts: Optional[Dict[Path, tuple[str, Optional[float]]]],
+    language: Optional[str],
+    fps: int,
+    preset: str,
+    crf: str,
+    log: Optional[LogFunc],
+    progress: Optional[ProgressFunc],
+    content_windows: Optional[List[tuple[float, float]]] = None,
+) -> None:
+    """Caption recorded speech or the exact narration used by photo scenes."""
+    from app.video_captions import burn_captions, script_cues, transcribe_video
+
+    def update(stage: str, value: float) -> None:
+        if progress:
+            progress(stage, value)
+
+    if narration_scripts is None:
+        update("CAPTION_TRANSCRIBE", 0.90)
+        cues = transcribe_video(
+            source,
+            work_dir,
+            language=language,
+            content_windows=content_windows,
+            progress_cb=lambda fraction: update(
+                "CAPTION_TRANSCRIBE", 0.90 + min(1.0, max(0.0, float(fraction))) * 0.03
+            ),
+        )
+    else:
+        update("CAPTION_TIMING", 0.90)
+        cues = []
+        cursor = 0.0
+        for scene_file in scene_files:
+            duration = ffprobe_duration(scene_file)
+            if not math.isfinite(duration) or duration <= 0:
+                raise ValueError(f"Cannot time captions: rendered clip {scene_file.name} has no duration")
+            narration = narration_scripts.get(scene_file)
+            if narration:
+                text, speech_duration = narration
+                cue_duration = min(duration, speech_duration) if speech_duration is not None else duration
+                cues.extend(script_cues(text, cue_duration, start=cursor))
+            # Intro and transition cards advance time without displaying speech.
+            cursor += duration
+    if not cues:
+        raise ValueError("Captions were requested, but no speech or narration text was available")
+    update("CAPTION_BURN", 0.94)
+    burn_captions(
+        source,
+        destination,
+        cues,
+        width=1920,
+        height=1080,
+        sidecar_base=destination.with_suffix(""),
+        fps=fps,
+        preset=preset,
+        crf=crf,
+        log=log,
+        source_kind="whisper" if narration_scripts is None else "script",
+        content_windows=content_windows,
+    )
+
+
 def _render_source_footage_project(
     pid: str,
     input_dir: Path,
@@ -1562,6 +1687,7 @@ def _render_source_footage_project(
     fps = int(opts.get("fps", DEFAULT_FPS))
     preset = str(opts.get("preset", DEFAULT_PRESET))
     crf = str(opts.get("crf", DEFAULT_CRF))
+    captions_enabled = _truthy(opts.get("captionsEnabled"))
     raw_title_style = opts.get("titleStyle")
     if hasattr(raw_title_style, "model_dump"):
         raw_title_style = raw_title_style.model_dump()
@@ -1722,7 +1848,12 @@ def _render_source_footage_project(
 
     update("CONCAT", 0.8)
     final_path = output_dir / output_name
-    concat_output_path = work_dir / f"pre_logo_{Path(output_name).name}" if logo_enabled else final_path
+    assembled_path = final_path
+    if captions_enabled:
+        assembled_path = work_dir / f"uncaptioned_{Path(output_name).name}"
+    elif final_path.with_suffix(".captions.json").is_file():
+        assembled_path = work_dir / f"caption_off_{Path(output_name).name}"
+    concat_output_path = work_dir / f"pre_logo_{Path(output_name).name}" if logo_enabled else assembled_path
     concat_inputs = [value for clip in scene_files for value in ("-i", str(clip))]
     run(
         [
@@ -1738,7 +1869,7 @@ def _render_source_footage_project(
         _record_media_asset(media_inputs, input_dir, resolved_logo, "logo-overlay", stock_artwork=True)
         _overlay_logo_on_video(
             concat_output_path,
-            final_path,
+            assembled_path,
             resolved_logo,
             logo_corner,
             logo_margin,
@@ -1746,6 +1877,19 @@ def _render_source_footage_project(
             crf,
             log,
         )
+    if captions_enabled:
+        video_meta = scenes_doc.get("video") or scenes_doc.get("vid") or {}
+        _apply_spoken_captions(
+            assembled_path, final_path, work_dir, scene_files,
+            narration_scripts=None,
+            language=opts.get("ttsLanguage") or video_meta.get("language") or video_meta.get("lang"),
+            fps=fps, preset=preset, crf=crf, log=log, progress=progress,
+            content_windows=_caption_content_windows(scene_files, prepared_clips),
+        )
+    else:
+        if assembled_path != final_path:
+            os.replace(assembled_path, final_path)
+        _retire_spoken_caption_sidecars(final_path)
     if thumbnail_file:
         _log(log, f"Thumbnail ready: {thumbnail_file}")
     manifest = _write_hyperframes_manifest(output_dir, output_name, hyperframes_binding)
@@ -1808,6 +1952,7 @@ def render_project(
         raw_title_style = raw_title_style.model_dump()
     title_style = dict(raw_title_style) if isinstance(raw_title_style, dict) else {}
     scripture_caption_enabled = _truthy(opts.get("scriptureCaptionEnabled"))
+    captions_enabled = _truthy(opts.get("captionsEnabled"))
     voice_dir = opts.get("voiceDir")
     tts_api = (
         opts.get("ttsApi")
@@ -1902,6 +2047,7 @@ def render_project(
     update("VALIDATE", 0.05)
 
     scene_files = []
+    narration_scripts: Dict[Path, tuple[str, Optional[float]]] = {}
     media_inputs: List[Dict[str, Any]] = []
 
     for index, scene in enumerate(scenes):
@@ -2254,6 +2400,11 @@ def render_project(
             log,
         )
         scene_files.append(scene_file)
+        if captions_enabled:
+            narration_scripts[scene_file] = (
+                voice_text,
+                audio_duration if voice_path is not None or synthesized_provider else None,
+            )
 
     update("CONCAT", 0.9)
     thumbnail_file: Optional[Path] = None
@@ -2361,7 +2512,12 @@ def render_project(
         scene_files = ([intro_file] if intro_file else []) + rendered_scene_files
 
     final_path = output_dir / output_name
-    concat_output_path = final_path
+    assembled_path = final_path
+    if captions_enabled:
+        assembled_path = work_dir / f"uncaptioned_{Path(output_name).name}"
+    elif final_path.with_suffix(".captions.json").is_file():
+        assembled_path = work_dir / f"caption_off_{Path(output_name).name}"
+    concat_output_path = assembled_path
     if logo_enabled:
         concat_output_path = work_dir / f"pre_logo_{Path(output_name).name}"
     concat_inputs: List[str] = []
@@ -2405,7 +2561,7 @@ def render_project(
         _record_media_asset(media_inputs, input_dir, logo_path, "logo-overlay", stock_artwork=True)
         _overlay_logo_on_video(
             concat_output_path,
-            final_path,
+            assembled_path,
             logo_path,
             logo_corner,
             logo_margin,
@@ -2413,6 +2569,18 @@ def render_project(
             crf,
             log,
         )
+
+    if captions_enabled:
+        _apply_spoken_captions(
+            assembled_path, final_path, work_dir, scene_files,
+            narration_scripts=narration_scripts,
+            language=tts_language,
+            fps=fps, preset=preset, crf=crf, log=log, progress=progress,
+        )
+    else:
+        if assembled_path != final_path:
+            os.replace(assembled_path, final_path)
+        _retire_spoken_caption_sidecars(final_path)
 
     hyperframes_manifest = _write_hyperframes_manifest(output_dir, output_name, hyperframes_binding)
     if hyperframes_manifest:

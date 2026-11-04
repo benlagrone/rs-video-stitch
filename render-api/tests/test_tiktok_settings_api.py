@@ -126,6 +126,25 @@ class TikTokSettingsApiTests(unittest.IsolatedAsyncioTestCase):
         save.assert_not_called()
         self.assertFalse((self.output / "tiktok_tour.mp4").exists())
 
+    async def test_vertical_variant_passes_caption_source_settings_to_renderer(self):
+        assessment = {"status": "original", "isAigc": False, "fingerprint": self.fingerprint}
+        def convert(_source, destination, **_options):
+            destination.write_bytes(b"captioned vertical video")
+        saved = {"renderOptions": {"captionsEnabled": False, "ttsLanguage": "zh-CN"}}
+        with patch.object(api, "read_project_state", return_value=saved), patch.object(api, "artifact_ai_status", return_value=assessment), patch.object(api, "render_tiktok_variant", side_effect=convert) as render, patch.object(api, "write_media_provenance"), patch.object(api, "save_project_state") as save:
+            await api.tiktok_variant("property", TikTokVariantRequest(filename="tour.mp4", captionsEnabled=True))
+        self.assertEqual(render.call_args.kwargs, {"captions_enabled": True, "project_id": "property", "language": "zh-CN"})
+        self.assertTrue(save.call_args.args[1]["tiktokVariant"]["captionsEnabled"])
+
+    async def test_explicit_captions_off_overrides_a_saved_enabled_setting(self):
+        assessment = {"status": "original", "isAigc": False, "fingerprint": self.fingerprint}
+        def convert(_source, destination):
+            destination.write_bytes(b"vertical video")
+        with patch.object(api, "read_project_state", return_value={"renderOptions": {"captionsEnabled": True}}), patch.object(api, "artifact_ai_status", return_value=assessment), patch.object(api, "render_tiktok_variant", side_effect=convert) as render, patch.object(api, "write_media_provenance"), patch.object(api, "save_project_state") as save:
+            await api.tiktok_variant("property", TikTokVariantRequest(filename="tour.mp4", captionsEnabled=False))
+        self.assertFalse(render.call_args.kwargs)
+        self.assertFalse(save.call_args.args[1]["tiktokVariant"]["captionsEnabled"])
+
     async def test_invalid_file_has_a_clear_validation_error(self):
         with patch.object(api, "artifact_ai_status", side_effect=ValueError("Choose an existing project video")):
             with self.assertRaises(HTTPException) as error:

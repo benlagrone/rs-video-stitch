@@ -20,10 +20,14 @@ test('highlight duration includes the opening, closing and transition cards', ()
 test('editing clip times updates the complete exported duration without replacing other settings', () => {
   const edited = plan();
   edited.segments[0].sourceStart = '12';
+  edited.captionSource = 'project-text';
+  edited.spokenCaptionsEnabled = true;
   const normalized = normalizeHighlightPlan(edited);
   assert.equal(normalized.durationSeconds, 43);
   assert.equal(normalized.segments[0].sourceStart, 12);
   assert.equal(normalized.contact.phone, '832-798-3991');
+  assert.equal(normalized.spokenCaptionsEnabled, true);
+  assert.equal(normalized.captionSource, 'project-text');
   assert.equal(edited.contact.phone, ' 832-798-3991 ');
 });
 

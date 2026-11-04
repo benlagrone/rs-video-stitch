@@ -14,6 +14,9 @@ const STAGE_LABELS = {
   VALIDATE: 'Validating project assets',
   AUDIO_PREP: 'Preparing narration and scene media',
   CONCAT: 'Assembling the final video',
+  CAPTION_TRANSCRIBE: 'Transcribing recorded audio with Whisper',
+  CAPTION_TIMING: 'Timing narration-script captions',
+  CAPTION_BURN: 'Burning captions into video',
   FINALIZE: 'Finalizing video and thumbnail',
   ERROR: 'Render failed',
 };

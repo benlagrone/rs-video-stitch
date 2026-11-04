@@ -75,6 +75,16 @@ motion jobs heartbeat the lease until the artifact is downloaded and validated.
 Provider health and model inventory requests are read-only diagnostics and do
 not acquire a lease.
 
+Optional spoken subtitles also remain a Sextant render workflow. Recorded
+footage is transcribed through the existing `fortress-lan:voice-gateway`
+`/control/api/voice/transcriptions` route, using the configured
+`VOICE_GATEWAY_URL`. The gateway owns its private Whisper adapter and token;
+MediaStudio never calls the STT provider port directly. Whisper currently runs
+on CPU, and audio chunks stay within the gateway's existing request timeout.
+Photo narration captions use the saved narration text instead of STT. Main,
+vertical and highlight outputs bind caption cues to the exact rendered media;
+ordinary subtitle burning does not change the source's AI-media classification.
+
 MediaStudio keeps independent `english` and `mandarin` YouTube publishing
 profiles. The existing `/videos/youtube_token.json` remains the English token;
 Mandarin authorization is stored separately at
@@ -104,6 +114,7 @@ Run from the checked-out repository on Sextant after deployment:
 ```bash
 bash scripts/verify-sextant-mediastudio.sh
 bash scripts/verify-sextant-bible-video.sh
+bash scripts/verify-sextant-video-captions.sh
 ```
 
 The full MediaStudio smoke check verifies placement, API readiness, UI

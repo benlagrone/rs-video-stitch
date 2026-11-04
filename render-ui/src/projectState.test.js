@@ -135,11 +135,13 @@ test('preserves saved Mandarin title style overrides', () => {
     language: 'zh-CN',
     renderOptions: {
       crf: 20,
+      captionsEnabled: true,
       titleStyle: { fontSize: 52, fill: '#f0f0f0' },
     },
   });
 
   assert.equal(options.crf, 20);
+  assert.equal(options.captionsEnabled, true);
   assert.equal(options.titleStyle.fontFamily, 'Noto Sans CJK SC');
   assert.equal(options.titleStyle.fontSize, 52);
   assert.equal(options.titleStyle.fill, '#f0f0f0');
