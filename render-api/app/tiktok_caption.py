@@ -74,6 +74,16 @@ def _numbers(text: str) -> set[str]:
     return result
 
 
+def _has_positive_claim(text: str, claim: str) -> bool:
+    pattern = r"[\s_-]*".join(re.escape(word) for word in re.findall(r"\w+", claim))
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        prefix = text[max(0, match.start() - 40):match.start()]
+        negated = re.search(r"(?:\b(?:not|never|no|isn['’]t|aren['’]t|wasn['’]t)\s+(?:(?:yet|currently|quite|necessarily)\s+)*|(?:不|并非|尚未|未能|无法|不能))$", prefix, re.IGNORECASE)
+        if not negated:
+            return True
+    return False
+
+
 def _validation_error(caption: str, context: dict) -> str:
     if not caption or len(caption.encode("utf-16-le")) // 2 > 2200:
         return "Return a nonempty complete caption under 2200 UTF-16 units."
@@ -94,11 +104,8 @@ def _validation_error(caption: str, context: dict) -> str:
     facts = json.dumps(context, ensure_ascii=False)
     # Marketing rewrites must not turn an existing setup into a promise about
     # readiness or exposure. Check hashtags too, since they can make the claim.
-    compact_caption = re.sub(r"[\W_]+", "", caption).casefold()
-    compact_facts = re.sub(r"[\W_]+", "", facts).casefold()
     for claim in ("move-in ready", "turnkey", "fully equipped", "excellent exposure", "high visibility", "拎包入住", "即刻入驻"):
-        claim_key = re.sub(r"[\W_]+", "", claim).casefold()
-        if claim_key in compact_caption and claim_key not in compact_facts:
+        if _has_positive_claim(caption, claim) and not _has_positive_claim(context["sourceText"], claim):
             return f"Remove the unsupported claim {claim!r}, including any hashtag making that claim."
     if _numbers(caption) - _numbers(facts):
         return "Remove every numerical detail not explicitly supplied in the source facts."

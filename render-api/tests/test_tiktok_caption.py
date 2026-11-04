@@ -83,6 +83,18 @@ class TikTokCaptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(generate_caption(self.context(originalScriptText=SOURCE + " Move-in ready."), generator), value)
         self.assertEqual(generator.call_count, 1)
 
+    def test_negated_source_does_not_authorize_a_positive_readiness_claim(self):
+        value = ENGLISH.replace("Office space", "Move-in ready office space")
+        generator = Mock(side_effect=[value, ENGLISH])
+        self.assertEqual(generate_caption(self.context(originalScriptText=SOURCE + " Not yet move-in ready."), generator), ENGLISH)
+        self.assertEqual(generator.call_count, 2)
+
+    def test_negated_readiness_remains_available_when_stated_in_source(self):
+        value = ENGLISH.replace("Office space", "Not yet move-in ready office space")
+        generator = Mock(return_value=value)
+        self.assertEqual(generate_caption(self.context(originalScriptText=SOURCE + " Not yet move-in ready."), generator), value)
+        self.assertEqual(generator.call_count, 1)
+
     def test_unsupported_email_url_or_phone_is_rejected(self):
         for extra in (" Email fake@example.com.", " Visit https://invented.example.", " Call 832-3991-798."):
             with self.subTest(extra=extra), self.assertRaises(CaptionGenerationError):
