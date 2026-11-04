@@ -174,7 +174,7 @@ class RenderMediaProvenanceTests(TestCase):
                     self.assertIs(record["isAigc"], True)
 
     def test_only_exact_stock_artwork_gets_an_original_default_and_ai_provenance_wins(self):
-        packaged = Path(__file__).resolve().parents[2] / "media" / "brand" / "logo3.png"
+        packaged = renderer._resolve_logo_image(self.input, "logo3.png", None)
         custom = self.input / "custom-logo.png"
         custom.write_bytes(packaged.read_bytes())
         inputs = []
