@@ -55,7 +55,9 @@ def _source_path(project_id: str, name: str) -> Path:
 
 def _fingerprint(source: Path) -> dict:
     stat = source.stat()
-    return {"size": stat.st_size, "mtimeNs": stat.st_mtime_ns}
+    # Nanosecond epoch timestamps exceed JavaScript's exact integer range.
+    # Keep them as strings through browser edits and JSON round trips.
+    return {"size": stat.st_size, "mtimeNs": str(stat.st_mtime_ns)}
 
 
 def _read_json(path: Path) -> dict:

@@ -106,6 +106,23 @@ class HighlightPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source video changed"):
             highlight.validate_plan("project", plan)
 
+    def test_source_fingerprint_survives_javascript_number_round_trip(self):
+        timestamp = 2 ** 60 + 12345
+        os.utime(self.master, ns=(timestamp, timestamp))
+        plan = self.plan()
+        fingerprint = plan["sourceFingerprint"]
+        self.assertIsInstance(fingerprint["mtimeNs"], str)
+        self.assertEqual(fingerprint["mtimeNs"], str(self.master.stat().st_mtime_ns))
+        self.assertGreater(int(fingerprint["mtimeNs"]), 2 ** 53)
+        # JavaScript JSON.parse treats every JSON number as a double. The
+        # timestamp string must retain every digit through that browser path.
+        browser_plan = json.loads(json.dumps(plan), parse_int=float)
+        validated = highlight.validate_plan("project", browser_plan)
+        self.assertEqual(validated["sourceFingerprint"], fingerprint)
+        self.master.write_bytes(b"a different completed render")
+        with self.assertRaisesRegex(ValueError, "source video changed"):
+            highlight.validate_plan("project", browser_plan)
+
     def test_invalid_ranges_and_repeated_footage_are_rejected(self):
         plan = self.plan()
         for field, value in (("sourceStart", -1), ("sourceEnd", 130), ("sourceStart", float("nan"))):
