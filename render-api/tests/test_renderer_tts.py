@@ -44,7 +44,7 @@ class RendererTTSTest(TestCase):
             source = Path(tmp) / "youtube-master.mp4"
             destination = Path(tmp) / "tiktok_youtube-master.mp4"
             source.write_bytes(b"video")
-            with mock.patch.object(renderer, "run") as run:
+            with mock.patch.object(renderer, "run") as run, mock.patch.object(renderer, "ffprobe_duration", return_value=12), mock.patch("app.vertical_framing.analyze_framing", return_value=[{"start": 0, "duration": 12, "crop": None}]):
                 result = renderer.render_tiktok_variant(source, destination)
 
         self.assertEqual(result, destination)
@@ -54,6 +54,24 @@ class RendererTTSTest(TestCase):
         self.assertIn("boxblur=20:10", filter_graph)
         self.assertIn("-map", command)
         self.assertIn("0:a?", command)
+
+    def test_mixed_orientation_variant_keeps_one_continuous_original_audio_track(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "mixed.mp4"
+            source.write_bytes(b"video")
+            destination = Path(tmp) / "vertical.mp4"
+            frames = [
+                {"start": 0, "duration": 4, "crop": {"x": 656, "y": 0, "width": 608, "height": 1080}},
+                {"start": 4, "duration": 6, "crop": None},
+            ]
+            with mock.patch.object(renderer, "run") as run, mock.patch.object(renderer, "ffprobe_duration", return_value=10), mock.patch("app.vertical_framing.analyze_framing", return_value=frames):
+                renderer.render_tiktok_variant(source, destination)
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(len(commands), 3)
+        self.assertTrue(all("-an" in command for command in commands[:2]))
+        self.assertIn("crop=608:1080:656:0", commands[0][commands[0].index("-filter_complex") + 1])
+        self.assertIn("1:a?", commands[-1])
+        self.assertEqual(commands[-1][commands[-1].index("-c:v") + 1], "copy")
 
     def test_timeline_headers_respects_explicit_label_visibility(self):
         headers = renderer._timeline_headers(

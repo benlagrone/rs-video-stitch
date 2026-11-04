@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import textwrap
 import time
 import unicodedata
@@ -700,26 +701,43 @@ def run(cmd: List[str], log: Optional[LogFunc] = None) -> None:
 
 
 def render_tiktok_variant(source: Path, destination: Path, log: Optional[LogFunc] = None) -> Path:
-    """Create a 9:16 version without cropping the landscape master video's subject."""
+    """Frame each orientation directly, removing only verified existing padding."""
+    from app.vertical_framing import analyze_framing, vertical_filter
+
     if not source.exists() or not source.is_file():
         raise FileNotFoundError(f"Video file not found: {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    filter_graph = (
-        "[0:v]split=2[background][foreground];"
-        "[background]scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,boxblur=20:10,setsar=1[background];"
-        "[foreground]scale=1080:1920:force_original_aspect_ratio=decrease,setsar=1[foreground];"
-        "[background][foreground]overlay=(W-w)/2:(H-h)/2,format=yuv420p[video]"
-    )
-    run(
-        [
-            "ffmpeg", "-y", "-i", str(source), "-filter_complex", filter_graph,
+    duration = ffprobe_duration(source)
+    framing = analyze_framing(source, 0.0, duration)
+    if len(framing) == 1:
+        run([
+            "ffmpeg", "-y", "-i", str(source), "-filter_complex",
+            vertical_filter("0:v", "video", crop=framing[0].get("crop")),
             "-map", "[video]", "-map", "0:a?", "-c:v", "libx264", "-preset", "medium",
-            "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
-            str(destination),
-        ],
-        log,
-    )
+            "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(destination),
+        ], log)
+    else:
+        with tempfile.TemporaryDirectory(prefix=".tiktok-framing-", dir=destination.parent) as temporary:
+            pieces = []
+            for index, shot in enumerate(framing):
+                piece = Path(temporary) / f"shot_{index:04d}.mp4"
+                run([
+                    "ffmpeg", "-y", "-ss", f"{shot['start']:.6f}", "-i", str(source),
+                    "-t", f"{shot['duration']:.6f}", "-filter_complex",
+                    vertical_filter("0:v", "video", crop=shot.get("crop")),
+                    "-map", "[video]", "-an", "-r", "30", "-c:v", "libx264", "-preset", "medium",
+                    "-crf", "20", str(piece),
+                ], log)
+                pieces.append(piece)
+            playlist = Path(temporary) / "shots.txt"
+            playlist.write_text("\n".join(f"file '{piece.as_posix()}'" for piece in pieces), encoding="utf-8")
+            # Mux the uninterrupted original audio once, independent of visual
+            # orientation cuts, so speech is never reset at a framing boundary.
+            run([
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(playlist), "-i", str(source),
+                "-map", "0:v:0", "-map", "1:a?", "-t", f"{duration:.6f}", "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(destination),
+            ], log)
     return destination
 
 

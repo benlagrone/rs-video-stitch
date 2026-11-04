@@ -145,15 +145,22 @@ verified source version's status. Later editor changes cannot reclassify an
 already rendered video.
 
 For an existing landscape YouTube master, the Render Desk can create a separate
-`tiktok_<source>.mp4` variant at 1080 × 1920. It centers the original video
-over a softened vertical background, preserving the full landscape frame and
-its audio; it never replaces the YouTube master.
+`tiktok_<source>.mp4` variant at 1080 × 1920. Smart framing detects each shot's
+visible picture and removes confidently verified black padding before fitting
+it to the vertical canvas. Portrait and landscape sections are handled
+individually, with one softened background where needed; uninterrupted original
+audio and the YouTube master are preserved.
 
 The **Automatic TikTok highlight** panel creates a separate 30, 45, or 60 second
 portrait edit. **Create automatic highlight** selects source sections, renders
 vertical HyperFrames opening/transition/contact cards, adds editable project-text
 feature captions, and queues the result on the existing Sextant worker. The
-caption overlays use saved project information; they are not a verbatim speech
+highlight uses original photos and clips when their timing and visual content
+match the selected master, preserving its exact audio selections. Flattened
+video falls back to the same padding-aware framing. Existing landscape title
+and transition cards are excluded from automatic selections when verified scene
+timings are available. The caption overlays use saved project information; they
+are not a verbatim speech
 transcript. **Generate editable plan** exposes the clip ranges, hook, captions,
 brokerage, broker, phone, and optional email before rendering. Save that draft
 with **Save highlight plan**, then use **Render edited highlight** to apply edits.

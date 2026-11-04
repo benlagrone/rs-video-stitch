@@ -240,7 +240,7 @@ export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = 
       <div className="tiktok-highlight__heading">
         <h4>Automatic TikTok highlight</h4><span>30–60 seconds · 9:16</span>
       </div>
-      <p>Build a separate highlight with vertical HyperFrames, project-text captions and Jie’s contact card. Your original YouTube video stays unchanged.</p>
+      <p>Build a separate highlight with vertical HyperFrames, project-text captions and Jie’s contact card. Each shot uses its original portrait or landscape framing; verified padding is removed. Your original YouTube video stays unchanged.</p>
       <div className="tiktok-highlight__controls">
         <label className="tiktok-highlight__field">Highlight source video
           <select value={source} onChange={(event) => { setSource(event.target.value); setPlan(null); setDirty(false); setNotice(''); }} disabled={editingDisabled}>

@@ -2921,7 +2921,7 @@ export function App() {
                 />
                 <div className="tiktok-variant-panel">
                   <strong>Vertical TikTok variant</strong>
-                  <p>Creates a separate 1080 × 1920 MP4 with the landscape master centered over a softened background. The YouTube original stays unchanged.</p>
+                  <p>Creates a separate 1080 × 1920 MP4. Smart framing removes verified borders and fits portrait and landscape shots individually, with one softened background where needed. The YouTube original stays unchanged.</p>
                   <label>Source video<select value={tiktokVariantSource || outputName} onChange={(event) => setTiktokVariantSource(event.target.value)} disabled={isCreatingTikTokVariant}>
                     {(outputs.length ? outputs : [outputName]).filter((file) => /\.(mp4|mov|m4v|webm|mpg|mpeg)$/i.test(file)).map((file) => <option key={file} value={file}>{file}</option>)}
                   </select></label>
