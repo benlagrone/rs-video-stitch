@@ -159,9 +159,13 @@ def _artifact_assessment(project_id: str, path: Path, seen: set[Path]) -> dict:
             return own
         inherited = _source_assessment(project_id, path, record.get("source"), seen)
         # A file-level original-content confirmation cannot suppress a known
-        # synthetic source. An unknown derivative can resolve after its exact
-        # source receives an output-specific review.
-        if inherited and (inherited["isAigc"] is True or own["isAigc"] is None):
+        # synthetic source. Resolving an unreviewed source must not also clear
+        # unknown supplemental media, such as a newly added logo or portrait.
+        supplemental = record.get("inputs", [])
+        supplemental_original = isinstance(supplemental, list) and all(
+            isinstance(item, dict) and item.get("isAigc") is False for item in supplemental
+        )
+        if inherited and (inherited["isAigc"] is True or (own["isAigc"] is None and supplemental_original)):
             return inherited
         return own
 

@@ -48,7 +48,8 @@ class RenderMediaProvenanceTests(TestCase):
             stack.enter_context(mock.patch.object(renderer, "ffprobe_duration", return_value=1.0))
             stack.enter_context(mock.patch.object(renderer, "_resolve_title_font_from_style", return_value=Path("font.ttf")))
             stack.enter_context(mock.patch.object(renderer, "_generate_selected_thumbnail"))
-            stack.enter_context(mock.patch.object(renderer, "asset_path_ai_status", return_value=asset_assessment))
+            classifier = {"side_effect": asset_assessment} if callable(asset_assessment) else {"return_value": asset_assessment}
+            stack.enter_context(mock.patch.object(renderer, "asset_path_ai_status", **classifier))
             for name, value in patches.items():
                 stack.enter_context(mock.patch.object(renderer, name, **value))
             return renderer.render_project("listing", self.root, self.options, "listing.mp4")
@@ -146,6 +147,47 @@ class RenderMediaProvenanceTests(TestCase):
         self.assertEqual(inputs[0][1]["imageGeneration"]["model"], "selected-model")
         self.assertIs(media_ai_policy.asset_path_ai_status(output)["isAigc"], True)
 
+    def test_ai_leader_and_logo_are_recorded_in_image_and_footage_renders(self):
+        footage = self.input / "footage" / "tour.mov"
+        footage.parent.mkdir()
+        footage.write_bytes(b"recorded tour")
+        for category, filename, kind in (("leader", "custom-portrait.png", "leader-template"), ("logo", "custom-logo.png", "logo-overlay")):
+            asset = self.input / category / filename
+            asset.parent.mkdir(exist_ok=True)
+            asset.write_bytes(b"generated image bytes")
+            media_ai_policy.write_media_provenance(asset, ai_generated=True, reasons=["Generated portrait or logo."])
+            for source_footage in (False, True):
+                with self.subTest(category=category, source_footage=source_footage):
+                    if source_footage:
+                        self.document["sourceFootage"] = [{"filename": footage.name}]
+                    else:
+                        self.document.pop("sourceFootage", None)
+                    self.options.update({
+                        "introEnabled": category == "leader", "introLeaderImage": filename,
+                        "logoEnabled": category == "logo", "logoImage": filename,
+                    })
+                    result = self._render(asset_assessment=media_ai_policy.asset_path_ai_status)
+                    self.assertIs(media_ai_policy.asset_path_ai_status(result)["isAigc"], True)
+                    inputs = json.loads(result.with_suffix(".media.json").read_text())["inputs"]
+                    record = next(item for item in inputs if item["kind"] == kind)
+                    self.assertEqual(record["sha256"], hashlib.sha256(asset.read_bytes()).hexdigest())
+                    self.assertIs(record["isAigc"], True)
+
+    def test_only_exact_stock_artwork_gets_an_original_default_and_ai_provenance_wins(self):
+        packaged = Path(__file__).resolve().parents[2] / "media" / "brand" / "logo3.png"
+        custom = self.input / "custom-logo.png"
+        custom.write_bytes(packaged.read_bytes())
+        inputs = []
+        renderer._record_media_asset(inputs, self.input, custom, "logo-overlay", stock_artwork=True)
+        self.assertIs(inputs[-1]["isAigc"], False)
+        media_ai_policy.write_media_provenance(custom, ai_generated=True, reasons=["Explicit synthetic media."])
+        renderer._record_media_asset(inputs, self.input, custom, "logo-overlay", stock_artwork=True)
+        self.assertIs(inputs[-1]["isAigc"], True)
+        custom.with_suffix(".media.json").unlink()
+        custom.write_bytes(b"unverified replacement logo")
+        renderer._record_media_asset(inputs, self.input, custom, "logo-overlay", stock_artwork=True)
+        self.assertIsNone(inputs[-1]["isAigc"])
+
     def test_highlight_inherits_the_frozen_source_sha_and_assessment(self):
         output = self.project / "output"
         output.mkdir()
@@ -165,3 +207,30 @@ class RenderMediaProvenanceTests(TestCase):
         self.assertEqual(snapshot["sha256"], hashlib.sha256(source.read_bytes()).hexdigest())
         self.assertIs(snapshot["isAigc"], False)
         self.assertIs(media_ai_policy.asset_path_ai_status(result)["isAigc"], False)
+
+    def test_highlight_custom_ai_or_unknown_logo_changes_disclosure_without_changing_source(self):
+        output = self.project / "output"
+        output.mkdir()
+        source = output / "master.mp4"
+        source.write_bytes(b"original landscape master")
+        media_ai_policy.write_media_provenance(source, ai_generated=False, reasons=["Recorded original source."])
+        logo = self.input / "logo.png"
+        logo.write_bytes(b"custom graphic")
+        plan = {"sourceFilename": source.name, "title": "Property tour", "hook": "See this home", "language": "en", "contact": {}, "durationSeconds": 30.0, "segments": [{"sourceStart": 0, "sourceEnd": 24, "caption": "Original room footage"}]}
+
+        def graphic(work, **kwargs):
+            path = work / f"{kwargs['kind']}.mp4"
+            path.write_bytes(b"rendered graphic")
+            return path
+
+        for ai_status in (True, None):
+            with self.subTest(ai_status=ai_status):
+                media_ai_policy.write_media_provenance(logo, ai_generated=ai_status, reasons=["Custom logo origin."])
+                with mock.patch.object(tiktok_highlight, "validate_plan", return_value=plan), mock.patch.object(tiktok_highlight, "p_input", return_value=self.input), mock.patch.object(tiktok_highlight, "p_output", return_value=output), mock.patch.object(tiktok_highlight, "p_work", return_value=self.project / "work"), mock.patch.object(tiktok_highlight, "_probe", return_value={"streams": []}), mock.patch.object(tiktok_highlight, "_duration", return_value=30.0), mock.patch.object(tiktok_highlight, "_run", side_effect=self._fake_run), mock.patch.object(tiktok_highlight, "artifact_ai_status", return_value=ORIGINAL), mock.patch("app.tiktok_highlight_graphics._brand_logo", return_value=logo), mock.patch("app.tiktok_highlight_graphics.render_highlight_graphics", side_effect=graphic):
+                    result = tiktok_highlight.render_highlight("listing", plan)
+                snapshot = json.loads(result.with_suffix(".highlight.json").read_text())
+                self.assertIs(snapshot["sourceAiMedia"]["isAigc"], False)
+                self.assertIs(snapshot["graphicsAiMedia"][0]["isAigc"], ai_status)
+                with mock.patch.object(media_ai_policy, "p_output", return_value=output):
+                    self.assertIs(media_ai_policy.artifact_ai_status("listing", result.name)["isAigc"], ai_status)
+                self.assertEqual(source.read_bytes(), b"original landscape master")

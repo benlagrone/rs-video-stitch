@@ -317,7 +317,8 @@ def _normalize_clip(source: Path, destination: Path, duration: float, log=None) 
 
 
 def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Path:
-    from app.tiktok_highlight_graphics import render_highlight_graphics
+    from app.renderer import _record_media_asset
+    from app.tiktok_highlight_graphics import _brand_logo, _hyperframes_root, render_highlight_graphics
 
     plan = validate_plan(project_id, plan)
     source = _source_path(project_id, plan["sourceFilename"])
@@ -327,6 +328,11 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
         "sha256": before["sha256"],
         **artifact_ai_status(project_id, source.name),
     }
+    graphics_media: list[dict] = []
+    _record_media_asset(graphics_media, p_input(project_id), _brand_logo(_hyperframes_root()), "highlight-logo", stock_artwork=True)
+    used_statuses = [source_ai_media["isAigc"], *(item["isAigc"] for item in graphics_media)]
+    output_ai_generated = True if True in used_statuses else (False if all(value is False for value in used_statuses) else None)
+    output_ai_reasons = list(dict.fromkeys([*source_ai_media["reasons"], *(reason for item in graphics_media for reason in item["reasons"])]))
     token = uuid.uuid4().hex[:10]
     work = p_work(project_id) / "tiktok_highlights" / token
     work.mkdir(parents=True, exist_ok=False)
@@ -403,14 +409,16 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
             raise RuntimeError("The source video changed during highlight rendering; output was not published")
         provenance = {"version": 1, "filename": filename, "sourceFilename": source.name, "sourceSha256": before["sha256"], "sourceFingerprint": before["fingerprint"], "sourceUnchanged": True, "durationSeconds": actual, "width": 1080, "height": 1920, "captionSource": "project-text", "captionDescription": "Feature captions from project text, not a verbatim speech transcript", "plan": plan, "createdAt": time.time()}
         provenance["sourceAiMedia"] = source_ai_media
+        provenance["graphicsAiMedia"] = graphics_media
         # Only complete, validated files become selectable project outputs.
         (output / f"{destination.stem}.highlight.json").write_text(json.dumps(provenance, ensure_ascii=False, indent=2), encoding="utf-8")
         (output / f"{destination.stem}.srt").write_text("\n\n".join(f"{index + 1}\n{_srt_time(start)} --> {_srt_time(end)}\n{text}" for index, (start, end, text) in enumerate(captions)) + "\n", encoding="utf-8")
         temporary_output.replace(destination)
         write_media_provenance(
             destination,
-            ai_generated=source_ai_media["isAigc"],
-            reasons=source_ai_media["reasons"],
+            ai_generated=output_ai_generated,
+            reasons=output_ai_reasons,
+            inputs=graphics_media,
             source=source_ai_media,
         )
         update("HIGHLIGHT_FINALIZE", 0.98)

@@ -61,6 +61,13 @@ _DEFAULT_FONT_RELATIVE = Path("media") / "EB_Garamond" / "EBGaramond-VariableFon
 _DEFAULT_LEADER_RELATIVE = Path("media") / "leader.png"
 _DEFAULT_LOGO_RELATIVE = Path("media") / "brand" / "logophone.png"
 _BRAND_MEDIA_RELATIVE = Path("media") / "brand"
+# Only these exact shipped graphics have established ordinary brand-art origin.
+# Replacing their bytes requires fresh provenance instead of trusting a name.
+_BUNDLED_BRAND_ARTWORK_SHA256 = {
+    "ad580a300e4a1e5382f410163ac98a181b27ddd1c49e8246f54eb0bb35e976f2",  # leader.png
+    "1004aa235cc4891cc2cf01293033708922979ae5520887a18a08e708c899402d",  # logophone.png
+    "4f94d44e8dba9838ff88e7bfea7309fd168d07985799371237efd8aff4fff40c",  # logo3.png
+}
 _BUNDLED_FONT_FILES = {
     "ebgaramond": Path("EB_Garamond/static/EBGaramond-Regular.ttf"),
     "ebgaramondmedium": Path("EB_Garamond/static/EBGaramond-Medium.ttf"),
@@ -401,6 +408,8 @@ def _record_media_asset(
     path: Path,
     kind: str,
     generation: Optional[Dict[str, Any]] = None,
+    *,
+    stock_artwork: bool = False,
 ) -> None:
     """Freeze origin evidence for a file that this render actually consumes."""
     try:
@@ -419,10 +428,16 @@ def _record_media_asset(
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
+    checksum = digest.hexdigest()
+    if stock_artwork and assessment.get("isAigc") is None and checksum in _BUNDLED_BRAND_ARTWORK_SHA256:
+        assessment = {
+            "status": "original", "isAigc": False,
+            "reasons": [f"Selected brand artwork {path.name} matches the exact bundled graphic."],
+        }
     inputs.append({
         "filename": relative_name,
         "kind": kind,
-        "sha256": digest.hexdigest(),
+        "sha256": checksum,
         **assessment,
     })
 
@@ -1639,6 +1654,8 @@ def _render_source_footage_project(
                 )
         else:
             leader_template = _resolve_leader_template(input_dir, str(intro_leader_image) if intro_leader_image else None, log) if intro_leader_enabled else None
+            if leader_template:
+                _record_media_asset(media_inputs, input_dir, leader_template, "leader-template", stock_artwork=True)
             intro_file, thumbnail_file = _create_intro_card_assets(
                 background_image=intro_background,
                 leader_template=leader_template,
@@ -1699,10 +1716,12 @@ def _render_source_footage_project(
         log,
     )
     if logo_enabled:
+        resolved_logo = _resolve_logo_image(input_dir, str(logo_image) if logo_image else None, log)
+        _record_media_asset(media_inputs, input_dir, resolved_logo, "logo-overlay", stock_artwork=True)
         _overlay_logo_on_video(
             concat_output_path,
             final_path,
-            _resolve_logo_image(input_dir, str(logo_image) if logo_image else None, log),
+            resolved_logo,
             logo_corner,
             logo_margin,
             preset,
@@ -2265,6 +2284,8 @@ def render_project(
                     if intro_leader_enabled
                     else None
                 )
+                if leader_template:
+                    _record_media_asset(media_inputs, input_dir, leader_template, "leader-template", stock_artwork=True)
                 intro_file, thumbnail_file = _create_intro_card_assets(
                     background_image=intro_background,
                     leader_template=leader_template,
@@ -2363,6 +2384,7 @@ def render_project(
 
     if logo_enabled:
         logo_path = _resolve_logo_image(input_dir, str(logo_image) if logo_image else None, log)
+        _record_media_asset(media_inputs, input_dir, logo_path, "logo-overlay", stock_artwork=True)
         _overlay_logo_on_video(
             concat_output_path,
             final_path,

@@ -133,6 +133,46 @@ class MediaAiPolicyTests(unittest.TestCase):
         master.write_bytes(b"different master render")
         self.assertIsNone(self.status(derivative)["isAigc"])
 
+    def test_original_source_does_not_clear_unknown_supplemental_logo(self):
+        master = self.video()
+        self.record(master, False, {"kind": "operator-review"})
+        derivative = self.video("vertical.mp4")
+        for inputs in (
+            [{"kind": "logo", "isAigc": None}],
+            [{"kind": "logo", "isAigc": False}, {"kind": "portrait"}],
+            {"invalid": "input registry"},
+        ):
+            with self.subTest(inputs=inputs):
+                policy.write_media_provenance(
+                    derivative, ai_generated=None, reasons=["Supplemental media origin unconfirmed"],
+                    inputs=inputs, source=self.source(master),
+                )
+                assessment = self.status(derivative)
+                self.assertIsNone(assessment["isAigc"])
+                self.assertIn("Supplemental media origin unconfirmed", assessment["reasons"])
+
+    def test_original_source_resolves_unknown_derivative_with_original_extras(self):
+        master = self.video()
+        self.record(master, False, {"kind": "operator-review"})
+        derivative = self.video("vertical.mp4")
+        policy.write_media_provenance(
+            derivative, ai_generated=None, reasons=["Source originally unknown"],
+            inputs=[{"kind": "logo", "isAigc": False}], source=self.source(master),
+        )
+        self.assertIs(self.status(derivative)["isAigc"], False)
+
+    def test_known_ai_source_still_requires_label_with_unknown_extras(self):
+        master = self.video()
+        self.record(master, True)
+        derivative = self.video("vertical.mp4")
+        policy.write_media_provenance(
+            derivative, ai_generated=None, reasons=["Logo origin unknown"],
+            inputs=[{"kind": "logo", "isAigc": None}], source=self.source(master),
+        )
+        assessment = self.status(derivative)
+        self.assertIs(assessment["isAigc"], True)
+        self.assertTrue(assessment["required"])
+
     def test_derivative_cannot_hide_actual_synthetic_source_with_operator_false(self):
         master = self.video()
         self.record(master, True)
