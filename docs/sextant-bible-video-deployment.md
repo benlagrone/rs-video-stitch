@@ -55,9 +55,14 @@ and keep YouTube publishing behind a separate confirmation dialog.
 - SFX library: `~/Videos/MediaStudio/sfx-library`
 - SFX MCP: `python3 mcp/sfx_mcp.py` with `SFX_LIBRARY_ROOT` set to that library
 
-The host must pass the Colima/Docker preflight before deployment. Stable
-Diffusion, Ollama, and Wan/ComfyUI are reached over the protected Phronesis
-Tailscale route. The central voice gateway is resolved through the LAN service
+The host must pass the Colima/Docker preflight before deployment. Ollama uses
+the existing optimizer-owned private SSH transport at
+`http://host.docker.internal:18134`, forwarding Sextant loopback to Phronesis
+loopback `11434` over the verified LAN route. This reuses
+`com.fortress.sextant.phronesis-transport`; do not create another tunnel or
+expose a model listener to the LAN. Generation still requires a central
+GPU-admission lease. Stable Diffusion and Wan/ComfyUI retain their existing
+protected provider routes. The central voice gateway is resolved through the LAN service
 name `fortress.lan:8133`; it is not hard-coded to a Tailscale address. Voice provider
 tokens and provider-selection policy stay inside the Fortress voice gateway;
 YouTube credentials stay in the Sextant server environment. No credential is

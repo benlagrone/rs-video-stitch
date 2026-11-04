@@ -24,6 +24,10 @@ import json
 import os
 import urllib.request
 
+assert os.environ["OLLAMA_BASE_URL"] == "http://host.docker.internal:18134", "MediaStudio must use the managed private Ollama transport"
+with urllib.request.urlopen(os.environ["OLLAMA_BASE_URL"] + "/api/tags", timeout=5) as response:
+    assert isinstance(json.load(response).get("models"), list), "Ollama model inventory is unavailable"
+
 request = urllib.request.Request(
     os.environ["FORTRESS_OPTIMIZATION_MCP_URL"] + "/internal/v1/phronesis/admission",
     headers={"Authorization": f"Bearer {os.environ['FORTRESS_OPTIMIZATION_MCP_TOKEN']}"},

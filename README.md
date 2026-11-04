@@ -133,13 +133,18 @@ creator-info response controls the available privacy options. New unaudited
 apps are limited by TikTok to private posts until their Direct Post client is
 audited.
 
-The TikTok **Caption** field is written by Ollama from the original listing
-text when an empty saved project is opened. **Regenerate with Ollama** creates
-another draft; the caption remains editable and **Update Project** saves it
+The **TikTok caption · Ollama** tool below the Script controls is available in
+every project before rendering or connecting TikTok. **Generate with Ollama**
+writes from the original listing text; **Regenerate with Ollama** creates
+another draft. An empty saved caption is also generated automatically when a
+finished video is selected. The caption remains editable and **Update Project** saves it
 with its model provenance. English and Mandarin follow the project's language.
 The writer validates contact details, numerical facts, hashtags, and the
 2,200-unit limit. Provider errors preserve the current draft and never insert a
 template. Caption writing does not change the video's AI-media disclosure.
+On Sextant, generation uses the existing managed private Ollama transport at
+`http://host.docker.internal:18134`, with the same central GPU-admission lease
+as other MediaStudio generation tools.
 
 LeCrown projects default to comments enabled, Duet and Stitch disabled, and
 **Promotes my own business** enabled. Saved choices remain editable per project.

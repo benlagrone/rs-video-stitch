@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 from fastapi import HTTPException
 
 from app import api
+from app.gpu_admission import GpuAdmissionError
 from app.schemas import TikTokCaptionRequest
 from app.tiktok_caption import CaptionGenerationError, caption_context, generate_caption
 
@@ -108,4 +109,13 @@ class TikTokCaptionTests(unittest.IsolatedAsyncioTestCase):
                 await api.generate_tiktok_caption("property", TikTokCaptionRequest())
         self.assertEqual(error.exception.status_code, 502)
         self.assertIn("Ollama unavailable", error.exception.detail)
+        save.assert_not_called()
+
+    async def test_gpu_admission_outage_returns_actionable_error_without_saving(self):
+        with patch.object(api, "read_project_state", return_value={"script": SOURCE}), patch.object(api, "_load_scenes", return_value={}), patch.object(api, "_ollama_generate", side_effect=GpuAdmissionError("Unable to inspect Phronesis workload state")), patch.object(api, "save_project_state") as save:
+            with self.assertRaises(HTTPException) as error:
+                await api.generate_tiktok_caption("property", TikTokCaptionRequest())
+        self.assertEqual(error.exception.status_code, 503)
+        self.assertIn("Phronesis workload state", error.exception.detail)
+        self.assertIn("existing caption was not changed", error.exception.detail)
         save.assert_not_called()

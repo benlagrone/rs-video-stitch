@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.db import SessionLocal, init_db
-from app.gpu_admission import governed_post
+from app.gpu_admission import GpuAdmissionError, governed_post
 from app.models import Job, Project
 from app.schemas import (
     ProjectSpec,
@@ -2459,6 +2459,8 @@ async def generate_tiktok_caption(pid: str, req: TikTokCaptionRequest) -> TikTok
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         caption = await run_in_threadpool(generate_caption, context, _ollama_generate)
+    except GpuAdmissionError as exc:
+        raise HTTPException(status_code=503, detail=f"Ollama caption generation is unavailable: {exc}. Your existing caption was not changed.") from exc
     except CaptionGenerationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     provenance = {"generatedBy": "ollama", "model": OLLAMA_MODEL, "language": context["language"], "source": context["source"]}
