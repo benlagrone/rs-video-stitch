@@ -22,6 +22,7 @@ import { VoiceSamples } from './VoiceSamples.jsx';
 import { ThumbnailStyleSelector } from './ThumbnailStyleSelector.jsx';
 import { TikTokHighlightPanel } from './TikTokHighlightPanel.jsx';
 import { LECROWN_TIKTOK_DEFAULTS, resolvedTikTokAi, tikTokPreferences, tikTokVideoKey } from './tiktokSettings.js';
+import { captionContextKey, createCaptionGenerationGuard, shouldAutoGenerateCaption } from './tiktokCaption.js';
 
 const DEFAULT_RENDER_OPTIONS = {
   fps: 30,
@@ -290,6 +291,7 @@ function projectStateFromValues(values) {
       thumbnailError: values.youtubeThumbnailError || null,
     } : undefined,
     tiktokCaption: values.tiktokCaption,
+    tiktokCaptionProvenance: values.tiktokCaptionProvenance,
     tiktokPrivacy: values.tiktokPrivacy,
     tiktokAigc: values.tiktokAigc,
     tiktokDefaultsVersion: values.tiktokDefaultsVersion,
@@ -385,6 +387,11 @@ export function App() {
   const [youtubeThumbnailError, setYoutubeThumbnailError] = useState('');
   const [tiktokAuth, setTiktokAuth] = useState(null);
   const [tiktokCaption, setTiktokCaption] = useState('');
+  const [tiktokCaptionProvenance, setTiktokCaptionProvenance] = useState(null);
+  const [isWritingTikTokCaption, setIsWritingTikTokCaption] = useState(false);
+  const [tiktokCaptionError, setTiktokCaptionError] = useState('');
+  const tiktokCaptionGuard = useRef(createCaptionGenerationGuard());
+  const tiktokCaptionAttempts = useRef(new Set());
   const [tiktokPrivacy, setTiktokPrivacy] = useState('');
   const [tiktokAigc, setTiktokAigc] = useState(null);
   const [tiktokDefaultsVersion, setTiktokDefaultsVersion] = useState(2);
@@ -450,6 +457,9 @@ export function App() {
   selectedTikTokVideo.current = tikTokVideoKey(resolvedProjectId, tiktokVideoFilename);
   const currentTikTokAi = tiktokMediaPolicy?.key === selectedTikTokVideo.current ? tiktokMediaPolicy.ai : null;
   const tiktokAiResolved = !tiktokSettingsPending && !tiktokSettingsError && resolvedTikTokAi(currentTikTokAi) !== null;
+  const tiktokCaptionSource = { title, propertyAddress, originalScriptText, script, language };
+  const tiktokCaptionContext = captionContextKey(resolvedProjectId, tiktokVideoFilename, tiktokCaptionSource);
+  tiktokCaptionGuard.current.context(tiktokCaptionContext);
   const filteredProjects = useMemo(() => {
     const query = projectFilter.trim().toLocaleLowerCase();
     if (!query) return savedProjects;
@@ -657,6 +667,24 @@ export function App() {
     return () => { cancelled = true; };
   }, [resolvedProjectId, tiktokVideoFilename, apiBase, authToken, outputs, tiktokPolicyEpoch, isLoadingProject]);
   useEffect(() => {
+    setIsWritingTikTokCaption(false);
+    setTiktokCaptionError('');
+  }, [tiktokCaptionContext]);
+  useEffect(() => {
+    const attempt = tikTokVideoKey(resolvedProjectId, tiktokVideoFilename);
+    if (!shouldAutoGenerateCaption({
+      loaded: view === 'editor' && savedProjectId === resolvedProjectId && !isLoadingProject,
+      caption: tiktokCaption,
+      hasVideo: outputs.includes(tiktokVideoFilename),
+      sourceText: originalScriptText || script,
+      attempted: tiktokCaptionAttempts.current.has(attempt),
+    })) return undefined;
+    // Let the saved highlight/output selection settle before spending a model
+    // request, and let immediate typing cancel automatic generation entirely.
+    const timeout = setTimeout(() => writeTikTokCaption(), 400);
+    return () => clearTimeout(timeout);
+  }, [resolvedProjectId, tiktokVideoFilename, tiktokCaptionContext, tiktokCaption, view, savedProjectId, isLoadingProject, outputs]);
+  useEffect(() => {
     const previews = images.map((image) => ({
       name: image.name,
       url: image.url || (image.file ? URL.createObjectURL(image.file) : missingImageDataUrl(image.name)),
@@ -783,6 +811,8 @@ export function App() {
   }
 
   function resetEditor() {
+    tiktokCaptionGuard.current.invalidate();
+    tiktokCaptionAttempts.current.clear();
     setTitle('Listing video');
     setScriptTitle('');
     setPropertyAddress('');
@@ -823,6 +853,9 @@ export function App() {
     setYoutubeThumbnailFilename('');
     setYoutubeThumbnailError('');
     setTiktokCaption('');
+    setTiktokCaptionProvenance(null);
+    setIsWritingTikTokCaption(false);
+    setTiktokCaptionError('');
     setTiktokPrivacy('');
     setTiktokAigc(null);
     setTiktokDefaultsVersion(2);
@@ -863,6 +896,10 @@ export function App() {
   }
 
   async function loadProject(pid) {
+    tiktokCaptionGuard.current.invalidate();
+    tiktokCaptionAttempts.current.clear();
+    setIsWritingTikTokCaption(false);
+    setTiktokCaptionError('');
     setError('');
     setIsLoadingProject(true);
     setRenderTracker(EMPTY_RENDER_TRACKER);
@@ -930,7 +967,7 @@ export function App() {
       setLogoCorner(state.logoCorner || 'top-right');
       setLogoMargin(state.logoMargin ?? 24);
       setVoice(state.voice || voice);
-      const savedLanguage = state.language || language;
+      const savedLanguage = state.language || state.renderOptions?.ttsLanguage || result.scenes?.vid?.lang || result.scenes?.video?.lang || language;
       setLanguage(savedLanguage);
       setTtsApi(state.ttsApi === 'vibevoice-proxy' ? 'voice-gateway' : (state.ttsApi || ttsApi));
       const savedHyperframes = state.hyperframes || persistedScenes?.hyperframes || {};
@@ -954,6 +991,7 @@ export function App() {
       setYoutubeThumbnailFilename(state.youtubeUpload?.thumbnailFilename || '');
       setYoutubeThumbnailError(state.youtubeUpload?.thumbnailError || '');
       setTiktokCaption(state.tiktokCaption || '');
+      setTiktokCaptionProvenance(state.tiktokCaptionProvenance || null);
       setTiktokPrivacy(state.tiktokPrivacy || '');
       const tiktokPreferences = tikTokPreferences(state);
       tiktokSavedPreferences.current = state;
@@ -1351,6 +1389,7 @@ export function App() {
             youtubeThumbnailFilename,
             youtubeThumbnailError,
             tiktokCaption,
+            tiktokCaptionProvenance,
             tiktokPrivacy,
             tiktokAigc,
             tiktokDefaultsVersion,
@@ -1521,7 +1560,47 @@ export function App() {
     }
   }
 
+  async function writeTikTokCaption() {
+    if (isLoadingProject) return;
+    const token = tiktokCaptionGuard.current.begin();
+    tiktokCaptionAttempts.current.add(tikTokVideoKey(resolvedProjectId, tiktokVideoFilename));
+    setIsWritingTikTokCaption(true);
+    setTiktokCaptionError('');
+    setTiktokPublishReview(false);
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/tiktok/caption/generate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...tiktokCaptionSource, filename: tiktokVideoFilename || undefined, currentCaption: tiktokCaption }),
+      });
+      if (!tiktokCaptionGuard.current.current(token)) return;
+      const caption = String(result.caption || '').trim();
+      if (!caption || caption.length > 2200 || result.generatedBy !== 'ollama') throw new Error('Ollama did not return a confirmed TikTok caption. Try generating it again.');
+      setTiktokCaption(caption);
+      setTiktokCaptionProvenance({
+        ...(result.provenance || {}), generatedBy: result.generatedBy,
+        model: result.model, source: result.source, language: result.language,
+        generatedAt: Date.now() / 1000, edited: false,
+      });
+      setStatus('TikTok caption generated with Ollama. Use Update Project to save it.');
+    } catch (err) {
+      if (tiktokCaptionGuard.current.current(token)) setTiktokCaptionError(`Could not generate the TikTok caption: ${err.message || String(err)}`);
+    } finally {
+      if (tiktokCaptionGuard.current.current(token)) setIsWritingTikTokCaption(false);
+    }
+  }
+
+  function editTikTokCaption(value) {
+    tiktokCaptionGuard.current.invalidate();
+    tiktokCaptionAttempts.current.add(tikTokVideoKey(resolvedProjectId, tiktokVideoFilename));
+    setIsWritingTikTokCaption(false);
+    setTiktokCaptionError('');
+    setTiktokCaption(value);
+    setTiktokCaptionProvenance((previous) => previous ? { ...previous, edited: true } : null);
+    setTiktokPublishReview(false);
+  }
+
   async function publishTikTok() {
+    if (isWritingTikTokCaption) return;
     if (!tiktokPublishReview || !tiktokAiResolved
       || tiktokPublishReview.filename !== tiktokVideoFilename) return;
     setError('');
@@ -1548,6 +1627,7 @@ export function App() {
   }
 
   async function reviewTikTokPublish() {
+    if (isWritingTikTokCaption) return;
     const filename = tiktokVideoFilename;
     const key = tikTokVideoKey(resolvedProjectId, filename);
     setTiktokSettingsPending(true);
@@ -2942,14 +3022,24 @@ export function App() {
                   <button type="button" onClick={connectTikTok} disabled={isConnectingTikTok || !tiktokAuth?.configured}>
                     {isConnectingTikTok ? 'Connecting' : 'Connect TikTok'}
                   </button>
-                  <button type="button" onClick={reviewTikTokPublish} disabled={!tiktokAuth?.authenticated || !tiktokCaption.trim() || !tiktokPrivacy || !outputs.includes(tiktokVideoFilename) || !tiktokMusicConsent || !tiktokAiResolved || isPublishingTikTok}>
+                  <button type="button" onClick={reviewTikTokPublish} disabled={!tiktokAuth?.authenticated || !tiktokCaption.trim() || !tiktokPrivacy || !outputs.includes(tiktokVideoFilename) || !tiktokMusicConsent || !tiktokAiResolved || isPublishingTikTok || isWritingTikTokCaption}>
                     {isPublishingTikTok ? 'Publishing' : 'Review & publish to TikTok'}
                   </button>
                   <button type="button" onClick={refreshTikTokPublishStatus} disabled={!tiktokPublishId || isPublishingTikTok}>
                     Check publish status
                   </button>
                 </div>
-                <label>Caption<textarea className="short-textarea" value={tiktokCaption} maxLength="2200" onChange={(event) => setTiktokCaption(event.target.value)} placeholder="Describe this LeCrown Properties video and add hashtags" /></label>
+                <div className="youtube-actions">
+                  <strong>TikTok caption</strong>
+                  <button type="button" onClick={writeTikTokCaption} disabled={isWritingTikTokCaption || isLoadingProject || !(originalScriptText || script).trim()}>
+                    {isWritingTikTokCaption ? 'Writing with Ollama…' : tiktokCaption.trim() ? 'Regenerate with Ollama' : 'Generate with Ollama'}
+                  </button>
+                </div>
+                <p className="hint">Ollama creates the post caption from this project’s original listing text. Edit it here, then use Update Project to save it.</p>
+                <label>Caption<textarea className="short-textarea" value={tiktokCaption} maxLength="2200" onChange={(event) => editTikTokCaption(event.target.value)} placeholder="Ollama will write the TikTok caption from the original listing text" /></label>
+                {isWritingTikTokCaption && <p className="hint" role="status">Writing the TikTok caption with Ollama… You can keep editing; your changes will be preserved.</p>}
+                {tiktokCaptionError && <p role="alert">{tiktokCaptionError}</p>}
+                {tiktokCaptionProvenance?.generatedBy === 'ollama' && <p className="hint">Generated by Ollama{tiktokCaptionProvenance.model ? ` · ${tiktokCaptionProvenance.model}` : ''}{tiktokCaptionProvenance.edited ? ' · edited' : ''}</p>}
                 <p className="hint">{tiktokCaption.length}/2200 characters. TikTok may restrict public visibility until the developer app passes its audit.</p>
                 <label>Privacy<select value={tiktokPrivacy} onChange={(event) => setTiktokPrivacy(event.target.value)} disabled={!tiktokAuth?.authenticated}>
                   <option value="">Choose who can view this post</option>

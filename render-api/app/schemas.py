@@ -339,6 +339,25 @@ class YouTubeAuthCompleteRequest(BaseModel):
     callbackUrl: str = Field(min_length=1)
 
 
+class TikTokCaptionRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=300)
+    propertyAddress: Optional[str] = Field(default=None, max_length=500)
+    originalScriptText: Optional[str] = Field(default=None, max_length=30000)
+    script: Optional[str] = Field(default=None, max_length=30000)
+    language: Optional[str] = Field(default=None, max_length=40)
+    currentCaption: Optional[str] = Field(default=None, max_length=2200)
+    filename: Optional[str] = Field(default=None, max_length=255)
+
+
+class TikTokCaptionResponse(BaseModel):
+    caption: str
+    model: str
+    language: str
+    source: Literal["originalScriptText", "script", "scenes"]
+    generatedBy: Literal["ollama"] = "ollama"
+    provenance: Dict[str, Any] = Field(default_factory=dict)
+
+
 class TikTokPublishRequest(BaseModel):
     filename: str = Field(default="video.mp4")
     caption: str = Field(min_length=1, max_length=2200)

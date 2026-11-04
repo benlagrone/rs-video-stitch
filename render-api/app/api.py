@@ -66,6 +66,8 @@ from app.schemas import (
     TikTokHighlightPlanRequest,
     TikTokHighlightRenderRequest,
     TikTokMediaReviewRequest,
+    TikTokCaptionRequest,
+    TikTokCaptionResponse,
 )
 from app.renderer import (
     DEFAULT_CRF,
@@ -2444,6 +2446,23 @@ def _tiktok_publishing_defaults(pid: str, state: dict) -> dict:
         "defaultsVersion": 2,
         "defaults": {"allowComment": lecrown, "allowDuet": False, "allowStitch": False, "brandOrganic": lecrown},
     }
+
+
+@app.post("/v1/projects/{pid}/tiktok/caption/generate", response_model=TikTokCaptionResponse)
+async def generate_tiktok_caption(pid: str, req: TikTokCaptionRequest) -> TikTokCaptionResponse:
+    from app.tiktok_caption import CaptionGenerationError, caption_context, generate_caption
+
+    state = read_project_state(pid) or {}
+    try:
+        context = caption_context(state, _load_scenes(pid) or {}, req.model_dump(), lecrown=is_lecrown_project(pid, state))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        caption = await run_in_threadpool(generate_caption, context, _ollama_generate)
+    except CaptionGenerationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    provenance = {"generatedBy": "ollama", "model": OLLAMA_MODEL, "language": context["language"], "source": context["source"]}
+    return TikTokCaptionResponse(caption=caption, **provenance, provenance=provenance)
 
 
 @app.get("/v1/projects/{pid}/tiktok/settings")
