@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.db import SessionLocal, init_db
 from app.models import Artifact, Job
 from app.renderer import render_project
+from app.tiktok_highlight import render_highlight
 from app.bible_workflow import (
     animate_bible_scene,
     generate_bible_title_card,
@@ -177,7 +178,11 @@ def loop(stop_event: Event | None = None) -> None:
                 is_scene_animation_repair = payload.get("workflow") == "scene-animation-repair"
                 is_scene_stills = payload.get("workflow") == "bible-scene-stills"
                 is_bible_title_card = payload.get("workflow") == "bible-title-card"
-                if is_scene_animation_repair:
+                if payload.get("workflow") == "tiktok-highlight":
+                    final_path = render_highlight(
+                        job.project_id, dict(payload.get("plan") or {}), progress=progress, log=log,
+                    )
+                elif is_scene_animation_repair:
                     final_path = repair_and_animate_bible_scene(
                         job.project_id,
                         int(payload.get("sceneIndex") or 0),

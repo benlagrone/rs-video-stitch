@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="__LANGUAGE__" data-composition-variables='__VARIABLES__'>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1080,height=1920" />
+    <script src="assets/gsap.min.js"></script>
+    <style>html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; } #root { position: absolute; inset: 0; }</style>
+  </head>
+  <body>
+    <main id="root" data-composition-id="tiktok-highlight" data-width="1080" data-height="1920" data-duration="__DURATION__" data-fps="30">
+      <div id="tiktok-highlight-card" class="clip" data-composition-id="tiktok-highlight-card" data-composition-src="compositions/card.html" data-start="0" data-duration="__DURATION__" data-track-index="0" data-track-kind="graphics" data-width="1080" data-height="1920" data-variable-values='__VARIABLE_VALUES__'></div>
+    </main>
+    <script>
+      const clock = { time: 0 };
+      const tl = gsap.timeline({ paused: true });
+      tl.to(clock, { time: __DURATION__, duration: __DURATION__, ease: 'none' }, 0);
+      window.__timelines = window.__timelines || {};
+      window.__timelines['tiktok-highlight'] = tl;
+    </script>
+  </body>
+</html>

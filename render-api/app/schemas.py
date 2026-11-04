@@ -361,6 +361,15 @@ class TikTokVariantResponse(BaseModel):
     height: int = 1920
 
 
+class TikTokHighlightPlanRequest(BaseModel):
+    filename: str = Field(default="video.mp4", min_length=1, max_length=255)
+    durationSeconds: float = Field(default=45, ge=30, le=60)
+
+
+class TikTokHighlightRenderRequest(BaseModel):
+    plan: Dict[str, Any]
+
+
 class TikTokPublishResponse(BaseModel):
     publishId: str
     status: str

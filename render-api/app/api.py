@@ -62,6 +62,8 @@ from app.schemas import (
     TikTokVariantResponse,
     TikTokPublishRequest,
     TikTokPublishResponse,
+    TikTokHighlightPlanRequest,
+    TikTokHighlightRenderRequest,
 )
 from app.renderer import (
     DEFAULT_CRF,
@@ -116,6 +118,7 @@ from app.tiktok_upload import (
     tiktok_authorization_url,
     tiktok_publish_status,
 )
+from app.tiktok_highlight import plan_highlight, validate_plan
 from app.bible_workflow import (
     BIBLE_CAPTION_STYLE,
     BIBLE_CHANNEL_ICON,
@@ -2326,6 +2329,109 @@ async def youtube_upload(
         thumbnailFilename=upload_state["thumbnailFilename"],
         thumbnailError=upload_state["thumbnailError"],
     )
+
+
+def _highlight_state_path(pid: str) -> Path:
+    return p_input(pid) / "tiktok_highlight.json"
+
+
+def _read_highlight_state(pid: str) -> dict:
+    path = _highlight_state_path(pid)
+    if not path.exists():
+        return {}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="Saved highlight plan could not be read") from exc
+    return state if isinstance(state, dict) else {}
+
+
+def _save_highlight_state(pid: str, state: dict) -> None:
+    # Separate from project_state.json: the main project editor cannot erase this draft.
+    ensure_dirs(pid)
+    target = _highlight_state_path(pid)
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _active_highlight_job(pid: str, db: Session) -> Job | None:
+    jobs = db.query(Job).filter(Job.project_id == pid, Job.status.in_(["QUEUED", "RUNNING"])).all()
+    return next((job for job in jobs if (job.payload or {}).get("workflow") == "tiktok-highlight"), None)
+
+
+@app.get("/v1/projects/{pid}/tiktok/highlight")
+async def tiktok_highlight_state(pid: str, db: Session = Depends(get_db)) -> dict:
+    state = _read_highlight_state(pid)
+    job_id = str(state.get("jobId") or "")
+    job = db.get(Job, job_id) if job_id else None
+    result = {"plan": state.get("plan"), "jobId": job_id, "status": "IDLE", "filename": ""}
+    if job is not None and job.project_id == pid and (job.payload or {}).get("workflow") == "tiktok-highlight":
+        result.update(status=job.status, stage=job.stage, progress=job.progress, error=job.error)
+        if job.status == "SUCCEEDED":
+            artifact = next((item for item in job.artifacts if item.kind == "video"), None)
+            if artifact is not None:
+                filename = Path(artifact.path).name
+                result["filename"] = filename
+                captions = f"{Path(filename).stem}.srt"
+                if (p_output(pid) / captions).is_file():
+                    result["captionFilename"] = captions
+    return result
+
+
+@app.post("/v1/projects/{pid}/tiktok/highlight/plan")
+async def tiktok_highlight_plan(pid: str, req: TikTokHighlightPlanRequest, db: Session = Depends(get_db)) -> dict:
+    if _active_highlight_job(pid, db):
+        raise HTTPException(status_code=409, detail="Wait for the current highlight render before replacing its plan")
+    try:
+        plan = await run_in_threadpool(plan_highlight, pid, req.filename, req.durationSeconds)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    state = _read_highlight_state(pid)
+    state.update(plan=plan, updatedAt=time.time())
+    _save_highlight_state(pid, state)
+    return {"plan": plan}
+
+
+@app.put("/v1/projects/{pid}/tiktok/highlight/plan")
+async def tiktok_highlight_save(pid: str, req: TikTokHighlightRenderRequest, db: Session = Depends(get_db)) -> dict:
+    if _active_highlight_job(pid, db):
+        raise HTTPException(status_code=409, detail="Wait for the current highlight render before editing its plan")
+    try:
+        plan = await run_in_threadpool(validate_plan, pid, req.plan)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    state = _read_highlight_state(pid)
+    state.update(plan=plan, updatedAt=time.time())
+    _save_highlight_state(pid, state)
+    return {"plan": plan}
+
+
+@app.post("/v1/projects/{pid}/tiktok/highlight/render", status_code=202)
+async def tiktok_highlight_render(pid: str, req: TikTokHighlightRenderRequest, db: Session = Depends(get_db)) -> dict:
+    active = _active_highlight_job(pid, db)
+    if active:
+        return {"jobId": active.id}
+    try:
+        plan = await run_in_threadpool(validate_plan, pid, req.plan)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    project = db.get(Project, pid)
+    if project is None:
+        project = Project(id=pid)
+        db.add(project)
+    # The source project's last_output_name and YouTube publishing state stay independent.
+    job_id = f"j_{uuid.uuid4().hex[:12]}"
+    db.add(Job(id=job_id, project_id=pid, status="QUEUED", stage="QUEUED", progress=0.0,
+               payload={"workflow": "tiktok-highlight", "plan": plan}))
+    db.commit()
+    state = _read_highlight_state(pid)
+    state.update(plan=plan, jobId=job_id, updatedAt=time.time())
+    _save_highlight_state(pid, state)
+    return {"jobId": job_id}
 
 
 @app.post("/v1/projects/{pid}/tiktok/publish", response_model=TikTokPublishResponse)

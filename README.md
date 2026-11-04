@@ -138,6 +138,21 @@ For an existing landscape YouTube master, the Render Desk can create a separate
 over a softened vertical background, preserving the full landscape frame and
 its audio; it never replaces the YouTube master.
 
+The **Automatic TikTok highlight** panel creates a separate 30, 45, or 60 second
+portrait edit. **Create automatic highlight** selects source sections, renders
+vertical HyperFrames opening/transition/contact cards, adds editable project-text
+feature captions, and queues the result on the existing Sextant worker. The
+caption overlays use saved project information; they are not a verbatim speech
+transcript. **Generate editable plan** exposes the clip ranges, hook, captions,
+brokerage, broker, phone, and optional email before rendering. Save that draft
+with **Save highlight plan**, then use **Render edited highlight** to apply edits.
+Drafts are stored separately from the main project state and survive refreshes.
+Each completed render has its own MP4, SRT, and provenance JSON; the source MP4,
+YouTube output selection, thumbnail, and upload record remain independent.
+Highlight creation runs locally on Sextant with the existing recorded audio and
+does not require a TikTok account connection. Publishing still uses the separate
+account review and confirmation controls.
+
 ### Optional xTTS Voice Synthesis
 
 - Set `XTTS_API_URL` (and optionally `XTTS_API_KEY`, `XTTS_LANGUAGE`) to point at your xTTS server.

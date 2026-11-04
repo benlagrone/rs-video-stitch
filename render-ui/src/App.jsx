@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { BibleStudio } from './BibleStudio.jsx';
 import {
   leadLinesFromState,
@@ -20,6 +20,7 @@ import {
 import { YouTubeChannelSelector } from './YouTubeChannelSelector.jsx';
 import { VoiceSamples } from './VoiceSamples.jsx';
 import { ThumbnailStyleSelector } from './ThumbnailStyleSelector.jsx';
+import { TikTokHighlightPanel } from './TikTokHighlightPanel.jsx';
 
 const DEFAULT_RENDER_OPTIONS = {
   fps: 30,
@@ -431,6 +432,8 @@ export function App() {
     if (projectId.trim()) return slugify(projectId.trim());
     return `p_${slugify(title || 'mediastudio-project')}`;
   }, [projectId, title]);
+  const highlightProject = useRef(resolvedProjectId);
+  highlightProject.current = resolvedProjectId;
   const filteredProjects = useMemo(() => {
     const query = projectFilter.trim().toLocaleLowerCase();
     if (!query) return savedProjects;
@@ -1515,6 +1518,19 @@ export function App() {
       setStatus('TikTok variant failed');
     } finally {
       setIsCreatingTikTokVariant(false);
+    }
+  }
+
+  async function handleTikTokHighlightCreated(filename) {
+    const expectedProject = resolvedProjectId;
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/outputs`);
+      if (highlightProject.current !== expectedProject) return;
+      setOutputs(result.files || []);
+      setTiktokVideoFilename(filename);
+      setStatus('TikTok highlight ready to preview and edit');
+    } catch (err) {
+      if (highlightProject.current === expectedProject) setError(err.message || String(err));
     }
   }
 
@@ -2781,6 +2797,14 @@ export function App() {
                   <h3>TikTok</h3>
                   <button type="button" onClick={refreshTikTokAuth}>Check auth</button>
                 </div>
+                <TikTokHighlightPanel
+                  projectId={resolvedProjectId}
+                  outputs={outputs}
+                  defaultSource={outputName}
+                  request={request}
+                  outputHref={outputHref}
+                  onCreated={handleTikTokHighlightCreated}
+                />
                 <div className="tiktok-variant-panel">
                   <strong>Vertical TikTok variant</strong>
                   <p>Creates a separate 1080 × 1920 MP4 with the landscape master centered over a softened background. The YouTube original stays unchanged.</p>
