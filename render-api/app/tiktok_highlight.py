@@ -109,7 +109,7 @@ def _known_source_ranges(project_id: str, document: dict, source_duration: float
         return []
     opts = state.get("renderOptions") or {}
     intro = 0.0
-    if opts.get("introEnabled"):
+    if opts.get("introEnabled", state.get("useIntro", False)):
         candidates = [work / "hyperframes_intro.mp4", work / "intro.mp4"]
         intro_path = next((path for path in candidates if path.is_file()), None)
         if intro_path is None:

@@ -95,6 +95,35 @@ class HighlightPlanTests(unittest.TestCase):
         del self.state["tiktokHighlightContact"]
         self.assertEqual(self.plan()["contact"]["email"], "")
 
+    def test_legacy_use_intro_is_counted_when_verifying_source_section_ranges(self):
+        footage = self.work / "footage"
+        footage.mkdir()
+        for index in range(2):
+            (footage / f"clip_{index:02d}.mp4").write_bytes(b"source proxy")
+        intro = self.work / "hyperframes_intro.mp4"
+        intro.write_bytes(b"intro proxy")
+        (self.input / "scenes.json").write_text(json.dumps({"sourceFootage": [{"filename": "front.mov", "title": "Front Porch and Entry"}, {"filename": "inside.mov", "title": "Interior Tour"}]}))
+        self.state["useIntro"] = True
+        self.state["renderOptions"] = {}
+        self.duration.side_effect = lambda path: 120 if path.resolve() == self.master.resolve() else (10 if path == intro else 55)
+        plan = self.plan(30)
+        self.assertEqual(plan["selectionMethod"], "verified-source-section-ranges")
+        self.assertTrue(all(segment["sourceStart"] >= 10 for segment in plan["segments"]))
+        self.assertEqual({segment["caption"] for segment in plan["segments"]}, {"Front Porch and Entry", "Interior Tour"})
+
+    def test_explicit_intro_disabled_overrides_legacy_use_intro(self):
+        footage = self.work / "footage"
+        footage.mkdir()
+        for index in range(2):
+            (footage / f"clip_{index:02d}.mp4").write_bytes(b"source proxy")
+        (self.work / "hyperframes_intro.mp4").write_bytes(b"old intro proxy")
+        (self.input / "scenes.json").write_text(json.dumps({"sourceFootage": [{"filename": "front.mov", "title": "Front Porch and Entry"}, {"filename": "inside.mov", "title": "Interior Tour"}]}))
+        self.state.update({"useIntro": True, "renderOptions": {"introEnabled": False}})
+        self.duration.side_effect = lambda path: 110 if path.resolve() == self.master.resolve() else 55
+        plan = self.plan(30)
+        self.assertEqual(plan["selectionMethod"], "verified-source-section-ranges")
+        self.assertEqual({segment["caption"] for segment in plan["segments"]}, {"Front Porch and Entry", "Interior Tour"})
+
     def test_tampered_source_paths_and_other_highlight_sources_are_rejected(self):
         for filename in ("../youtube-master.mp4", "folder\\master.mp4", "thumbnail.jpg", "tiktok_highlight_master.mp4"):
             with self.subTest(filename=filename), self.assertRaises(ValueError):
