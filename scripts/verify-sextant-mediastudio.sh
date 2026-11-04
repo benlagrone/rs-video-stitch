@@ -22,11 +22,20 @@ done
 docker exec -i mediastudio-api python - <<'PY'
 import json
 import os
+import time
+from urllib.error import URLError
 import urllib.request
 
 assert os.environ["OLLAMA_BASE_URL"] == "http://host.docker.internal:18134", "MediaStudio must use the managed private Ollama transport"
-with urllib.request.urlopen(os.environ["OLLAMA_BASE_URL"] + "/api/tags", timeout=5) as response:
-    assert isinstance(json.load(response).get("models"), list), "Ollama model inventory is unavailable"
+for attempt in range(3):
+    try:
+        with urllib.request.urlopen(os.environ["OLLAMA_BASE_URL"] + "/api/tags", timeout=5) as response:
+            assert isinstance(json.load(response).get("models"), list), "Ollama model inventory is unavailable"
+        break
+    except (TimeoutError, URLError):
+        if attempt == 2:
+            raise
+        time.sleep(1)
 
 request = urllib.request.Request(
     os.environ["FORTRESS_OPTIMIZATION_MCP_URL"] + "/internal/v1/phronesis/admission",
