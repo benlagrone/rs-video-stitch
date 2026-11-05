@@ -12,9 +12,20 @@ export function tikTokPreviewOutputs(outputs = [], variantFilename = '') {
   ];
 }
 
-export function selectTikTokPreviewVideo(outputs = [], selected = '', variantFilename = '') {
+export function completedTikTokHighlight(state, outputs = []) {
+  return state?.status === 'SUCCEEDED' && VIDEO_FILE.test(state.filename || '') && outputs.includes(state.filename)
+    ? state.filename : '';
+}
+
+export function selectTikTokPreviewVideo(outputs = [], selected = '', variantFilename = '', latestHighlightFilename = '') {
   const videos = tikTokPreviewOutputs(outputs, variantFilename);
   if (videos.includes(selected)) return selected;
   if (videos.includes(variantFilename)) return variantFilename;
-  return videos.find((filename) => isTikTokOutput(filename)) || '';
+  if (videos.includes(latestHighlightFilename)) return latestHighlightFilename;
+  return videos.find((filename) => isTikTokOutput(filename) && !/^tiktok_highlight(?:[_-]|\.)/i.test(filename)) || '';
+}
+
+export function refreshTikTokPreviewVideo(outputs = [], selected = '', variantFilename = '', latestHighlightFilename = '') {
+  if (/^tiktok_highlight(?:[_-]|\.)/i.test(selected) && outputs.includes(latestHighlightFilename)) return latestHighlightFilename;
+  return selectTikTokPreviewVideo(outputs, selected, variantFilename, latestHighlightFilename);
 }

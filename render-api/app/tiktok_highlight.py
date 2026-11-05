@@ -16,7 +16,7 @@ from typing import Any, Callable
 from app.highlight_sources import native_source_map, split_window
 from app.media_ai_policy import artifact_ai_status, write_media_provenance
 from app.storage import p_input, p_output, p_work, read_project_state
-from app.vertical_framing import analyze_framing, vertical_filter
+from app.vertical_framing import analyze_fill_focus, analyze_framing, vertical_filter
 
 FPS = 30
 GRAPHICS = {"hookSeconds": 2.0, "outroSeconds": 4.0, "transitionSeconds": 0.4}
@@ -334,11 +334,30 @@ def _normalize_clip(source: Path, destination: Path, duration: float, log=None) 
 
 
 def _visual_sections(source: Path, mapping: list[dict], start: float, end: float, source_info: dict) -> list[dict]:
-    """Prefer matching native assets; unwrap padding only for master fallbacks."""
+    """Use verified clean visuals and unwrap their actual picture boundaries."""
     sections = []
     for piece in split_window(mapping, start, end):
-        if piece["kind"] != "master":
+        if piece["kind"] == "image":
             sections.append({**piece, "crop": None, "framing": "native-asset"})
+            continue
+        if piece["kind"] == "video":
+            # Prepared clips retain the master's approved phone-HDR colour
+            # conversion. Their container may still include portrait padding;
+            # native provenance alone does not establish unpadded picture bounds.
+            native_rate = float(piece.get("assetTimeScale") or 1.0)
+            rate = float(piece.get("proxyTimeScale") or 1.0)
+            asset = Path(piece.get("proxyPath") or piece["assetPath"])
+            offset = piece.get("assetStart", 0.0) / native_rate * rate if piece.get("proxyPath") else piece.get("assetStart", 0.0)
+            if not piece.get("proxyPath"):
+                rate = native_rate
+            length = piece["sourceEnd"] - piece["sourceStart"]
+            for run in analyze_framing(asset, offset, length * rate):
+                run_start = piece["sourceStart"] + run["start"] / rate
+                sections.append({**piece, "nativeAssetPath": piece["assetPath"], "assetPath": asset,
+                    "assetStart": offset + run["start"], "assetTimeScale": rate,
+                    "sourceStart": run_start, "sourceEnd": min(piece["sourceEnd"], run_start + run["duration"] / rate),
+                    "crop": run.get("crop"), "framing": "verified-prepared-proxy" if piece.get("proxyPath") else "native-video",
+                    "pictureBounds": run.get("confidence", "full-frame")})
             continue
         length = piece["sourceEnd"] - piece["sourceStart"]
         for run in analyze_framing(source, piece["sourceStart"], length, probe=source_info):
@@ -358,11 +377,26 @@ def _render_visual_section(piece: dict, destination: Path, log=None) -> None:
         command += ["-loop", "1", "-framerate", str(FPS), "-i", str(asset)]
     else:
         command += ["-ss", f"{piece['assetStart']:.6f}", "-t", f"{length * scale:.6f}", "-i", str(asset)]
+    focus = analyze_fill_focus(asset, piece.get("assetStart", 0.0), length * scale, crop=piece.get("crop"))
+    focus = [(float(second) / scale, float(x)) for second, x in focus]
+    crop = piece.get("crop")
+    if piece.get("framing") == "verified-prepared-proxy" and crop and abs(crop["width"] / crop["height"] / (9 / 16) - 1) <= 0.05:
+        # Conservative picture detection retains a few padded edge pixels.
+        # Tracking within an almost-portrait picture would expose that safety
+        # margin at one edge; centered cover removes it symmetrically.
+        focus = [(0.0, 0.5), (length, 0.5)]
+    piece["focusPoints"] = focus
     if piece["kind"] == "video" and abs(scale - 1) > 0.000001:
-        graph = f"[0:v]setpts=(PTS-STARTPTS)/{scale:.9f}[native];" + vertical_filter("native", "v", crop=piece.get("crop"))
+        graph = f"[0:v]setpts=(PTS-STARTPTS)/{scale:.9f}[native];" + vertical_filter("native", "v", crop=piece.get("crop"), mode="fill", focus_points=focus)
     else:
-        graph = vertical_filter("0:v", "v", crop=piece.get("crop"))
-    command += ["-filter_complex", graph, "-map", "[v]", "-an", "-t", f"{length:.6f}",
+        graph = vertical_filter("0:v", "v", crop=piece.get("crop"), mode="fill", focus_points=focus)
+    label = "v"
+    if piece.get("contactLogoPath"):
+        command += ["-i", str(piece["contactLogoPath"])]
+        graph += ";[1:v]scale=700:-2[contact];[v][contact]overlay=x=100:y=184:eof_action=repeat[marked]"
+        label = "marked"
+    piece["filterGraph"] = graph
+    command += ["-filter_complex", graph, "-map", f"[{label}]", "-an", "-t", f"{length:.6f}",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(destination)]
     _run(command, log)
 
@@ -394,6 +428,7 @@ def _render_body_section(source: Path, sections: list[dict], destination: Path, 
 
 
 def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Path:
+    from app.full_variant import _contact_logo
     from app.renderer import _record_media_asset
     from app.tiktok_highlight_graphics import _brand_logo, _hyperframes_root, render_highlight_graphics
 
@@ -442,35 +477,46 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
     visual_sources: list[dict] = []
     cursor = 0.0
     mapping: list[dict] = []
+    mapping_inputs: dict[Path, dict] = {}
+
+    def mapping_duration(path: Path) -> float:
+        path = Path(path)
+        if path != render_source and path not in mapping_inputs:
+            mapping_inputs[path] = {"fingerprint": _fingerprint(path), "sha256": _hash(path)}
+        return _duration(path)
 
     def record_native(piece: dict) -> None:
         if piece["kind"] == "master":
             return
-        asset = Path(piece["assetPath"])
-        if asset in native_snapshots:
-            return
-        _record_media_asset(native_media, p_input(project_id), asset, "highlight-native-visual")
-        entry = native_media[-1]
-        # The native map verifies that these pixels occur in this exact master.
-        # A reviewed original master therefore covers an otherwise unclassified
-        # matching photo; explicit generation provenance always takes precedence.
-        if entry.get("isAigc") is None and source_ai_media["isAigc"] is False:
-            entry.update(status="original", isAigc=False, basis="inherited")
-            entry["reasons"] = ["Native visual verified against the reviewed original source video."]
-        entry["fingerprint"] = _fingerprint(asset)
-        native_snapshots[asset] = {"fingerprint": entry["fingerprint"], "sha256": entry["sha256"]}
+        # Freeze both sides of the verified lineage. A clean proxy cannot erase
+        # explicit generated-media provenance attached to its native original.
+        for asset in dict.fromkeys(Path(path) for path in (piece.get("nativeAssetPath", piece["assetPath"]), piece["assetPath"])):
+            if asset in native_snapshots:
+                continue
+            kind = "highlight-prepared-visual" if asset != Path(piece.get("nativeAssetPath", asset)) else "highlight-native-visual"
+            _record_media_asset(native_media, p_input(project_id), asset, kind)
+            entry = native_media[-1]
+            verified = mapping_inputs.get(asset)
+            if verified and (_fingerprint(asset) != verified["fingerprint"] or entry["sha256"] != verified["sha256"]):
+                raise RuntimeError("A native visual changed during highlight mapping; output was not published")
+            if entry.get("isAigc") is None and source_ai_media["isAigc"] is False:
+                entry.update(status="original", isAigc=False, basis="inherited")
+                entry["reasons"] = ["Native visual verified against the reviewed original source video."]
+            entry["fingerprint"] = _fingerprint(asset)
+            native_snapshots[asset] = {"fingerprint": entry["fingerprint"], "sha256": entry["sha256"]}
 
     def image_at(second: float, name: str) -> Path:
-        section = split_window(mapping, second, second + 1 / FPS)[0]
+        # Use the same colour-safe proxy and picture bounds as the body. A
+        # short lookahead supplies enough samples to recognise stable padding.
+        sections = _visual_sections(render_source, mapping, second, min(plan.get("sourceDuration") or _duration(render_source), second + 0.4), source_info)
+        section = sections[0] if sections else {"kind": "master", "assetPath": render_source, "assetStart": second}
         record_native(section)
         if section["kind"] == "image":
             return Path(section["assetPath"])
         path = work / f"{name}.jpg"
         asset = Path(section["assetPath"]) if section["kind"] != "master" else render_source
         offset = section.get("assetStart", second)
-        crop = None
-        if section["kind"] == "master":
-            crop = analyze_framing(render_source, second, 1 / FPS, probe=source_info)[0].get("crop")
+        crop = section.get("crop")
         command = ["ffmpeg", "-v", "error", "-y", "-ss", f"{offset:.6f}", "-i", str(asset)]
         if crop:
             command += ["-vf", f"crop={crop['width']}:{crop['height']}:{crop['x']}:{crop['y']}"]
@@ -488,11 +534,25 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
 
     try:
         update("HIGHLIGHT_MAP", 0.04)
+        state = read_project_state(project_id) or {}
         mapping = native_source_map(
             project_id, render_source, _read_json(p_input(project_id) / "scenes.json"),
-            read_project_state(project_id) or {}, probe_duration=_duration,
+            state, probe_duration=mapping_duration,
             windows=[(segment["sourceStart"], segment["sourceEnd"]) for segment in plan["segments"]],
         )
+        for item in mapping:
+            if item.get("fingerprint") and _fingerprint(Path(item["assetPath"])) != item["fingerprint"]:
+                raise RuntimeError("A native visual changed during highlight mapping; output was not published")
+            # Snapshot before any crop/focus decoder runs, never after it has
+            # had time to consume an overwritten retained proxy.
+            record_native({**item, "nativeAssetPath": item["assetPath"],
+                           "assetPath": item.get("proxyPath") if item["kind"] == "video" and item.get("proxyPath") else item["assetPath"]})
+        contact_logo = _contact_logo(project_id, state, p_input(project_id)) if mapping else None
+        if contact_logo:
+            _record_media_asset(graphics_media, p_input(project_id), contact_logo, "highlight-contact-logo", stock_artwork=True)
+        for item in graphics_media:
+            path = Path(contact_logo) if item["kind"] == "highlight-contact-logo" else _brand_logo(_hyperframes_root())
+            native_snapshots[path] = {"fingerprint": _fingerprint(path), "sha256": item["sha256"]}
         add_graphic("hook", GRAPHICS["hookSeconds"], image_at(plan["segments"][0]["sourceStart"], "opening"), plan["hook"])
         for index, segment in enumerate(plan["segments"]):
             duration = segment["sourceEnd"] - segment["sourceStart"]
@@ -502,14 +562,21 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
             sections = _visual_sections(render_source, mapping, segment["sourceStart"], segment["sourceEnd"], source_info)
             for section in sections:
                 record_native(section)
+                if contact_logo and section["kind"] != "master":
+                    section["contactLogoPath"] = contact_logo
+            spoken_windows.append((segment["sourceStart"], segment["sourceEnd"], cursor))
+            _render_body_section(render_source, sections, clip, ass, segment["sourceStart"], duration, has_audio, log)
+            for section in sections:
                 visual_sources.append({
                     "sourceStart": section["sourceStart"], "sourceEnd": section["sourceEnd"],
                     "kind": section["kind"], "assetFilename": Path(section["assetPath"]).name,
+                    "nativeFilename": Path(section.get("nativeAssetPath", section["assetPath"])).name,
                     "assetStart": section.get("assetStart", 0), "crop": section.get("crop"),
-                    "framing": section["framing"],
+                    "assetTimeScale": section.get("assetTimeScale", 1), "framing": section["framing"],
+                    "layout": "fill", "focusPoints": section.get("focusPoints", []),
+                    "filterGraph": section.get("filterGraph"),
+                    "contactOverlay": Path(section["contactLogoPath"]).name if section.get("contactLogoPath") else None,
                 })
-            spoken_windows.append((segment["sourceStart"], segment["sourceEnd"], cursor))
-            _render_body_section(render_source, sections, clip, ass, segment["sourceStart"], duration, has_audio, log)
             pieces.append(clip)
             captions.extend((cursor + start, cursor + end, text) for start, end, text in _caption_schedule(segment["caption"], duration))
             cursor += duration
@@ -541,6 +608,7 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
         provenance["nativeAiMedia"] = native_media
         provenance["visualSources"] = visual_sources
         provenance["framingMode"] = "smart-native" if native_media else "adaptive-master"
+        provenance.update(layout="fill", framingVersion=2)
         if prepared_captions is not None:
             from app.caption_variants import verify_derivative_source
 

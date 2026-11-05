@@ -23,7 +23,7 @@ const STAGES = {
 const prettyStage = (stage) => STAGES[stage] || String(stage || 'Preparing highlight').replaceAll('_', ' ').toLowerCase();
 const message = (error) => error?.message || String(error);
 
-export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = '', spokenCaptionsEnabled = false, request, onCreated, outputHref }) {
+export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = '', spokenCaptionsEnabled = false, request, onCreated, onAvailable, refreshedHighlight, outputHref }) {
   const [source, setSource] = useState('');
   const [targetDuration, setTargetDuration] = useState(45);
   const [plan, setPlan] = useState(null);
@@ -37,10 +37,11 @@ export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = 
   const [notice, setNotice] = useState('');
   const [pollRetry, setPollRetry] = useState(0);
   const [connectionPaused, setConnectionPaused] = useState(false);
-  const callbacks = useRef({ request, onCreated });
+  const callbacks = useRef({ request, onCreated, onAvailable });
   const currentProject = useRef(projectId);
   const delivered = useRef('');
-  callbacks.current = { request, onCreated };
+  const readVersion = useRef(0);
+  callbacks.current = { request, onCreated, onAvailable };
   currentProject.current = projectId;
   const base = `/v1/projects/${encodeURIComponent(projectId)}/tiktok/highlight`;
   const videos = useMemo(() => outputs.filter((file) => VIDEO_FILE.test(file)), [outputs]);
@@ -49,19 +50,21 @@ export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = 
   const duration = highlightDuration(plan);
   const errors = useMemo(() => highlightPlanErrors(plan), [plan]);
 
-  function deliverCompleted(state, { notifyParent = true } = {}) {
+  function deliverCompleted(state, { notifyParent = true, notifyAvailable = true } = {}) {
     if (state.filename) setFilename(state.filename);
     setCaptionFilename(state.captionFilename || '');
     setEditorUrl(state.editorUrl || state.graphicsEditorUrl || '');
+    if (notifyAvailable) callbacks.current.onAvailable?.(state, projectId);
     const key = `${projectId}:${state.jobId || ''}:${state.filename || ''}`;
     if (state.filename && delivered.current !== key) {
       delivered.current = key;
-      if (notifyParent) callbacks.current.onCreated?.(state.filename);
+      if (notifyParent) callbacks.current.onCreated?.(state.filename, state);
     }
   }
 
   useEffect(() => {
     let cancelled = false;
+    const version = ++readVersion.current;
     setPlan(null);
     setJob(null);
     setFilename('');
@@ -79,7 +82,7 @@ export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = 
       return () => { cancelled = true; };
     }
     callbacks.current.request(base).then((state) => {
-      if (cancelled) return;
+      if (cancelled || version !== readVersion.current) return;
       if (state.plan) {
         setPlan(state.plan);
         setSource(state.plan.sourceFilename || '');
@@ -90,13 +93,28 @@ export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = 
       if (state.status === 'SUCCEEDED') deliverCompleted(state, { notifyParent: false });
       if (state.error) setError(state.error);
     }).catch((err) => {
-      if (!cancelled) setError(`Could not load the saved highlight: ${message(err)}`);
+      if (!cancelled && version === readVersion.current) setError(`Could not load the saved highlight: ${message(err)}`);
     }).finally(() => {
-      if (!cancelled) setBusy('');
+      if (!cancelled && version === readVersion.current) setBusy('');
     });
     return () => { cancelled = true; };
     // Project selection owns this load. Callback functions and output refreshes must not reset an editor draft.
   }, [projectId]);
+
+  useEffect(() => {
+    const state = refreshedHighlight?.projectId === projectId ? refreshedHighlight.state : null;
+    if (state?.status !== 'SUCCEEDED' || !outputs.includes(state.filename) || active || (busy && busy !== 'loading')) return;
+    readVersion.current += 1;
+    setJob((previous) => mergeHighlightJob(previous, state));
+    deliverCompleted(state, { notifyParent: false, notifyAvailable: false });
+    if (!dirty && state.plan) {
+      setPlan(state.plan);
+      setSource(state.plan.sourceFilename || '');
+      setTargetDuration([30, 45, 60].includes(state.plan.durationSeconds) ? state.plan.durationSeconds : 45);
+    }
+    if (busy === 'loading') setBusy('');
+    // A metadata refresh updates the completed video, never an in-progress plan edit.
+  }, [projectId, refreshedHighlight]);
 
   useEffect(() => {
     if (!source && videos.length) setSource(videos.includes(defaultSource) ? defaultSource : videos[0]);

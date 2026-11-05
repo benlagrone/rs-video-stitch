@@ -60,10 +60,12 @@ class SmartHighlightIntegrationTests(unittest.TestCase):
         self.assertEqual({Path(command[command.index("-i") + 1]) for command in visual_commands}, {self.portrait, self.landscape})
         self.assertTrue(all("-loop" in command for command in visual_commands))
         self.assertTrue(all(str(self.master) not in command for command in visual_commands))
-        self.assertTrue(all(command[command.index("-filter_complex") + 1].count("split=2") == 1 for command in visual_commands))
+        graphs = [command[command.index("-filter_complex") + 1] for command in visual_commands]
+        self.assertTrue(all("crop=1080:1920" in graph and "split=2" not in graph and "boxblur" not in graph for graph in graphs))
         self.assertEqual((self.master.read_bytes(), self.master.stat().st_mtime_ns), original)
         manifest = json.loads(result.with_suffix(".highlight.json").read_text())
         self.assertEqual(manifest["framingMode"], "smart-native")
+        self.assertEqual((manifest["layout"], manifest["framingVersion"]), ("fill", 2))
         self.assertEqual([row["assetFilename"] for row in manifest["visualSources"]], ["portrait.jpg", "landscape.jpg"])
         self.assertEqual(manifest["sourceSha256"], hashlib.sha256(original[0]).hexdigest())
 
@@ -115,6 +117,85 @@ class SmartHighlightIntegrationTests(unittest.TestCase):
         self.assertEqual([(row["sourceStart"], row["sourceEnd"]) for row in sections], [(20, 21.5), (21.5, 24)])
         self.assertEqual(sections[0]["crop"]["width"], 620)
         self.assertIsNone(sections[1]["crop"])
+
+    def test_padded_prepared_video_uses_proxy_clock_and_unwraps_picture_before_fill(self):
+        raw, proxy = self.input / "recorded-hdr.mov", self.work / "clip_00.mp4"
+        mapping = [{"sourceStart": 2, "sourceEnd": 20, "kind": "video", "assetPath": raw,
+                    "assetStart": 0, "assetTimeScale": 2, "proxyPath": proxy, "proxyTimeScale": 0.75}]
+        crop = {"x": 648, "y": 0, "width": 624, "height": 1080}
+        runs = [{"start": 0, "duration": 1.5, "crop": crop, "confidence": "black-bars"},
+                {"start": 1.5, "duration": 1.5, "crop": None, "confidence": "full-frame"}]
+        with patch.object(highlight, "analyze_framing", return_value=runs) as analyze:
+            sections = highlight._visual_sections(self.master, mapping, 6, 10, {})
+        analyze.assert_called_once_with(proxy, 3.0, 3.0)
+        self.assertEqual([(row["sourceStart"], row["sourceEnd"], row["assetStart"]) for row in sections], [(6, 8, 3), (8, 10, 4.5)])
+        self.assertTrue(all(row["assetPath"] == proxy and row["nativeAssetPath"] == raw for row in sections))
+        piece = sections[0]
+        with patch.object(highlight, "analyze_fill_focus", return_value=[(0, .486), (1.5, .486)]), patch.object(highlight, "_run", side_effect=self._run):
+            highlight._render_visual_section(piece, self.work / "framed.mp4")
+        graph = self.commands[-1][self.commands[-1].index("-filter_complex") + 1]
+        self.assertEqual(piece["focusPoints"], [(0, .5), (2, .5)])
+        self.assertIn("crop=624:1080:648:0", graph)
+        self.assertIn("setpts=(PTS-STARTPTS)/0.750000000", graph)
+        self.assertIn("crop=1080:1920", graph)
+        self.assertNotIn("boxblur", graph)
+
+    def _native_video_fixture(self):
+        raw, proxy = self.input / "recorded-hdr.mov", self.work / "clip_00.mp4"
+        raw.write_bytes(b"native HDR phone pixels")
+        proxy.write_bytes(b"verified tone-mapped clean proxy")
+        self.mapping[0].update(kind="video", assetPath=raw, proxyPath=proxy, assetTimeScale=1, proxyTimeScale=1)
+        return raw, proxy
+
+    def test_proxy_lineage_records_raw_ai_and_uses_clean_pixels_for_body_and_cards(self):
+        raw, proxy = self._native_video_fixture()
+        media_ai_policy.write_media_provenance(raw, ai_generated=True, reasons=["Explicit native generation record."])
+        def framing(_source, _start, length, **_kwargs):
+            return [{"start": 0, "duration": length, "crop": {"x": 648, "y": 0, "width": 624, "height": 1080}, "confidence": "black-bars"}]
+        with patch.object(highlight, "analyze_framing", side_effect=framing):
+            result = self.render()
+        commands = [command for command in self.commands if "-an" in command or "-frames:v" in command]
+        self.assertFalse(any(str(raw) in command for command in commands))
+        self.assertTrue(any(str(proxy) in command and "-frames:v" in command for command in commands))
+        report = json.loads(result.with_suffix(".highlight.json").read_text())
+        self.assertEqual(report["visualSources"][0]["assetFilename"], proxy.name)
+        self.assertEqual(report["visualSources"][0]["nativeFilename"], raw.name)
+        media = json.loads(result.with_suffix(".media.json").read_text())
+        self.assertTrue(media["aiGenerated"])
+        self.assertEqual({item["filename"] for item in media["inputs"] if item["kind"] in {"highlight-native-visual", "highlight-prepared-visual"}}, {raw.name, proxy.name, "images/landscape.jpg"})
+
+    def test_proxy_changed_during_crop_analysis_cannot_be_rebased_as_verified(self):
+        _raw, proxy = self._native_video_fixture()
+        def replace_proxy(_source, _start, length, **_kwargs):
+            proxy.write_bytes(b"unverified replacement proxy")
+            return [{"start": 0, "duration": length, "crop": None, "confidence": "full-frame"}]
+        with patch.object(highlight, "analyze_framing", side_effect=replace_proxy), self.assertRaisesRegex(RuntimeError, "native visual changed"):
+            self.render()
+        self.assertFalse(any(self.output.glob("tiktok_highlight_*.mp4")))
+
+    def test_contact_is_added_once_to_clean_native_visuals_and_bound_to_media_history(self):
+        logo = self.input / "contact.png"
+        logo.write_bytes(b"selected contact artwork")
+        media_ai_policy.write_media_provenance(logo, ai_generated=True, reasons=["Explicit artwork provenance."])
+        with patch("app.full_variant._contact_logo", return_value=logo):
+            result = self.render()
+        graphs = [command[command.index("-filter_complex") + 1] for command in self.commands if "-an" in command]
+        self.assertTrue(all(graph.count("overlay=") == 1 and "overlay=x=100:y=184" in graph for graph in graphs))
+        media = json.loads(result.with_suffix(".media.json").read_text())
+        contact = [item for item in media["inputs"] if item["kind"] == "highlight-contact-logo"]
+        self.assertEqual(len(contact), 1)
+        self.assertEqual(contact[0]["sha256"], hashlib.sha256(logo.read_bytes()).hexdigest())
+        self.assertTrue(media["aiGenerated"])
+
+    def test_unverified_master_fallback_fills_without_duplicating_burned_in_contact(self):
+        piece = {"kind": "master", "assetPath": self.master, "assetStart": 20, "sourceStart": 20, "sourceEnd": 24, "crop": None}
+        with patch.object(highlight, "analyze_fill_focus", return_value=[(0, .3), (4, .7)]), patch.object(highlight, "_run", side_effect=self._run):
+            highlight._render_visual_section(piece, self.work / "fallback.mp4")
+        graph = self.commands[-1][self.commands[-1].index("-filter_complex") + 1]
+        self.assertNotIn("overlay=", graph)
+        self.assertNotIn("boxblur", graph)
+        self.assertIn("crop=1080:1920", graph)
+        self.assertEqual(piece["focusPoints"], [(0, .3), (4, .7)])
 
     def test_more_scenes_than_beats_uses_verified_legacy_scene_windows(self):
         scenes = [{"title": f"Room {index}", "images": [f"photo-{index}.jpg"]} for index in range(9)]

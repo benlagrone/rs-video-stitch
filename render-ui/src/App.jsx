@@ -22,7 +22,7 @@ import { VoiceSamples } from './VoiceSamples.jsx';
 import { ThumbnailStyleSelector } from './ThumbnailStyleSelector.jsx';
 import { TikTokHighlightPanel } from './TikTokHighlightPanel.jsx';
 import { TikTokVideoPreview } from './TikTokVideoPreview.jsx';
-import { selectTikTokPreviewVideo } from './tiktokPreview.js';
+import { completedTikTokHighlight, refreshTikTokPreviewVideo, selectTikTokPreviewVideo } from './tiktokPreview.js';
 import { LECROWN_TIKTOK_DEFAULTS, resolvedTikTokAi, tikTokPreferences, tikTokVideoKey } from './tiktokSettings.js';
 import { captionContextKey, createCaptionGenerationGuard, shouldAutoGenerateCaption } from './tiktokCaption.js';
 
@@ -420,6 +420,7 @@ export function App() {
   const [tiktokVariantSource, setTiktokVariantSource] = useState('');
   const [tiktokVariantFilename, setTiktokVariantFilename] = useState('');
   const [tiktokFramingMode, setTiktokFramingMode] = useState('fill');
+  const [tiktokHighlightSnapshot, setTiktokHighlightSnapshot] = useState(null);
   const tiktokVariantMetadata = useRef({});
   const [tiktokPreviewRevision, setTiktokPreviewRevision] = useState('');
   const [isCreatingTikTokVariant, setIsCreatingTikTokVariant] = useState(false);
@@ -579,6 +580,8 @@ export function App() {
   const tiktokVariantPreviewHref = outputs.includes(tiktokVariantFilename)
     ? `${outputHref(tiktokVariantFilename)}&tiktokPreview=${encodeURIComponent(tiktokPreviewRevision)}`
     : '';
+  const latestTikTokHighlightFilename = tiktokHighlightSnapshot?.projectId === resolvedProjectId
+    ? completedTikTokHighlight(tiktokHighlightSnapshot.state, outputs) : '';
   const previewPosterHref = previewPosterName
     ? `${outputHref(previewPosterName)}${thumbnailRefreshKey ? `&v=${encodeURIComponent(thumbnailRefreshKey)}` : ''}`
     : '';
@@ -644,9 +647,9 @@ export function App() {
   }, [apiBase, authToken]);
   useEffect(() => {
     if (isLoadingProject) return;
-    const selected = selectTikTokPreviewVideo(outputs, tiktokVideoFilename, tiktokVariantFilename);
+    const selected = selectTikTokPreviewVideo(outputs, tiktokVideoFilename, tiktokVariantFilename, latestTikTokHighlightFilename);
     if (selected !== tiktokVideoFilename) setTiktokVideoFilename(selected);
-  }, [outputs, tiktokVideoFilename, tiktokVariantFilename, isLoadingProject]);
+  }, [outputs, tiktokVideoFilename, tiktokVariantFilename, latestTikTokHighlightFilename, isLoadingProject]);
   useEffect(() => {
     let cancelled = false;
     const key = tikTokVideoKey(resolvedProjectId, tiktokVideoFilename);
@@ -775,9 +778,22 @@ export function App() {
     return apiUrl(apiBase, `/v1/projects/${encodeURIComponent(resolvedProjectId)}/outputs/video?filename=${encodeURIComponent(filename)}`);
   }
 
-  async function refreshOutputs() {
-    const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/outputs`);
-    setOutputs(result.files || []);
+  async function refreshOutputs({ selectLatestHighlight = false } = {}) {
+    const expectedProject = resolvedProjectId;
+    const [result, highlight] = await Promise.all([
+      request(`/v1/projects/${encodeURIComponent(expectedProject)}/outputs`),
+      request(`/v1/projects/${encodeURIComponent(expectedProject)}/tiktok/highlight`).catch(() => null),
+    ]);
+    if (highlightProject.current !== expectedProject) return;
+    const files = result.files || [];
+    setOutputs(files);
+    if (highlight) {
+      const latest = completedTikTokHighlight(highlight, files);
+      setTiktokHighlightSnapshot({ projectId: expectedProject, state: highlight });
+      setTiktokVideoFilename((selected) => selectLatestHighlight
+        ? refreshTikTokPreviewVideo(files, selected, tiktokVariantFilename, latest)
+        : selectTikTokPreviewVideo(files, selected, tiktokVariantFilename, latest));
+    }
     setTiktokPreviewRevision(String(Date.now()));
   }
 
@@ -896,6 +912,7 @@ export function App() {
     setTiktokVariantSource('');
     setTiktokVariantFilename('');
     setTiktokFramingMode('fill');
+    setTiktokHighlightSnapshot(null);
     tiktokVariantMetadata.current = {};
     setTiktokPreviewRevision('');
     setTiktokPublishReview(false);
@@ -1037,6 +1054,7 @@ export function App() {
       setTiktokProfileUrl(state.tiktokPublish?.profileUrl || '');
       setTiktokVariantSource(state.tiktokVariant?.sourceFilename || state.outputName || '');
       setTiktokVariantFilename(state.tiktokVariant?.filename || '');
+      setTiktokHighlightSnapshot(null);
       setTiktokFramingMode((state.tiktokFramingMode || state.tiktokVariant?.framingMode) === 'fit' ? 'fit' : 'fill');
       tiktokVariantMetadata.current = state.tiktokVariant || {};
       setTiktokPreviewRevision(String(state.tiktokVariant?.createdAt || Date.now()));
@@ -1749,12 +1767,19 @@ export function App() {
     }
   }
 
-  async function handleTikTokHighlightCreated(filename) {
+  function handleTikTokHighlightAvailable(state, expectedProject) {
+    if (highlightProject.current !== expectedProject || !completedTikTokHighlight(state, outputs)) return;
+    setTiktokHighlightSnapshot({ projectId: expectedProject, state });
+  }
+
+  async function handleTikTokHighlightCreated(filename, state) {
     const expectedProject = resolvedProjectId;
     try {
       const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/outputs`);
       if (highlightProject.current !== expectedProject) return;
+      if (!(result.files || []).includes(filename)) throw new Error('The completed highlight is not available in project outputs yet. Refresh the outputs to check again.');
       setOutputs(result.files || []);
+      setTiktokHighlightSnapshot({ projectId: expectedProject, state: { ...state, status: 'SUCCEEDED', filename } });
       setTiktokVideoFilename(filename);
       setTiktokPreviewRevision(String(Date.now()));
       setStatus('TikTok highlight ready to preview and edit');
@@ -2967,7 +2992,7 @@ export function App() {
             </div>
           )}
           {error && <div className="error-box">{error}</div>}
-          {!previewVideoHref && outputs.length === 0 && <TikTokVideoPreview outputs={outputs} filename={tiktokVideoFilename} variantFilename={tiktokVariantFilename} videoHref={tiktokPreviewHref} onChange={setTiktokVideoFilename} />}
+          {!previewVideoHref && outputs.length === 0 && <TikTokVideoPreview outputs={outputs} filename={tiktokVideoFilename} variantFilename={tiktokVariantFilename} videoHref={tiktokPreviewHref} onChange={setTiktokVideoFilename} latestHighlightFilename={latestTikTokHighlightFilename} />}
           {(previewVideoHref || outputs.length > 0) && (
             <div className="output-panel">
               {previewVideoHref && (
@@ -2977,14 +3002,14 @@ export function App() {
               )}
               <div className="output-heading">
                 <h3>Downloads</h3>
-                <button type="button" onClick={refreshOutputs}>Refresh</button>
+                <button type="button" onClick={() => refreshOutputs({ selectLatestHighlight: true })}>Refresh</button>
               </div>
               <div className="download-list">
                 {(outputs.length ? outputs : [outputName]).map((filename) => (
                   <a key={filename} href={outputHref(filename)} download={filename}>{filename}</a>
                 ))}
               </div>
-              <TikTokVideoPreview outputs={outputs} filename={tiktokVideoFilename} variantFilename={tiktokVariantFilename} videoHref={tiktokPreviewHref} onChange={setTiktokVideoFilename} hasMaster={Boolean(previewVideoHref)} />
+              <TikTokVideoPreview outputs={outputs} filename={tiktokVideoFilename} variantFilename={tiktokVariantFilename} videoHref={tiktokPreviewHref} onChange={setTiktokVideoFilename} latestHighlightFilename={latestTikTokHighlightFilename} hasMaster={Boolean(previewVideoHref)} />
               <div className="youtube-panel">
                 <div className="output-heading">
                   <h3>YouTube</h3>
@@ -3088,6 +3113,8 @@ export function App() {
                   request={request}
                   outputHref={outputHref}
                   onCreated={handleTikTokHighlightCreated}
+                  onAvailable={handleTikTokHighlightAvailable}
+                  refreshedHighlight={tiktokHighlightSnapshot}
                 />
                 <p>{tiktokAuth?.authenticated ? `Connected as ${tiktokAuth.creator?.nickname || tiktokAuth.creator?.username || 'TikTok account'}` : 'Not connected on server'}</p>
                 {!tiktokAuth?.configured && <p>TikTok setup is incomplete on the server. Account connection becomes available after setup.</p>}
