@@ -572,6 +572,9 @@ export function App() {
   const tiktokPreviewHref = outputs.includes(tiktokVideoFilename)
     ? `${outputHref(tiktokVideoFilename)}&tiktokPreview=${encodeURIComponent(tiktokPreviewRevision)}`
     : '';
+  const tiktokVariantPreviewHref = outputs.includes(tiktokVariantFilename)
+    ? `${outputHref(tiktokVariantFilename)}&tiktokPreview=${encodeURIComponent(tiktokPreviewRevision)}`
+    : '';
   const previewPosterHref = previewPosterName
     ? `${outputHref(previewPosterName)}${thumbnailRefreshKey ? `&v=${encodeURIComponent(thumbnailRefreshKey)}` : ''}`
     : '';
@@ -3041,6 +3044,22 @@ export function App() {
                   <h3>TikTok</h3>
                   <button type="button" onClick={refreshTikTokAuth}>Check auth</button>
                 </div>
+                <div className="tiktok-variant-panel">
+                  <h4>Full-length TikTok variant</h4>
+                  {tiktokVariantPreviewHref && <section className="tiktok-inline-preview" aria-label="Full-length TikTok variant preview">
+                    <code className="tiktok-inline-preview__filename">{tiktokVariantFilename}</code>
+                    <div className="tiktok-inline-preview__player">
+                      <video key={tiktokVariantPreviewHref} src={tiktokVariantPreviewHref} controls playsInline preload="metadata" aria-label="Full-length TikTok variant video" />
+                    </div>
+                    <button type="button" onClick={() => setTiktokVideoFilename(tiktokVariantFilename)}>Use full-length variant for publishing</button>
+                  </section>}
+                  <p>Creates a separate 1080 × 1920 MP4. Smart framing removes verified borders and fits portrait and landscape shots individually, with one softened background where needed. The YouTube original stays unchanged.</p>
+                  <label>Source video<select value={tiktokVariantSource || outputName} onChange={(event) => setTiktokVariantSource(event.target.value)} disabled={isCreatingTikTokVariant}>
+                    {(outputs.length ? outputs : [outputName]).filter((file) => /\.(mp4|mov|m4v|webm|mpg|mpeg)$/i.test(file)).map((file) => <option key={file} value={file}>{file}</option>)}
+                  </select></label>
+                  <button type="button" className="secondary-action" onClick={createTikTokVariant} disabled={isCreatingTikTokVariant || !(tiktokVariantSource || outputName)}>{isCreatingTikTokVariant ? 'Creating vertical variant' : 'Create TikTok variant'}</button>
+                  {tiktokVariantFilename && <p className="success-text">TikTok variant ready: {tiktokVariantFilename}</p>}
+                </div>
                 <TikTokHighlightPanel
                   projectId={resolvedProjectId}
                   outputs={outputs}
@@ -3050,15 +3069,6 @@ export function App() {
                   outputHref={outputHref}
                   onCreated={handleTikTokHighlightCreated}
                 />
-                <div className="tiktok-variant-panel">
-                  <strong>Vertical TikTok variant</strong>
-                  <p>Creates a separate 1080 × 1920 MP4. Smart framing removes verified borders and fits portrait and landscape shots individually, with one softened background where needed. The YouTube original stays unchanged.</p>
-                  <label>Source video<select value={tiktokVariantSource || outputName} onChange={(event) => setTiktokVariantSource(event.target.value)} disabled={isCreatingTikTokVariant}>
-                    {(outputs.length ? outputs : [outputName]).filter((file) => /\.(mp4|mov|m4v|webm|mpg|mpeg)$/i.test(file)).map((file) => <option key={file} value={file}>{file}</option>)}
-                  </select></label>
-                  <button type="button" className="secondary-action" onClick={createTikTokVariant} disabled={isCreatingTikTokVariant || !(tiktokVariantSource || outputName)}>{isCreatingTikTokVariant ? 'Creating vertical variant' : 'Create TikTok variant'}</button>
-                  {tiktokVariantFilename && <p className="success-text">TikTok variant ready: {tiktokVariantFilename}</p>}
-                </div>
                 <p>{tiktokAuth?.authenticated ? `Connected as ${tiktokAuth.creator?.nickname || tiktokAuth.creator?.username || 'TikTok account'}` : 'Not connected on server'}</p>
                 {!tiktokAuth?.configured && <p>TikTok setup is incomplete on the server. Account connection becomes available after setup.</p>}
                 {tiktokAuth?.error && <p role="alert">TikTok connection: {tiktokAuth.error}</p>}

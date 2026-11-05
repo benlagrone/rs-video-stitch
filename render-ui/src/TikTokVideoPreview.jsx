@@ -10,9 +10,10 @@ export function TikTokVideoPreview({ outputs, filename, variantFilename, videoHr
         {hasMaster && <a href="#tiktok-video-tools">Create or edit TikTok video</a>}
       </div>
       {hasTikTokVideo && videos.includes(filename) ? <>
+        {videos.includes(variantFilename) && <button type="button" aria-pressed={filename === variantFilename} onClick={() => onChange(variantFilename)}>Show full-length variant</button>}
         <label>TikTok preview video
           <select value={filename} onChange={(event) => onChange(event.target.value)}>
-            {videos.map((file) => <option key={file} value={file}>{file}</option>)}
+            {videos.map((file) => <option key={file} value={file}>{file === variantFilename ? 'Full-length variant · ' : /^tiktok_highlight[_-]/i.test(file) ? 'Highlight · ' : ''}{file}</option>)}
           </select>
         </label>
         <p className="hint">This is also the selected video in the TikTok publishing controls.</p>
