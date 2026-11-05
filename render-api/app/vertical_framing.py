@@ -331,31 +331,63 @@ def _simplify_focus(points: list[tuple[float, float]], tolerance: float = .012) 
 
 
 def _smooth_focus_samples(samples: list[tuple[float, float, bool, bool]], duration: float) -> list[tuple[float, float]]:
-    """Bound pan velocity; only a detected shot cut may jump to a new anchor."""
+    """Smooth the known timeline without causal lag, retaining bounded pans.
+
+    Symmetric forward/backward projection spreads a composition change around
+    its actual time, rather than arriving several seconds after the subject.
+    Shot boundaries remain separate and the first anchor of each shot is held.
+    """
     if not samples:
         return [(0.0, .5), (duration, .5)]
-    chunks: list[list[tuple[float, float]]] = []
-    current = [(0.0, samples[0][1])]
-    last_time, last_focus = current[0]
+    chunks = []
+    current = [(0.0, samples[0][1], samples[0][3])]
+    last_time, last_focus = 0.0, samples[0][1]
     for second, target, cut, is_face in samples[1:]:
         second = min(duration, max(last_time, float(second)))
         if cut and second > last_time:
-            current.append((max(last_time + .0001, second - .001), last_focus))
+            current.append((max(last_time + .0001, second - .001), last_focus, current[-1][2]))
             chunks.append(current)
-            current = [(second, target)]
-            focus = target
+            current = [(second, target, is_face)]
         else:
-            delta = max(0, second - last_time)
-            # Faces can move faster than a room-detail pan; neither gets noisy
-            # frame-to-frame jumps from tiny changes in the feature scores.
-            limit = (.12 if is_face else .075) * delta
-            desired = last_focus + (target - last_focus) * .42
-            focus = last_focus + min(limit, max(-limit, desired - last_focus))
-            current.append((second, focus))
-        last_time, last_focus = second, focus
+            current.append((second, target, is_face))
+        last_time, last_focus = second, target
     if current[-1][0] < duration:
-        current.append((duration, last_focus))
+        current.append((duration, last_focus, current[-1][2]))
     chunks.append(current)
+
+    def smooth(chunk):
+        times = [point[0] for point in chunk]
+        targets = [point[1] for point in chunk]
+        # A centered median suppresses one-sample texture noise without delaying
+        # a sustained change. It never crosses an actual shot boundary.
+        values = [targets[0], *[sorted(targets[index - 1:index + 2])[1] for index in range(1, len(targets) - 1)]]
+        if len(targets) > 1:
+            values.append(targets[-1])
+        limits = [(.12 if chunk[index][2] or chunk[index + 1][2] else .075) * (times[index + 1] - times[index]) for index in range(len(chunk) - 1)]
+        for _ in range(256):
+            changed = 0.0
+            for indices in (range(len(limits)), range(len(limits) - 1, -1, -1)):
+                for index in indices:
+                    difference = values[index + 1] - values[index]
+                    excess = max(0.0, abs(difference) - limits[index])
+                    if excess <= .00000001:
+                        continue
+                    correction = math.copysign(excess, difference)
+                    if index == 0:
+                        values[index + 1] -= correction
+                    else:
+                        values[index] += correction / 2
+                        values[index + 1] -= correction / 2
+                    changed = max(changed, excess)
+            if changed < .0000001:
+                break
+        # Final numeric guard removes residual sub-pixel velocity excess while
+        # keeping the symmetric result and the protected first-shot anchor.
+        for index, limit in enumerate(limits):
+            values[index + 1] = min(values[index] + limit, max(values[index] - limit, values[index + 1]))
+        return list(zip(times, values))
+
+    chunks = [smooth(chunk) for chunk in chunks]
     tolerance = .012
     result = [point for chunk in chunks for point in _simplify_focus(chunk, tolerance)]
     while len(result) > _MAX_FOCUS_POINTS and tolerance < .10:
@@ -467,7 +499,14 @@ def _focus_expression(points) -> str:
         delta = second[1] - first[1]
         if abs(delta) > .0000001:
             terms.append(f"({delta:.6f})*min(max((t-{first[0]:.6f})/{second[0] - first[0]:.6f},0),1)")
-    return "+".join(terms)
+    def balanced_sum(items):
+        if len(items) == 1:
+            return items[0]
+        middle = len(items) // 2
+        return f"({balanced_sum(items[:middle])}+{balanced_sum(items[middle:])})"
+    # FFmpeg also bounds arithmetic-expression recursion, not only nested ifs.
+    # A balanced sum keeps the full 96-point curve at logarithmic tree depth.
+    return balanced_sum(terms)
 
 
 def vertical_filter(

@@ -130,6 +130,19 @@ class VerticalFramingTests(unittest.TestCase):
         with patch.dict("sys.modules", {"cv2": None}):
             self.assertEqual(framing.analyze_fill_focus(Path("missing.mp4"), 10, 4), [(0.0, .5), (4.0, .5)])
 
+    def test_offline_smoothing_reaches_a_sustained_subject_without_causal_lag(self):
+        rows = [(index / 2, .5 if index < 6 else .25, False, False) for index in range(15)]
+        points = framing._smooth_focus_samples(rows, 7.5)
+        def at(second):
+            for first, last in zip(points, points[1:]):
+                if second <= last[0]:
+                    return first[1] + (last[1] - first[1]) * (second - first[0]) / (last[0] - first[0])
+            return points[-1][1]
+        self.assertEqual(points[0], (0.0, .5))
+        self.assertLess(at(2.5), .49)  # a known future shot can begin its pan early
+        self.assertLess(at(3.5), .35)  # no several-second tail after the subject
+        self.assertTrue(all(abs(right[1] - left[1]) / (right[0] - left[0]) <= .07501 for left, right in zip(points, points[1:])))
+
 
 @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"), "OpenCV focus tests run in the API image")
 class FillFocusVisionTests(unittest.TestCase):
@@ -201,6 +214,18 @@ class FillFocusVisionTests(unittest.TestCase):
 
 @unittest.skipUnless(os.getenv("MEDIASTUDIO_FRAMING_FFMPEG_TEST") == "1" and shutil.which("ffmpeg") and shutil.which("ffprobe"), "Set MEDIASTUDIO_FRAMING_FFMPEG_TEST=1 for decoding/encoding QA")
 class VerticalFramingEncodingTests(unittest.TestCase):
+    def test_full_bounded_anchor_curve_encodes_without_nested_expression_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "many-anchors.mp4"
+            points = [(index / 50, .2 if index % 2 else .8) for index in range(96)]
+            subprocess.run([
+                "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=10:d=2",
+                "-filter_complex", framing.vertical_filter(mode="fill", focus_points=points, width=180, height=320),
+                "-map", "[v]", "-c:v", "libx264", "-preset", "ultrafast", str(output),
+            ], check=True)
+            video = next(stream for stream in framing._probe(output)["streams"] if stream["codec_type"] == "video")
+            self.assertEqual((video["width"], video["height"]), (180, 320))
+
     def test_real_fill_encode_follows_anchors_and_has_no_blurred_bands(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
