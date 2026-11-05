@@ -108,6 +108,48 @@ class NativeSourceMapTests(unittest.TestCase):
         self.assertEqual(mapping[0]["kind"], "video")
         self.assertAlmostEqual(mapping[0]["assetTimeScale"], 1.0 / 2.008)
 
+    def test_prepared_proxy_fallback_is_opt_in_and_does_not_claim_raw_verification(self):
+        native = self.file("input/footage/recorded.mov")
+        proxy = self.file("work/footage/clip_00.mp4")
+        self.lengths.update({"recorded.mov": 6, "clip_00.mp4": 6.024})
+        document = {"sourceFootage": [{"filename": native.name, "title": "Interior"}]}
+        pixels = bytes(value for pixel in range(128 * 54) for value in (pixel % 256,) * 3)
+        with patch.object(sources, "_visual_match", return_value=False), patch.object(sources, "_sample", return_value=pixels) as sample:
+            self.assertEqual(sources.native_source_map("project", self.master, document, {}, self.duration, windows=[(1, 3)]), [])
+            sample.assert_not_called()
+            mapping = sources.native_source_map("project", self.master, document, {}, self.duration, windows=[(1, 3)], allow_prepared_proxy=True)
+        self.assertEqual(len(mapping), 1)
+        self.assertEqual((mapping[0]["assetPath"], mapping[0]["assetStart"], mapping[0]["assetTimeScale"]), (proxy, 1, 1))
+        self.assertEqual((mapping[0]["sourceStart"], mapping[0]["sourceEnd"]), (1, 3))
+        self.assertFalse(mapping[0]["nativeVerified"])
+        self.assertEqual(mapping[0]["binding"], "master-verified-prepared-proxy")
+        self.assertNotIn(native, [call.args[0] for call in sample.call_args_list])
+
+    def test_same_duration_unrelated_or_blank_prepared_proxy_is_rejected(self):
+        proxy = self.file("work/footage/clip_00.mp4")
+        item = {"sourceStart": 10, "sourceEnd": 20, "proxyPath": proxy, "proxyTimeScale": .75, "sceneIndex": 0, "sceneTitle": "Interior"}
+        pixels = bytes(value for pixel in range(128 * 54) for value in (pixel % 256,) * 3)
+        for proxy_pixels in (bytes(255 - value for value in pixels), bytes(len(pixels))):
+            with self.subTest(blank=not any(proxy_pixels)), patch.object(sources, "_sample", side_effect=lambda path, second: pixels if path == self.master else proxy_pixels):
+                self.assertEqual(sources._prepared_windows(self.master, item, [(12, 16)]), [])
+
+    def test_prepared_proxy_checks_exact_requested_clock_and_rejects_replacement(self):
+        proxy = self.file("work/footage/clip_00.mp4")
+        item = {"sourceStart": 10, "sourceEnd": 20, "proxyPath": proxy, "proxyTimeScale": .75, "sceneIndex": 0, "sceneTitle": "Interior"}
+        pixels = bytes(value for pixel in range(128 * 54) for value in (pixel % 256,) * 3)
+        with patch.object(sources, "_sample", return_value=pixels) as sample:
+            mapping = sources._prepared_windows(self.master, item, [(12, 16)])
+        self.assertEqual((mapping[0]["assetStart"], mapping[0]["assetTimeScale"]), (1.5, .75))
+        self.assertEqual([call.args[0] for call in sample.call_args_list], [self.master, proxy, self.master, proxy])
+        for actual, expected in zip([call.args[1] for call in sample.call_args_list], [13.08, 2.31, 14.92, 3.69]):
+            self.assertAlmostEqual(actual, expected)
+        def replace(path, second):
+            if path == proxy:
+                proxy.write_bytes(b"replacement with matching mock pixels")
+            return pixels
+        with patch.object(sources, "_sample", side_effect=replace):
+            self.assertEqual(sources._prepared_windows(self.master, item, [(12, 16)]), [])
+
     def test_split_window_covers_transitions_and_tracks_native_offsets(self):
         mapping = [{"sourceStart": 2, "sourceEnd": 5, "kind": "video", "assetStart": 1, "assetTimeScale": 0.5, "assetPath": Path("native.mov")},
                    {"sourceStart": 7, "sourceEnd": 10, "kind": "image", "assetStart": 0, "assetTimeScale": 0, "assetPath": Path("photo.jpg")}]

@@ -173,6 +173,23 @@ class SmartHighlightIntegrationTests(unittest.TestCase):
             self.render()
         self.assertFalse(any(self.output.glob("tiktok_highlight_*.mp4")))
 
+    def test_proxy_only_binding_uses_parent_and_proxy_provenance_without_claiming_raw_origin(self):
+        raw, proxy = self._native_video_fixture()
+        media_ai_policy.write_media_provenance(raw, ai_generated=True, reasons=["Unverified raw generation record."])
+        self.mapping[0].update(assetPath=proxy, nativeVerified=False, binding="master-verified-prepared-proxy")
+        def framing(_source, _start, length, **_kwargs):
+            return [{"start": 0, "duration": length, "crop": None, "confidence": "full-frame"}]
+        with patch.object(highlight, "analyze_framing", side_effect=framing):
+            result = self.render()
+        report = json.loads(result.with_suffix(".highlight.json").read_text())
+        self.assertFalse(report["visualSources"][0]["nativeVerified"])
+        self.assertIsNone(report["visualSources"][0]["nativeFilename"])
+        history = json.loads(result.with_suffix(".media.json").read_text())
+        self.assertFalse(history["aiGenerated"])
+        prepared = [item for item in history["inputs"] if item["kind"] == "highlight-prepared-visual"]
+        self.assertEqual([item["filename"] for item in prepared], [proxy.name])
+        self.assertNotIn(raw.name, [item["filename"] for item in history["inputs"]])
+
     def test_contact_is_added_once_to_clean_native_visuals_and_bound_to_media_history(self):
         logo = self.input / "contact.png"
         logo.write_bytes(b"selected contact artwork")

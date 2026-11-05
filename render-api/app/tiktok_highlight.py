@@ -493,7 +493,7 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
         for asset in dict.fromkeys(Path(path) for path in (piece.get("nativeAssetPath", piece["assetPath"]), piece["assetPath"])):
             if asset in native_snapshots:
                 continue
-            kind = "highlight-prepared-visual" if asset != Path(piece.get("nativeAssetPath", asset)) else "highlight-native-visual"
+            kind = "highlight-prepared-visual" if piece.get("nativeVerified") is False or asset != Path(piece.get("nativeAssetPath", asset)) else "highlight-native-visual"
             _record_media_asset(native_media, p_input(project_id), asset, kind)
             entry = native_media[-1]
             verified = mapping_inputs.get(asset)
@@ -501,7 +501,8 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
                 raise RuntimeError("A native visual changed during highlight mapping; output was not published")
             if entry.get("isAigc") is None and source_ai_media["isAigc"] is False:
                 entry.update(status="original", isAigc=False, basis="inherited")
-                entry["reasons"] = ["Native visual verified against the reviewed original source video."]
+                visual = "Prepared" if piece.get("nativeVerified") is False else "Native"
+                entry["reasons"] = [f"{visual} visual verified against the reviewed original source video."]
             entry["fingerprint"] = _fingerprint(asset)
             native_snapshots[asset] = {"fingerprint": entry["fingerprint"], "sha256": entry["sha256"]}
 
@@ -539,6 +540,7 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
             project_id, render_source, _read_json(p_input(project_id) / "scenes.json"),
             state, probe_duration=mapping_duration,
             windows=[(segment["sourceStart"], segment["sourceEnd"]) for segment in plan["segments"]],
+            allow_prepared_proxy=True,
         )
         for item in mapping:
             if item.get("fingerprint") and _fingerprint(Path(item["assetPath"])) != item["fingerprint"]:
@@ -570,7 +572,9 @@ def render_highlight(project_id: str, plan: dict, progress=None, log=None) -> Pa
                 visual_sources.append({
                     "sourceStart": section["sourceStart"], "sourceEnd": section["sourceEnd"],
                     "kind": section["kind"], "assetFilename": Path(section["assetPath"]).name,
-                    "nativeFilename": Path(section.get("nativeAssetPath", section["assetPath"])).name,
+                    "nativeFilename": None if section.get("nativeVerified") is False else Path(section.get("nativeAssetPath", section["assetPath"])).name,
+                    "nativeVerified": section.get("nativeVerified", section["kind"] != "master"),
+                    "binding": section.get("binding", "native-and-master-verified" if section["kind"] != "master" else "selected-master"),
                     "assetStart": section.get("assetStart", 0), "crop": section.get("crop"),
                     "assetTimeScale": section.get("assetTimeScale", 1), "framing": section["framing"],
                     "layout": "fill", "focusPoints": section.get("focusPoints", []),

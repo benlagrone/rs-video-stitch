@@ -87,6 +87,38 @@ def _visual_match(master: Path, item: dict) -> bool:
         return False
 
 
+def _prepared_windows(master: Path, item: dict, windows: list[tuple[float, float]]) -> list[dict]:
+    """Expose only exact-master-verified proxy windows, without a raw claim.
+
+    A retained constant-frame-rate clip can differ by a frame from its phone
+    original. Its pixels are still safe when they independently match the
+    selected finished master at both samples inside each requested window.
+    """
+    proxy = item["proxyPath"]
+    rate = item.get("proxyTimeScale", 1.0)
+    verified = []
+    try:
+        before = _fingerprint(proxy)
+        for start, end in windows:
+            left, right = max(start, item["sourceStart"]), min(end, item["sourceEnd"])
+            if right <= left:
+                continue
+            offset = (left - item["sourceStart"]) * rate
+            for fraction in (0.27, 0.73):
+                delta = (right - left) * fraction
+                if not _similar(_sample(master, left + delta), _sample(proxy, offset + delta * rate)):
+                    break
+            else:
+                verified.append({"sourceStart": left, "sourceEnd": right,
+                    "assetPath": proxy, "kind": "video", "assetStart": offset, "assetTimeScale": rate,
+                    "proxyPath": proxy, "proxyTimeScale": rate, "fingerprint": before,
+                    "sceneIndex": item["sceneIndex"], "sceneTitle": item["sceneTitle"],
+                    "nativeVerified": False, "binding": "master-verified-prepared-proxy"})
+        return verified if _fingerprint(proxy) == before else []
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+
+
 def _asset(root: Path, name: object) -> Path | None:
     if not isinstance(name, str) or not name or Path(name).name != name or "\\" in name:
         return None
@@ -108,6 +140,7 @@ def native_source_map(
     probe_duration: Callable[[Path], float] | None = None,
     *,
     windows: list[tuple[float, float]] | None = None,
+    allow_prepared_proxy: bool = False,
 ) -> list[dict]:
     """Return only visually verified native shots in absolute master seconds.
 
@@ -115,6 +148,10 @@ def native_source_map(
     Every returned asset includes its file fingerprint for the caller's final
     unchanged-input check. Native video time is master delta times
     ``assetTimeScale``; image time is always zero.
+
+    Highlights may opt into independently master-verified prepared video
+    windows. Those entries explicitly set ``nativeVerified=False`` and expose
+    the prepared file as their asset, without attributing pixels to a raw file.
     """
     duration = probe_duration or _duration
     work, inputs = p_work(project_id), p_input(project_id)
@@ -191,7 +228,9 @@ def native_source_map(
             if windows is not None and not any(item["sourceStart"] < end and item["sourceEnd"] > start for start, end in windows):
                 continue
             if _visual_match(master, item) and _fingerprint(item["assetPath"]) == item["fingerprint"]:
-                verified.append(item)
+                verified.append({**item, "nativeVerified": True})
+            elif allow_prepared_proxy and windows and item["kind"] == "video":
+                verified.extend(_prepared_windows(master, item, windows))
         return verified
     except (OSError, ValueError, TypeError, subprocess.SubprocessError):
         return []
