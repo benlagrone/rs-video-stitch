@@ -19,6 +19,68 @@ for container in mediastudio-api mediastudio-worker; do
   docker inspect "$container" --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' \
     | grep -qx 'fortress-workload-control-net'
 done
+docker inspect mediastudio-worker --format '{{json .Config.Env}}' | python3 -c '
+import json, sys
+names = {entry.partition("=")[0] for entry in json.load(sys.stdin)}
+assert "TIKTOK_CLIENT_SECRET" not in names, "TikTok client credentials must stay in the API container"
+'
+docker inspect mediastudio-api --format '{{json .Mounts}}' | python3 -c '
+import json, sys
+assert any(mount.get("Destination") == "/videos" and mount.get("Type") in {"bind", "volume"} and mount.get("Source") for mount in json.load(sys.stdin)), "TikTok credentials require the persistent /videos mount"
+'
+
+docker exec -e REQUIRE_TIKTOK_AUTH="${REQUIRE_TIKTOK_AUTH:-0}" -i mediastudio-api python - <<'TIKTOK_PY'
+import json
+import os
+from pathlib import Path
+import urllib.request
+
+settings = ("TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET", "TIKTOK_REDIRECT_URI")
+assert all(key in os.environ for key in settings), "TikTok settings are not injected into the API container"
+assert os.environ.get("TIKTOK_TOKEN_FILE") == "/videos/tiktok_token.json", "TikTok token storage must persist under /videos"
+assert os.environ.get("TIKTOK_STATE_FILE") == "/videos/tiktok_oauth_state.json", "TikTok state storage must persist under /videos"
+for key in ("TIKTOK_TOKEN_FILE", "TIKTOK_STATE_FILE"):
+    path = Path(os.environ[key])
+    if path.exists():
+        assert path.stat().st_mode & 0o077 == 0, "TikTok credential/state files must be private to their owner"
+with urllib.request.urlopen("http://127.0.0.1:8080/v1/tiktok/auth/status", timeout=65) as response:
+    status = json.load(response)
+assert isinstance(status, dict) and type(status.get("configured")) is bool and type(status.get("authenticated")) is bool, "TikTok status must expose configured/authenticated booleans"
+assert status["configured"] == all(os.environ[key].strip() for key in settings), "TikTok status does not match API environment configuration"
+
+def check_public_fields(value):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = str(key).lower().replace("_", "").replace("-", "")
+            assert normalized not in {"clientkey", "clientsecret", "accesstoken", "refreshtoken", "authorization", "token"}, "TikTok public status exposes a credential field"
+            check_public_fields(child)
+    elif isinstance(value, list):
+        for child in value:
+            check_public_fields(child)
+
+check_public_fields(status)
+private_values = [os.environ[key].strip() for key in settings[:2]]
+token_path = Path(os.environ["TIKTOK_TOKEN_FILE"])
+if token_path.exists():
+    tokens = json.loads(token_path.read_text("utf-8"))
+    private_values.extend(str(tokens.get(key) or "") for key in ("access_token", "refresh_token"))
+public_json = json.dumps(status)
+assert not any(value and value in public_json for value in private_values), "TikTok public status exposes a credential value"
+
+if os.environ.get("REQUIRE_TIKTOK_AUTH") == "1":
+    assert status["configured"], "TikTok OAuth is not configured"
+    assert status["authenticated"], "TikTok account is not connected"
+    username = str((status.get("creator") or {}).get("username") or "").lstrip("@").casefold()
+    assert username == "lecrown_properties", "TikTok is connected to the wrong account"
+    print("TikTok publishing acceptance passed for @lecrown_properties.")
+elif not status["configured"]:
+    print("TikTok is unconfigured: service healthy, publishing not connected.")
+elif not status["authenticated"]:
+    print("TikTok is configured; account connection is pending.")
+else:
+    print("TikTok is connected; run with REQUIRE_TIKTOK_AUTH=1 to verify the LeCrown account.")
+TIKTOK_PY
+
 docker exec -i mediastudio-api python - <<'PY'
 import json
 import os

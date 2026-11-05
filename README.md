@@ -153,6 +153,20 @@ set these server-side values; never place them in the browser bundle:
 | `TIKTOK_TOKEN_FILE` | Optional server-only OAuth token path; defaults to `/videos/tiktok_token.json`. |
 | `TIKTOK_STATE_FILE` | Optional server-only OAuth state path; defaults to `/videos/tiktok_oauth_state.json`. |
 
+On Sextant, set the client key, client secret, and redirect URI in the untracked
+repository-root `.env` or server environment. Docker Compose passes those three
+values only to `render-api` and keeps the token and OAuth state files at the
+paths above on the persistent `/videos` bind mount. Empty settings leave TikTok
+unconfigured without preventing other MediaStudio features from starting.
+The current Web Login flow requires an exact registered HTTPS URL, without a
+query string or fragment; the private HTTP MediaStudio URL cannot serve as
+that callback. TikTok's separate Desktop loopback flow is not implemented.
+Apply environment changes through the locked Sextant deployment path.
+The normal MediaStudio smoke check accepts an explicitly unconfigured TikTok
+integration. Run `REQUIRE_TIKTOK_AUTH=1 bash scripts/verify-sextant-mediastudio.sh`
+on Sextant for final publishing acceptance; it also requires an authenticated
+`lecrown_properties` account and verifies persistent, server-only credentials.
+
 The Render Desk requires a final review before every TikTok publish. TikTok's
 creator-info response controls the available privacy options. New unaudited
 apps are limited by TikTok to private posts until their Direct Post client is
