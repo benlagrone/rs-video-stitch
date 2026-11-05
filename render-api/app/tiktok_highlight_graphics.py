@@ -22,6 +22,7 @@ _KIND_STYLES = {
     "hook": "#contacts, #outro-action { display: none; }",
     "transition": "#contacts, #outro-action { display: none; } #headline { top: 510px; } #headline-text { font-size: 76px; } #supporting { top: 1020px; }",
     "outro": "#eyebrow, #accent, #supporting { display: none; } #headline { top: 440px; } #headline-text { font-size: 58px; line-height: 1.15; }",
+    "full-opening": "#outro-action { display: none; } #brand { top: 190px; } #eyebrow { top: 310px; } #headline { top: 380px; } #headline-text { font-size: 72px; } #accent { top: 585px; } #supporting { top: 635px; } #supporting-text { font-size: 37px; line-height: 1.3; } #contacts { top: 900px; } #contacts-inner { padding: 22px 26px 24px; } #brokerage { font-size: 31pt; line-height: 1.2; } #broker { font-size: 30pt; line-height: 1.2; margin-top: 6px; } #phone-row { margin-top: 16px; } #phone { font-size: 52px; } #email { font-size: 28px; line-height: 1.25; margin-top: 12px; } #email:empty { display: none; }",
 }
 
 
@@ -91,10 +92,11 @@ def prepare_highlight_graphics(
     kind: str = "hook",
     duration: float = 2.0,
     background_image: Path | None = None,
+    eyebrow: str | None = None,
 ) -> Path:
     """Create a self-contained, editable HyperFrames project; do not render it."""
-    if kind not in {"hook", "transition", "outro"}:
-        raise ValueError("Highlight graphics kind must be hook, transition, or outro")
+    if kind not in _KIND_STYLES:
+        raise ValueError("Portrait graphics kind must be hook, transition, outro, or full-opening")
     if not math.isfinite(float(duration)) or not 0.1 <= float(duration) <= 10:
         raise ValueError("Highlight graphics duration must be between 0.1 and 10 seconds")
     root = _hyperframes_root()
@@ -120,7 +122,7 @@ def prepare_highlight_graphics(
     chinese = language.lower().startswith(("zh", "cmn"))
     variables = {
         **_contact_copy(dict(contact or {})),
-        "eyebrow": "房产亮点" if chinese else "PROPERTY HIGHLIGHT",
+        "eyebrow": _copy_text(eyebrow, 60) if eyebrow is not None else "房产亮点" if chinese else "PROPERTY HIGHLIGHT",
         "headline": _copy_text(title if kind == "outro" else hook or title, 150),
         "supporting": _copy_text(title if hook else "", 160),
         "action": "预约私人看房" if chinese else "Arrange a private tour",
@@ -158,12 +160,14 @@ def render_highlight_graphics(
     kind: str = "hook",
     duration: float = 2.0,
     background_image: Path | None = None,
+    eyebrow: str | None = None,
     log: Callable[[str], None] | None = None,
 ) -> Path:
     """Render a 1080×1920 HyperFrames card with a silent stereo AAC track."""
     project = prepare_highlight_graphics(
         output_dir, title=title, hook=hook, contact=contact, language=language,
         kind=kind, duration=duration, background_image=background_image,
+        eyebrow=eyebrow,
     )
     binary = _hyperframes_root() / "node_modules" / ".bin" / "hyperframes"
     if not binary.is_file():

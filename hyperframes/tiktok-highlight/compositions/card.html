@@ -56,10 +56,11 @@
           let size = parseFloat(getComputedStyle(node).fontSize);
           while ((node.scrollHeight > maxHeight || node.scrollWidth > node.clientWidth + 1) && size > minSize) { size -= 1; node.style.fontSize = `${size}px`; }
         };
-        fit('headline-text', kind === 'outro' ? 230 : 440, kind === 'outro' ? 46 : 56);
-        fit('supporting-text', 250, 32);
-        fit('brokerage', 72, 35);
-        fit('email', 150, 30);
+        fit('headline-text', kind === 'full-opening' ? 180 : kind === 'outro' ? 230 : 440, kind === 'outro' ? 46 : 56);
+        fit('supporting-text', kind === 'full-opening' ? 220 : 250, 32);
+        fit('brokerage', kind === 'full-opening' ? 60 : 72, kind === 'full-opening' ? 30 : 35);
+        if (kind === 'full-opening') document.getElementById('broker').style.fontSize = `${parseFloat(getComputedStyle(document.getElementById('brokerage')).fontSize) - 4 / 3}px`;
+        fit('email', kind === 'full-opening' ? 70 : 150, kind === 'full-opening' ? 28 : 30);
         const tl = gsap.timeline({ paused: true });
         const arrival = Math.min(.42, duration * .6);
         // Registry lt-mask-reveal inspired accent sweep; copy stays legible at frame zero.

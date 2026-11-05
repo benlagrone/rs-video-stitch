@@ -10,9 +10,11 @@ import tempfile
 import uuid
 import time
 import csv
+import fcntl
 import html
 import hashlib
 import re
+import shutil
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -93,6 +95,8 @@ from app.storage import (
     list_projects,
     p_input,
     p_output,
+    p_state,
+    p_work,
     project_asset_path,
     read_project_version,
     read_project_state,
@@ -2578,6 +2582,130 @@ async def tiktok_publish(pid: str, req: TikTokPublishRequest) -> TikTokPublishRe
     return TikTokPublishResponse(**result)
 
 
+def _tiktok_variant_file_identity(path: Path) -> Optional[tuple[dict, str]]:
+    if path.is_symlink():
+        raise ValueError("TikTok variant files must be regular project files")
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise ValueError("TikTok variant files must be regular project files")
+    before = path.stat()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    after = path.stat()
+    if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+        raise ValueError("The video changed while its identity was checked. Try again.")
+    return {"size": after.st_size, "mtimeNs": str(after.st_mtime_ns)}, digest.hexdigest()
+
+
+def _tiktok_variant_bundle(destination: Path, work: Path) -> list[Path]:
+    return [destination, *[destination.with_suffix(suffix) for suffix in (
+        ".media.json", ".captions.json", ".framing.json", ".srt", ".ass",
+    )], work / f"uncaptioned_{destination.name}"]
+
+
+def _tiktok_variant_added_media(source: Path, destination: Path, parent_identity: dict, parent_sha256: str, output_sha256: str) -> list[dict]:
+    report_path = destination.with_suffix(".framing.json")
+    if not report_path.is_file():
+        return []
+    try:
+        report = json.loads(report_path.read_text("utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError("The TikTok framing media history is invalid. Create the variant again.") from exc
+    additions = report.get("addedMedia", []) if isinstance(report, dict) else None
+    if not isinstance(additions, list) or any(not isinstance(item, dict) for item in additions):
+        raise ValueError("The TikTok framing media history is invalid. Create the variant again.")
+    if additions:
+        recorded_parent = report.get("sourceIdentity") or {}
+        if (report.get("version") != 1 or report.get("sourceFilename") != source.name
+                or report.get("outputFilename") != destination.name or report.get("outputSha256") != output_sha256
+                or recorded_parent.get("sha256") != parent_sha256 or recorded_parent.get("size") != parent_identity["size"]
+                or str(recorded_parent.get("mtimeNs")) != parent_identity["mtimeNs"]):
+            raise ValueError("The TikTok framing media history does not match this source and output. Create the variant again.")
+    return additions
+
+
+def _snapshot_tiktok_variant(destination: Path, work: Path) -> dict[Path, Path]:
+    """Retain the previous accepted bundle without moving the live artifact."""
+    existing = [path for path in _tiktok_variant_bundle(destination, work) if path.exists() or path.is_symlink()]
+    if not existing:
+        return {}
+    history = work / "tiktok-variant-history" / destination.stem / f"{time.time_ns()}-{uuid.uuid4().hex}"
+    history.mkdir(parents=True)
+    copies = {}
+    for path in existing:
+        identity = _tiktok_variant_file_identity(path)
+        backup = history / ("work" if path.parent == work else "output") / path.name
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, backup)
+        if _tiktok_variant_file_identity(path) != identity or _tiktok_variant_file_identity(backup) != identity:
+            raise ValueError("The previous TikTok variant changed while its history was saved. Try again.")
+        copies[path] = backup
+    return copies
+
+
+def _restore_tiktok_variant(destination: Path, previous: dict[Path, Path], observed: dict) -> None:
+    """Roll back this conversion only while its published video is still ours."""
+    def unchanged(path: Path, expected: Optional[tuple[dict, str]]) -> bool:
+        try:
+            return _tiktok_variant_file_identity(path) == expected
+        except (OSError, ValueError):
+            return False
+    if not observed.get(destination) or not unchanged(destination, observed[destination]):
+        return
+    # Restore metadata first, then swap the accepted video back into place.
+    for path in [item for item in observed if item != destination] + [destination]:
+        if not unchanged(destination, observed[destination]):
+            return
+        expected = observed[path]
+        if not unchanged(path, expected):
+            # A different writer may have updated a sidecar or clean master.
+            continue
+        backup = previous.get(path)
+        if backup is None:
+            path.unlink(missing_ok=True)
+            continue
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.restore")
+        try:
+            shutil.copy2(backup, temporary)
+            if not unchanged(destination, observed[destination]):
+                return
+            if not unchanged(path, expected):
+                continue
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def _read_tiktok_variant_state(pid: str) -> tuple[dict, Optional[tuple[dict, str]]]:
+    target = p_state(pid)
+    before = _tiktok_variant_file_identity(target)
+    state = read_project_state(pid) or {}
+    if _tiktok_variant_file_identity(target) != before:
+        raise ValueError("The project changed while the TikTok variant was being saved. Try again.")
+    return state, before
+
+
+def _save_tiktok_variant_state(pid: str, state: dict, *, project_name: str, expected_identity: Optional[tuple[dict, str]]) -> None:
+    """Keep the accepted state intact if this variant's state write fails."""
+    ensure_dirs(pid, project_name=project_name)
+    target = p_state(pid)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(state, handle, indent=2, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if _tiktok_variant_file_identity(target) != expected_identity:
+            raise ValueError("The project was edited while the TikTok variant was being saved. Your edits were preserved; try again.")
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 @app.post("/v1/projects/{pid}/tiktok/variant", response_model=TikTokVariantResponse)
 async def tiktok_variant(pid: str, req: TikTokVariantRequest) -> TikTokVariantResponse:
     source_name = Path(req.filename).name
@@ -2587,55 +2715,79 @@ async def tiktok_variant(pid: str, req: TikTokVariantRequest) -> TikTokVariantRe
     if not source.exists() or not source.is_file():
         raise HTTPException(status_code=404, detail="video not found")
     destination = p_output(pid) / f"tiktok_{Path(source_name).stem}.mp4"
-    project_state = read_project_state(pid) or {}
-    saved_options = project_state.get("renderOptions") or {}
-    captions_enabled = req.captionsEnabled if req.captionsEnabled is not None else saved_options.get("captionsEnabled") is True
+    work = p_work(pid)
+    lock_root = work / "tiktok-variant-locks"
+    lock_root.mkdir(parents=True, exist_ok=True)
+    lock_name = hashlib.sha256(destination.name.encode()).hexdigest() + ".lock"
+    lock = (lock_root / lock_name).open("a")
     try:
-        assessment = await run_in_threadpool(artifact_ai_status, pid, source_name)
-        def source_identity() -> tuple[dict, str]:
-            stat = source.stat()
-            with source.open("rb") as handle:
-                digest = hashlib.file_digest(handle, "sha256").hexdigest()
-            return {"size": stat.st_size, "mtimeNs": str(stat.st_mtime_ns)}, digest
-        identity, digest = await run_in_threadpool(source_identity)
-        if assessment.get("fingerprint") != identity:
-            raise ValueError("The source video changed. Check its media history again.")
-        if captions_enabled or source.with_suffix(".captions.json").is_file():
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise HTTPException(status_code=409, detail="This TikTok variant is already being created. Wait for it to finish.") from exc
+        previous = {}
+        observed = {}
+        try:
+            project_state = read_project_state(pid) or {}
+            saved_options = project_state.get("renderOptions") or {}
+            captions_enabled = req.captionsEnabled if req.captionsEnabled is not None else saved_options.get("captionsEnabled") is True
+            assessment = await run_in_threadpool(artifact_ai_status, pid, source_name)
+            source_version = await run_in_threadpool(_tiktok_variant_file_identity, source)
+            if source_version is None:
+                raise ValueError("The source video is no longer available")
+            identity, digest = source_version
+            if assessment.get("fingerprint") != identity:
+                raise ValueError("The source video changed. Check its media history again.")
+            previous = await run_in_threadpool(_snapshot_tiktok_variant, destination, work)
             await run_in_threadpool(
                 render_tiktok_variant, source, destination,
                 captions_enabled=captions_enabled, project_id=pid,
                 language=saved_options.get("ttsLanguage") or project_state.get("language"),
+                framing_mode=req.framingMode,
             )
-        else:
-            await run_in_threadpool(render_tiktok_variant, source, destination)
-        final_identity, final_digest = await run_in_threadpool(source_identity)
-        if (identity, digest) != (final_identity, final_digest):
-            destination.unlink(missing_ok=True)
-            raise ValueError("The source video changed during conversion. Create the vertical variant again.")
-        def record_variant_origin() -> None:
-            write_media_provenance(
-                destination, ai_generated=assessment.get("isAigc"),
-                reasons=["Vertical framing preserves the source video's media.", *assessment.get("reasons", [])],
-                source={"kind": "deterministic-derivative", "filename": source.name, "sha256": digest},
+            observed = await run_in_threadpool(lambda: {
+                path: _tiktok_variant_file_identity(path) for path in _tiktok_variant_bundle(destination, work)
+            })
+            if not observed[destination] or not observed[destination][0]["size"]:
+                raise ValueError("The TikTok conversion did not create a completed video")
+            if (identity, digest) != await run_in_threadpool(_tiktok_variant_file_identity, source):
+                raise ValueError("The source video changed during conversion. Create the vertical variant again.")
+            additions = await run_in_threadpool(_tiktok_variant_added_media, source, destination, identity, digest, observed[destination][1])
+            ai_statuses = [assessment.get("isAigc"), *(item.get("isAigc") for item in additions)]
+            output_ai = True if any(value is True for value in ai_statuses) else (False if all(value is False for value in ai_statuses) else None)
+            ai_reasons = [*assessment.get("reasons", []), *(reason for item in additions for reason in item.get("reasons", []) if isinstance(reason, str))]
+            await run_in_threadpool(
+                write_media_provenance,
+                destination, ai_generated=output_ai,
+                reasons=["Vertical framing preserves the source video's media.", *dict.fromkeys(ai_reasons)],
+                inputs=additions,
+                source={"kind": "deterministic-derivative", "filename": source.name, "sha256": digest, "framingMode": req.framingMode},
+                expected_fingerprint=observed[destination][0],
             )
-        await run_in_threadpool(record_variant_origin)
-    except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"TikTok variant failed: {exc}") from exc
-
-    state = read_project_state(pid) or {}
-    state["tiktokVariant"] = {
-        "sourceFilename": source_name,
-        "filename": destination.name,
-        "width": 1080,
-        "height": 1920,
-        "createdAt": time.time(),
-        "captionsEnabled": captions_enabled,
-    }
-    state["updatedAt"] = time.time()
-    save_project_state(pid, state, project_name=str(state.get("title") or pid))
-    return TikTokVariantResponse(filename=destination.name)
+            observed[destination.with_suffix(".media.json")] = await run_in_threadpool(_tiktok_variant_file_identity, destination.with_suffix(".media.json"))
+            if await run_in_threadpool(_tiktok_variant_file_identity, destination) != observed[destination]:
+                raise ValueError("The TikTok variant changed before it could be saved. Create it again.")
+            state, state_identity = await run_in_threadpool(_read_tiktok_variant_state, pid)
+            state["tiktokVariant"] = {
+                "sourceFilename": source_name, "sourceSha256": digest,
+                "filename": destination.name, "fingerprint": observed[destination][0], "sha256": observed[destination][1],
+                "width": 1080, "height": 1920, "createdAt": time.time(),
+                "captionsEnabled": captions_enabled, "framingMode": req.framingMode,
+            }
+            state["tiktokVideoFilename"] = destination.name
+            state["tiktokFramingMode"] = req.framingMode
+            state["updatedAt"] = time.time()
+            await run_in_threadpool(_save_tiktok_variant_state, pid, state, project_name=str(state.get("title") or pid), expected_identity=state_identity)
+            return TikTokVariantResponse(filename=destination.name, framingMode=req.framingMode, variant=state["tiktokVariant"])
+        except Exception as exc:  # noqa: BLE001
+            if observed:
+                await run_in_threadpool(_restore_tiktok_variant, destination, previous, observed)
+            if isinstance(exc, (FileNotFoundError, ValueError)):
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail=f"TikTok variant failed: {exc}") from exc
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
 
 
 @app.get("/v1/projects/{pid}/tiktok/publish/{publish_id}")

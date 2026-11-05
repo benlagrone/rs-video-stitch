@@ -374,6 +374,7 @@ class TikTokPublishRequest(BaseModel):
 class TikTokVariantRequest(BaseModel):
     filename: str = Field(default="video.mp4")
     captionsEnabled: Optional[bool] = None
+    framingMode: Literal["fill", "fit"] = "fill"
 
 
 class TikTokMediaReviewRequest(BaseModel):
@@ -386,6 +387,8 @@ class TikTokVariantResponse(BaseModel):
     filename: str
     width: int = 1080
     height: int = 1920
+    framingMode: Literal["fill", "fit"] = "fill"
+    variant: Optional[Dict[str, Any]] = None
 
 
 class TikTokHighlightPlanRequest(BaseModel):

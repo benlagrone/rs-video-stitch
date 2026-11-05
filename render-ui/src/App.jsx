@@ -304,12 +304,14 @@ function projectStateFromValues(values) {
     tiktokAllowStitch: values.tiktokAllowStitch,
     tiktokBrandOrganic: values.tiktokBrandOrganic,
     tiktokVideoFilename: values.tiktokVideoFilename,
+    tiktokFramingMode: values.tiktokFramingMode,
     tiktokPublish: values.tiktokPublishId ? {
       publishId: values.tiktokPublishId,
       status: values.tiktokPublishStatus,
       profileUrl: values.tiktokProfileUrl || null,
     } : undefined,
     tiktokVariant: values.tiktokVariantFilename ? {
+      ...values.tiktokVariantMetadata,
       sourceFilename: values.tiktokVariantSource,
       filename: values.tiktokVariantFilename,
       width: 1080,
@@ -417,6 +419,8 @@ export function App() {
   const [tiktokProfileUrl, setTiktokProfileUrl] = useState('');
   const [tiktokVariantSource, setTiktokVariantSource] = useState('');
   const [tiktokVariantFilename, setTiktokVariantFilename] = useState('');
+  const [tiktokFramingMode, setTiktokFramingMode] = useState('fill');
+  const tiktokVariantMetadata = useRef({});
   const [tiktokPreviewRevision, setTiktokPreviewRevision] = useState('');
   const [isCreatingTikTokVariant, setIsCreatingTikTokVariant] = useState(false);
   const [isConnectingTikTok, setIsConnectingTikTok] = useState(false);
@@ -891,6 +895,8 @@ export function App() {
     setTiktokProfileUrl('');
     setTiktokVariantSource('');
     setTiktokVariantFilename('');
+    setTiktokFramingMode('fill');
+    tiktokVariantMetadata.current = {};
     setTiktokPreviewRevision('');
     setTiktokPublishReview(false);
     setThumbnailRefreshKey('');
@@ -1031,6 +1037,8 @@ export function App() {
       setTiktokProfileUrl(state.tiktokPublish?.profileUrl || '');
       setTiktokVariantSource(state.tiktokVariant?.sourceFilename || state.outputName || '');
       setTiktokVariantFilename(state.tiktokVariant?.filename || '');
+      setTiktokFramingMode((state.tiktokFramingMode || state.tiktokVariant?.framingMode) === 'fit' ? 'fit' : 'fill');
+      tiktokVariantMetadata.current = state.tiktokVariant || {};
       setTiktokPreviewRevision(String(state.tiktokVariant?.createdAt || Date.now()));
       setThumbnailRefreshKey(String(state.thumbnailGeneratedAt || ''));
       setOutputs(result.outputs || []);
@@ -1421,6 +1429,8 @@ export function App() {
             tiktokPublishStatus,
             tiktokProfileUrl,
             tiktokVariantSource,
+            tiktokFramingMode,
+            tiktokVariantMetadata: tiktokVariantMetadata.current,
             tiktokVariantFilename,
           }),
         }),
@@ -1710,6 +1720,7 @@ export function App() {
 
   async function createTikTokVariant() {
     const source = tiktokVariantSource || outputName;
+    const expectedProject = resolvedProjectId;
     if (!source || isCreatingTikTokVariant) return;
     setError('');
     setIsCreatingTikTokVariant(true);
@@ -1718,8 +1729,10 @@ export function App() {
       const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/tiktok/variant`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: source, captionsEnabled: Boolean(renderOptions.captionsEnabled) }),
+        body: JSON.stringify({ filename: source, captionsEnabled: Boolean(renderOptions.captionsEnabled), framingMode: tiktokFramingMode }),
       });
+      if (highlightProject.current !== expectedProject) return;
+      tiktokVariantMetadata.current = result.variant || { sourceFilename: source, filename: result.filename, width: 1080, height: 1920 };
       setTiktokVariantSource(source);
       setTiktokVariantFilename(result.filename);
       setOutputs((current) => Array.from(new Set([...current, result.filename])));
@@ -1727,8 +1740,10 @@ export function App() {
       setTiktokPreviewRevision(String(Date.now()));
       setStatus('TikTok variant ready for review and publishing');
     } catch (err) {
-      setError(err.message || String(err));
-      setStatus('TikTok variant failed');
+      if (highlightProject.current === expectedProject) {
+        setError(err.message || String(err));
+        setStatus('TikTok variant failed');
+      }
     } finally {
       setIsCreatingTikTokVariant(false);
     }
@@ -3053,7 +3068,12 @@ export function App() {
                     </div>
                     <button type="button" onClick={() => setTiktokVideoFilename(tiktokVariantFilename)}>Use full-length variant for publishing</button>
                   </section>}
-                  <p>Creates a separate 1080 × 1920 MP4. Smart framing removes verified borders and fits portrait and landscape shots individually, with one softened background where needed. The YouTube original stays unchanged.</p>
+                  <p>Creates a separate 1080 × 1920 MP4 from the full video.</p>
+                  <label>Vertical framing<select value={tiktokFramingMode} onChange={(event) => setTiktokFramingMode(event.target.value)} disabled={isCreatingTikTokVariant}>
+                    <option value="fill">Fill portrait screen</option>
+                    <option value="fit">Fit whole picture with blurred background</option>
+                  </select></label>
+                  <p className="hint">Fill enlarges the picture to cover the vertical screen and crops the sides of wide footage. Choose a style, then create the variant to apply it.</p>
                   <label>Source video<select value={tiktokVariantSource || outputName} onChange={(event) => setTiktokVariantSource(event.target.value)} disabled={isCreatingTikTokVariant}>
                     {(outputs.length ? outputs : [outputName]).filter((file) => /\.(mp4|mov|m4v|webm|mpg|mpeg)$/i.test(file)).map((file) => <option key={file} value={file}>{file}</option>)}
                   </select></label>

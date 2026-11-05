@@ -10,7 +10,7 @@ from unittest import TestCase, mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import media_ai_policy, renderer, video_captions
+from app import full_variant, media_ai_policy, renderer, video_captions
 from app.schemas import RenderOptions, TikTokVariantRequest
 
 
@@ -62,7 +62,18 @@ class RenderVideoCaptionsTests(TestCase):
             stack.enter_context(mock.patch.object(renderer, "_resolve_logo_image", return_value=self.input / "logo.png"))
             stack.enter_context(mock.patch.object(renderer, "_overlay_logo_on_video", side_effect=lambda source, destination, *_args: self._write(destination, b"logo:" + source.read_bytes())))
             synth = stack.enter_context(mock.patch.object(renderer, "synthesize_xtts", side_effect=lambda text, destination, **_kwargs: self._write(destination, b"synthesized narration")))
-            yield SimpleNamespace(run=run, synth=synth)
+            def full(source, destination, **kwargs):
+                self._write(destination, b"assembled video")
+                manifest = Path(destination).with_suffix(".framing.json")
+                manifest.write_text(json.dumps({"sourceFilename": Path(source).name, "outputFilename": Path(destination).name,
+                                                "outputSha256": hashlib.sha256(b"assembled video").hexdigest()}))
+                if kwargs.get("before_publish"):
+                    kwargs["before_publish"]({Path(destination): full_variant._identity(Path(destination)), manifest: full_variant._identity(manifest)})
+                return Path(destination)
+            full_render = stack.enter_context(mock.patch.object(full_variant, "render_full_variant", side_effect=full))
+            stack.enter_context(mock.patch.object(full_variant, "p_work", return_value=self.work))
+            stack.enter_context(mock.patch("app.storage.p_work", return_value=self.work))
+            yield SimpleNamespace(run=run, synth=synth, full=full_render)
 
     def _footage_document(self):
         for name in ("part-1.mov", "part-2.mov"):
@@ -277,8 +288,9 @@ class RenderVideoCaptionsTests(TestCase):
             result = renderer.render_tiktok_variant(source, destination, captions_enabled=True, project_id="listing", language="zh-CN")
         prepare.assert_called_once_with("listing", source, enabled=True, language="zh-CN")
         caption.assert_called_once()
-        command = stubs.run.call_args.args[0]
-        self.assertEqual(command[command.index("-i") + 1], str(clean))
+        self.assertEqual(stubs.full.call_args.args[0], clean)
+        self.assertEqual(stubs.full.call_args.kwargs["project_id"], "listing")
+        self.assertEqual(stubs.full.call_args.kwargs["framing_mode"], "fill")
         self.assertEqual(result.read_bytes(), b"captioned portrait video")
         self.assertEqual(source.read_bytes(), b"master with baked landscape captions")
 
@@ -295,8 +307,8 @@ class RenderVideoCaptionsTests(TestCase):
         caption.assert_not_called()
         verify.assert_called_once_with(prepared)
         retire.assert_called_once_with(destination)
-        command = stubs.run.call_args.args[0]
-        self.assertEqual(command[command.index("-i") + 1], str(clean))
+        self.assertEqual(stubs.full.call_args.args[0], clean)
+        self.assertEqual(stubs.full.call_args.kwargs["project_id"], "listing")
         self.assertEqual(result.read_bytes(), b"assembled video")
 
     def test_vertical_caption_failure_preserves_previous_completed_output(self):

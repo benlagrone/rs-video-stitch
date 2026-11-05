@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -94,9 +95,132 @@ class VerticalFramingTests(unittest.TestCase):
             runs = framing.analyze_framing(Path("source.mp4"), 3, 6.1, probe)
         self.assertEqual(runs, [{"start": 0.0, "crop": None, "duration": 6.1, "orientation": "portrait", "confidence": "full-frame"}])
 
+    def test_fill_is_explicit_and_has_no_blurred_or_inset_picture(self):
+        self.assertEqual(framing.vertical_filter(), framing.vertical_filter(mode="fit"))
+        graph = framing.vertical_filter(mode="fill", focus_points=[(0, .25), (2, .75)])
+        self.assertNotIn("boxblur", graph)
+        self.assertNotIn("overlay", graph)
+        self.assertNotIn("split", graph)
+        self.assertIn("force_original_aspect_ratio=increase", graph)
+        self.assertIn("setpts=PTS-STARTPTS,crop=1080:1920", graph)
+        self.assertIn("min(iw-ow", graph)
+        self.assertIn("0.250000+(0.500000)*min(max", graph)
+        self.assertNotIn("if(", graph)
+
+    def test_focus_validation_rejects_expression_injection_and_invalid_points(self):
+        for points in ([(0, "if(t,1,0)")], [(0, float("nan"))], [(0, 1.1)], [(-1, .5)],
+                       [(0, .5), (0, .6)], [(0, .5), (.0000001, .6)], [(2, .5), (1, .5)], [(float("inf"), .5)],
+                       [(index, .5) for index in range(97)]):
+            with self.subTest(points=points), self.assertRaises(ValueError):
+                framing.vertical_filter(mode="fill", focus_points=points)
+        with self.assertRaises(ValueError):
+            framing.vertical_filter(mode="arbitrary")
+
+    def test_focus_smoothing_limits_pan_speed_and_preserves_a_shot_cut(self):
+        rows = [(0, .2, False, False)] + [(index / 2, .8, False, False) for index in range(1, 21)]
+        points = framing._smooth_focus_samples(rows, 11)
+        self.assertTrue(all(abs(right[1] - left[1]) / (right[0] - left[0]) <= .07501 for left, right in zip(points, points[1:])))
+        self.assertEqual(points[0], (0.0, .2))
+        self.assertEqual(points[-1][0], 11)
+        cut = framing._smooth_focus_samples([(0, .2, False, False), (1, .8, True, False), (2, .8, False, False)], 3)
+        self.assertIn((.999, .2), cut)
+        self.assertIn((1.0, .8), cut)
+
+    def test_focus_analysis_without_installed_cv_preserves_neutral_framing(self):
+        with patch.dict("sys.modules", {"cv2": None}):
+            self.assertEqual(framing.analyze_fill_focus(Path("missing.mp4"), 10, 4), [(0.0, .5), (4.0, .5)])
+
+
+@unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"), "OpenCV focus tests run in the API image")
+class FillFocusVisionTests(unittest.TestCase):
+    def setUp(self):
+        import numpy as np
+        self.np = np
+        self.frame = np.full((180, 320), 190, dtype=np.uint8)
+        # A feature-rich open-room cluster on the right, with a large isolated
+        # doorway edge in the center that must not dominate the composition.
+        self.frame[:, 150:156] = 20
+        for y in range(40, 145, 8):
+            for x in range(220, 305, 8):
+                self.frame[y:y + 4, x:x + 4] = 30
+
+    def test_detail_cluster_wins_over_a_large_blank_partition_edge(self):
+        with patch.object(framing, "_face_detector", return_value=None):
+            anchor, face = framing._focus_candidate(self.frame, .3164)
+        self.assertGreater(anchor, .65)
+        self.assertFalse(face)
+
+    def test_confident_face_has_priority_over_background_texture(self):
+        detector = unittest.mock.Mock()
+        detector.detectMultiScale.return_value = self.np.array([[30, 35, 42, 42]])
+        with patch.object(framing, "_face_detector", return_value=detector):
+            anchor, face = framing._focus_candidate(self.frame, .3164)
+        self.assertLess(anchor, .30)
+        self.assertTrue(face)
+
+    def test_credible_center_is_not_abandoned_for_busier_edge_foliage(self):
+        for y in range(40, 145, 8):
+            for x in range(125, 195, 8):
+                self.frame[y:y + 4, x:x + 4] = 30
+        with patch.object(framing, "_face_detector", return_value=None):
+            anchor, face = framing._focus_candidate(self.frame, .3164)
+        self.assertEqual(anchor, .5)
+        self.assertFalse(face)
+
+    def test_blank_picture_holds_prior_focus_without_panning(self):
+        with patch.object(framing, "_face_detector", return_value=None):
+            anchor, face = framing._focus_candidate(self.np.full((180, 320), 120, dtype=self.np.uint8), .3164, .7)
+        self.assertEqual(anchor, .7)
+        self.assertFalse(face)
+
+    def test_isolated_false_face_does_not_override_the_structural_subject(self):
+        detector = unittest.mock.Mock()
+        detector.detectMultiScale.side_effect = [self.np.array([[30, 35, 42, 42]]), self.np.empty((0, 4))]
+        history = {}
+        with patch.object(framing, "_face_detector", return_value=detector):
+            first = framing._confirmed_focus_candidate(self.frame, .3164, None, history)
+            second = framing._confirmed_focus_candidate(self.frame, .3164, first[0], history)
+        self.assertGreater(first[0], .65)
+        self.assertGreater(second[0], .65)
+        self.assertFalse(first[1])
+        self.assertFalse(second[1])
+        self.assertEqual(history, {})
+        self.assertEqual(detector.detectMultiScale.call_count, 2)
+
+    def test_nearby_persistent_face_can_override_the_background(self):
+        detector = unittest.mock.Mock()
+        detector.detectMultiScale.side_effect = [self.np.array([[30, 35, 42, 42]]), self.np.array([[32, 35, 42, 42]])]
+        history = {}
+        with patch.object(framing, "_face_detector", return_value=detector):
+            first = framing._confirmed_focus_candidate(self.frame, .3164, None, history)
+            second = framing._confirmed_focus_candidate(self.frame, .3164, first[0], history)
+        self.assertFalse(first[1])
+        self.assertTrue(second[1])
+        self.assertLess(second[0], .30)
+
 
 @unittest.skipUnless(os.getenv("MEDIASTUDIO_FRAMING_FFMPEG_TEST") == "1" and shutil.which("ffmpeg") and shutil.which("ffprobe"), "Set MEDIASTUDIO_FRAMING_FFMPEG_TEST=1 for decoding/encoding QA")
 class VerticalFramingEncodingTests(unittest.TestCase):
+    def test_real_fill_encode_follows_anchors_and_has_no_blurred_bands(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "fill.mp4"
+            subprocess.run([
+                "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                "color=c=green:s=640x360:r=10:d=2,drawbox=x=35:y=0:w=200:h=360:color=red:t=fill,drawbox=x=410:y=0:w=200:h=360:color=blue:t=fill",
+                "-filter_complex", framing.vertical_filter(mode="fill", focus_points=[(0, .2), (1, .8)], width=180, height=320),
+                "-map", "[v]", "-c:v", "libx264", "-preset", "ultrafast", str(output),
+            ], check=True)
+            for second, channel in ((.1, 0), (1.8, 2)):
+                decoded = subprocess.run([
+                    "ffmpeg", "-v", "error", "-ss", str(second), "-i", str(output), "-frames:v", "1",
+                    "-vf", "format=rgb24", "-f", "rawvideo", "pipe:1",
+                ], capture_output=True, check=True).stdout
+                for x, y in ((90, 10), (90, 160), (90, 309)):
+                    pixel = decoded[(y * 180 + x) * 3:(y * 180 + x) * 3 + 3]
+                    self.assertGreater(pixel[channel], 180)
+                    self.assertLess(pixel[2 if channel == 0 else 0], 60)
+
     def test_real_mixed_master_unwraps_portrait_and_keeps_landscape(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

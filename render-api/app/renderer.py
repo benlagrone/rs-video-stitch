@@ -709,71 +709,53 @@ def render_tiktok_variant(
     captions_enabled: bool = False,
     project_id: Optional[str] = None,
     language: Optional[str] = None,
+    framing_mode: str = "fill",
 ) -> Path:
-    """Frame each orientation directly, removing only verified existing padding."""
-    from app.vertical_framing import analyze_framing, vertical_filter
+    """Recompose the full saved video, keeping one uninterrupted master track."""
+    from app.full_variant import carry_framing_manifest, framing_caption_windows, render_full_variant, retire_variant_captions, variant_output_transaction
 
+    source, destination = Path(source), Path(destination)
     if not source.exists() or not source.is_file():
         raise FileNotFoundError(f"Video file not found: {source}")
-    destination.parent.mkdir(parents=True, exist_ok=True)
     if captions_enabled and not project_id:
         raise ValueError("A project is required to add captions to a TikTok variant")
-    if project_id and (captions_enabled or source.with_suffix(".captions.json").is_file()):
-        from app.caption_variants import (
-            apply_derivative_captions,
-            prepare_derivative_captions,
-            verify_derivative_source,
-        )
+    with variant_output_transaction(destination, project_id) as transaction:
+        if project_id and (captions_enabled or source.with_suffix(".captions.json").is_file()):
+            from app.caption_variants import apply_derivative_captions, prepare_derivative_captions, verify_derivative_source
+            from app.storage import p_work
 
-        prepared = prepare_derivative_captions(project_id, source, enabled=captions_enabled, language=language)
-        if prepared is None and captions_enabled:
-            raise ValueError("Captions were requested, but no verified caption source was available")
-        if prepared is not None:
-            # Reframe clean pixels first. Cropping a master with burned-in text
-            # would cut words off or duplicate them beneath vertical captions.
-            with tempfile.TemporaryDirectory(prefix=".tiktok-captions-", dir=destination.parent) as temporary:
-                framed = Path(temporary) / destination.name
-                render_tiktok_variant(prepared.clean_source, framed, log)
-                if captions_enabled:
-                    apply_derivative_captions(prepared, framed, destination, log=log)
-                else:
-                    verify_derivative_source(prepared)
-                    os.replace(framed, destination)
-                    _retire_spoken_caption_sidecars(destination)
-            return destination
-    duration = ffprobe_duration(source)
-    framing = analyze_framing(source, 0.0, duration)
-    if len(framing) == 1:
-        run([
-            "ffmpeg", "-y", "-i", str(source), "-filter_complex",
-            vertical_filter("0:v", "video", crop=framing[0].get("crop")),
-            "-map", "[video]", "-map", "0:a?", "-c:v", "libx264", "-preset", "medium",
-            "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(destination),
-        ], log)
-    else:
-        with tempfile.TemporaryDirectory(prefix=".tiktok-framing-", dir=destination.parent) as temporary:
-            pieces = []
-            for index, shot in enumerate(framing):
-                piece = Path(temporary) / f"shot_{index:04d}.mp4"
-                run([
-                    "ffmpeg", "-y", "-ss", f"{shot['start']:.6f}", "-i", str(source),
-                    "-t", f"{shot['duration']:.6f}", "-filter_complex",
-                    vertical_filter("0:v", "video", crop=shot.get("crop")),
-                    "-map", "[video]", "-an", "-r", "30", "-c:v", "libx264", "-preset", "medium",
-                    "-crf", "20", str(piece),
-                ], log)
-                pieces.append(piece)
-            playlist = Path(temporary) / "shots.txt"
-            playlist.write_text("\n".join(f"file '{piece.as_posix()}'" for piece in pieces), encoding="utf-8")
-            # Mux the uninterrupted original audio once, independent of visual
-            # orientation cuts, so speech is never reset at a framing boundary.
-            run([
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(playlist), "-i", str(source),
-                "-map", "0:v:0", "-map", "1:a?", "-t", f"{duration:.6f}", "-c:v", "copy",
-                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(destination),
-            ], log)
-    _retire_spoken_caption_sidecars(destination)
-    return destination
+            prepared = prepare_derivative_captions(project_id, source, enabled=captions_enabled, language=language)
+            if prepared is None and captions_enabled:
+                raise ValueError("Captions were requested, but no verified caption source was available")
+            if prepared is not None:
+                # Render clean approved pixels before burning portrait subtitles.
+                # Keep the project and framing mode through the recursive call.
+                with tempfile.TemporaryDirectory(prefix=".tiktok-captions-", dir=p_work(project_id), ignore_cleanup_errors=True) as temporary:
+                    framed = Path(temporary) / destination.name
+                    render_tiktok_variant(prepared.clean_source, framed, log, project_id=project_id,
+                                          language=language, framing_mode=framing_mode)
+                    if captions_enabled:
+                        caption_targets = [destination, *[destination.with_suffix(suffix) for suffix in (".captions.json", ".srt", ".ass")],
+                                           p_work(project_id) / f"uncaptioned_{destination.name}"]
+                        transaction.assert_unchanged(caption_targets)
+                        body_windows = framing_caption_windows(framed)
+                        apply_derivative_captions(prepared, framed, destination, windows=body_windows, log=log)
+                        transaction.record(caption_targets)
+                    else:
+                        verify_derivative_source(prepared)
+                        transaction.assert_unchanged([destination])
+                        transaction.expect({destination: {"size": framed.stat().st_size, "mtimeNs": str(framed.stat().st_mtime_ns),
+                            "sha256": hashlib.sha256(framed.read_bytes()).hexdigest()}})
+                        os.replace(framed, destination)
+                    transaction.assert_unchanged([destination.with_suffix(".framing.json")])
+                    carry_framing_manifest(framed, destination, source, before_publish=transaction.expect)
+                    if not captions_enabled:
+                        retire_variant_captions(destination, transaction)
+                return destination
+        result = render_full_variant(source, destination, project_id=project_id, framing_mode=framing_mode,
+                                     language=language, log=log, run_command=run, before_publish=transaction.expect)
+        retire_variant_captions(destination, transaction)
+        return result
 
 
 def ffprobe_duration(path: Path) -> float:

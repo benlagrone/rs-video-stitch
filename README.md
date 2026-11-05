@@ -183,11 +183,19 @@ verified source version's status. Later editor changes cannot reclassify an
 already rendered video.
 
 For an existing landscape YouTube master, the Render Desk can create a separate
-`tiktok_<source>.mp4` variant at 1080 × 1920. Smart framing detects each shot's
-visible picture and removes confidently verified black padding before fitting
-it to the vertical canvas. Portrait and landscape sections are handled
-individually, with one softened background where needed; uninterrupted original
-audio and the YouTube master are preserved.
+`tiktok_<source>.mp4` variant at 1080 × 1920. **Fill portrait screen** is the
+default: the picture covers the canvas without stretching, with the sides of
+wide footage cropped. Local face and structural-detail analysis supplies bounded
+horizontal focal movements; it does not semantically understand a room.
+**Fit whole picture with blurred background** remains an explicit choice.
+Verified prepared clips preserve the master's established colour conversion and
+timing. Recognized opening and transition cards are rebuilt as vertical
+HyperFrames, and contact artwork is placed within the portrait safe area.
+The complete master audio is muxed once, with AAC packets copied when possible.
+The YouTube master is unchanged. Replaced variants and their metadata are kept
+under project work history; `.framing.json` records the source binding, layout,
+visual windows, and focal positions. The full variant has its own inline player
+above the automatic highlight tools.
 
 The **Automatic TikTok highlight** panel creates a separate 30, 45, or 60 second
 portrait edit. **Create automatic highlight** selects source sections, renders
