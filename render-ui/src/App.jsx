@@ -21,6 +21,8 @@ import { YouTubeChannelSelector } from './YouTubeChannelSelector.jsx';
 import { VoiceSamples } from './VoiceSamples.jsx';
 import { ThumbnailStyleSelector } from './ThumbnailStyleSelector.jsx';
 import { TikTokHighlightPanel } from './TikTokHighlightPanel.jsx';
+import { TikTokVideoPreview } from './TikTokVideoPreview.jsx';
+import { selectTikTokPreviewVideo } from './tiktokPreview.js';
 import { LECROWN_TIKTOK_DEFAULTS, resolvedTikTokAi, tikTokPreferences, tikTokVideoKey } from './tiktokSettings.js';
 import { captionContextKey, createCaptionGenerationGuard, shouldAutoGenerateCaption } from './tiktokCaption.js';
 
@@ -415,6 +417,7 @@ export function App() {
   const [tiktokProfileUrl, setTiktokProfileUrl] = useState('');
   const [tiktokVariantSource, setTiktokVariantSource] = useState('');
   const [tiktokVariantFilename, setTiktokVariantFilename] = useState('');
+  const [tiktokPreviewRevision, setTiktokPreviewRevision] = useState('');
   const [isCreatingTikTokVariant, setIsCreatingTikTokVariant] = useState(false);
   const [isConnectingTikTok, setIsConnectingTikTok] = useState(false);
   const [isPublishingTikTok, setIsPublishingTikTok] = useState(false);
@@ -566,6 +569,9 @@ export function App() {
     [outputs],
   );
   const previewVideoHref = videoHref || (previewVideoName ? outputHref(previewVideoName) : '');
+  const tiktokPreviewHref = outputs.includes(tiktokVideoFilename)
+    ? `${outputHref(tiktokVideoFilename)}&tiktokPreview=${encodeURIComponent(tiktokPreviewRevision)}`
+    : '';
   const previewPosterHref = previewPosterName
     ? `${outputHref(previewPosterName)}${thumbnailRefreshKey ? `&v=${encodeURIComponent(thumbnailRefreshKey)}` : ''}`
     : '';
@@ -629,6 +635,11 @@ export function App() {
   useEffect(() => {
     refreshTikTokAuth().catch(() => setTiktokAuth(null));
   }, [apiBase, authToken]);
+  useEffect(() => {
+    if (isLoadingProject) return;
+    const selected = selectTikTokPreviewVideo(outputs, tiktokVideoFilename, tiktokVariantFilename);
+    if (selected !== tiktokVideoFilename) setTiktokVideoFilename(selected);
+  }, [outputs, tiktokVideoFilename, tiktokVariantFilename, isLoadingProject]);
   useEffect(() => {
     let cancelled = false;
     const key = tikTokVideoKey(resolvedProjectId, tiktokVideoFilename);
@@ -760,6 +771,7 @@ export function App() {
   async function refreshOutputs() {
     const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/outputs`);
     setOutputs(result.files || []);
+    setTiktokPreviewRevision(String(Date.now()));
   }
 
   async function refreshProjects() {
@@ -876,6 +888,7 @@ export function App() {
     setTiktokProfileUrl('');
     setTiktokVariantSource('');
     setTiktokVariantFilename('');
+    setTiktokPreviewRevision('');
     setTiktokPublishReview(false);
     setThumbnailRefreshKey('');
     setYoutubeCallbackUrl('');
@@ -1007,7 +1020,7 @@ export function App() {
       setTiktokAllowStitch(tiktokPreferences.allowStitch);
       setTiktokBrandOrganic(tiktokPreferences.brandOrganic);
       setTiktokPolicyEpoch((epoch) => epoch + 1);
-      setTiktokVideoFilename(state.tiktokVideoFilename || state.tiktokVariant?.filename || state.outputName || 'video.mp4');
+      setTiktokVideoFilename(selectTikTokPreviewVideo(result.outputs || [], state.tiktokVideoFilename, state.tiktokVariant?.filename));
       setTiktokMusicConsent(false);
       setTiktokPublishReview(false);
       setTiktokPublishId(state.tiktokPublish?.publishId || '');
@@ -1015,6 +1028,7 @@ export function App() {
       setTiktokProfileUrl(state.tiktokPublish?.profileUrl || '');
       setTiktokVariantSource(state.tiktokVariant?.sourceFilename || state.outputName || '');
       setTiktokVariantFilename(state.tiktokVariant?.filename || '');
+      setTiktokPreviewRevision(String(state.tiktokVariant?.createdAt || Date.now()));
       setThumbnailRefreshKey(String(state.thumbnailGeneratedAt || ''));
       setOutputs(result.outputs || []);
       setVideoHref('');
@@ -1707,6 +1721,7 @@ export function App() {
       setTiktokVariantFilename(result.filename);
       setOutputs((current) => Array.from(new Set([...current, result.filename])));
       setTiktokVideoFilename(result.filename);
+      setTiktokPreviewRevision(String(Date.now()));
       setStatus('TikTok variant ready for review and publishing');
     } catch (err) {
       setError(err.message || String(err));
@@ -1723,6 +1738,7 @@ export function App() {
       if (highlightProject.current !== expectedProject) return;
       setOutputs(result.files || []);
       setTiktokVideoFilename(filename);
+      setTiktokPreviewRevision(String(Date.now()));
       setStatus('TikTok highlight ready to preview and edit');
     } catch (err) {
       if (highlightProject.current === expectedProject) setError(err.message || String(err));
@@ -2933,6 +2949,7 @@ export function App() {
             </div>
           )}
           {error && <div className="error-box">{error}</div>}
+          {!previewVideoHref && outputs.length === 0 && <TikTokVideoPreview outputs={outputs} filename={tiktokVideoFilename} variantFilename={tiktokVariantFilename} videoHref={tiktokPreviewHref} onChange={setTiktokVideoFilename} />}
           {(previewVideoHref || outputs.length > 0) && (
             <div className="output-panel">
               {previewVideoHref && (
@@ -2949,6 +2966,7 @@ export function App() {
                   <a key={filename} href={outputHref(filename)} download={filename}>{filename}</a>
                 ))}
               </div>
+              <TikTokVideoPreview outputs={outputs} filename={tiktokVideoFilename} variantFilename={tiktokVariantFilename} videoHref={tiktokPreviewHref} onChange={setTiktokVideoFilename} hasMaster={Boolean(previewVideoHref)} />
               <div className="youtube-panel">
                 <div className="output-heading">
                   <h3>YouTube</h3>
@@ -3018,7 +3036,7 @@ export function App() {
                 {!previewPosterName && <p>Generate or refresh a thumbnail before applying it.</p>}
                 {youtubeResult && <a href={youtubeResult} target="_blank" rel="noreferrer">{youtubeResult}</a>}
               </div>
-              <div className="youtube-panel tiktok-panel">
+              <div className="youtube-panel tiktok-panel" id="tiktok-video-tools">
                 <div className="output-heading">
                   <h3>TikTok</h3>
                   <button type="button" onClick={refreshTikTokAuth}>Check auth</button>
@@ -3050,7 +3068,7 @@ export function App() {
                   <option value="">Choose a finished video</option>
                   {outputs.filter((file) => /\.(mp4|mov|m4v|webm|mpg|mpeg)$/i.test(file)).map((file) => <option key={file} value={file}>{file}</option>)}
                 </select></label>
-                {outputs.includes(tiktokVideoFilename) && <a href={outputHref(tiktokVideoFilename)} target="_blank" rel="noreferrer">Preview TikTok video</a>}
+                {outputs.includes(tiktokVideoFilename) && <a href={tiktokPreviewHref} target="_blank" rel="noreferrer">Preview TikTok video</a>}
                 <div className="youtube-actions">
                   <button type="button" onClick={connectTikTok} disabled={isConnectingTikTok || !tiktokAuth?.configured}>
                     {isConnectingTikTok ? 'Connecting' : 'Connect TikTok'}

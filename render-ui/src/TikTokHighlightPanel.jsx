@@ -49,14 +49,14 @@ export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = 
   const duration = highlightDuration(plan);
   const errors = useMemo(() => highlightPlanErrors(plan), [plan]);
 
-  function deliverCompleted(state) {
+  function deliverCompleted(state, { notifyParent = true } = {}) {
     if (state.filename) setFilename(state.filename);
     setCaptionFilename(state.captionFilename || '');
     setEditorUrl(state.editorUrl || state.graphicsEditorUrl || '');
     const key = `${projectId}:${state.jobId || ''}:${state.filename || ''}`;
     if (state.filename && delivered.current !== key) {
       delivered.current = key;
-      callbacks.current.onCreated?.(state.filename);
+      if (notifyParent) callbacks.current.onCreated?.(state.filename);
     }
   }
 
@@ -86,7 +86,8 @@ export function TikTokHighlightPanel({ projectId, outputs = [], defaultSource = 
         setTargetDuration([30, 45, 60].includes(state.plan.durationSeconds) ? state.plan.durationSeconds : 45);
       }
       if (state.jobId) setJob(mergeHighlightJob(null, state));
-      if (state.status === 'SUCCEEDED') deliverCompleted(state);
+      // Loading an older highlight must not replace the project's selected preview.
+      if (state.status === 'SUCCEEDED') deliverCompleted(state, { notifyParent: false });
       if (state.error) setError(state.error);
     }).catch((err) => {
       if (!cancelled) setError(`Could not load the saved highlight: ${message(err)}`);

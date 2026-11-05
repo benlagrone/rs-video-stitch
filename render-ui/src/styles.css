@@ -1772,6 +1772,53 @@ textarea {
   text-decoration: none;
 }
 
+.tiktok-inline-preview {
+  background: var(--field);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+  min-width: 0;
+  padding: 14px;
+}
+
+.tiktok-inline-preview > *,
+.tiktok-inline-preview select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.tiktok-inline-preview .output-heading {
+  flex-wrap: wrap;
+}
+
+.tiktok-inline-preview .output-heading h3 {
+  margin: 0;
+}
+
+.tiktok-inline-preview__filename {
+  overflow-wrap: anywhere;
+}
+
+.tiktok-inline-preview__player {
+  aspect-ratio: 9 / 16;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  justify-self: center;
+  max-height: 70vh;
+  overflow: hidden;
+  width: min(100%, 320px);
+}
+
+.tiktok-inline-preview .tiktok-inline-preview__player video {
+  display: block;
+  height: 100%;
+  object-fit: contain;
+  width: 100%;
+}
+
 .output-heading {
   align-items: center;
   display: flex;
