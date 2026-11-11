@@ -219,7 +219,7 @@ async def media_studio_ui() -> FileResponse:
     index_path = UI_DIST / "index.html"
     if not index_path.exists():
         raise HTTPException(status_code=404, detail="render UI is not bundled")
-    return FileResponse(index_path)
+    return FileResponse(index_path, headers={"Cache-Control": "no-store"})
 
 
 @app.middleware("http")

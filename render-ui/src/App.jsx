@@ -337,6 +337,7 @@ export function App() {
   const [script, setScript] = useState('Welcome to this property. The opening view should establish the home and the neighborhood.\n\nStep inside to highlight the living spaces, natural light, and everyday comfort.\n\nFinish with the strongest selling points and a clear invitation to schedule a showing.');
   const [suiteProduction, setSuiteProduction] = useState({ scenes: [] });
   const [suiteBusy, setSuiteBusy] = useState('');
+  const [suiteActivity, setSuiteActivity] = useState('');
   const [suiteRenderVersion, setSuiteRenderVersion] = useState(() => Date.now());
   const [originalScriptText, setOriginalScriptText] = useState('');
   const [targetSeconds, setTargetSeconds] = useState(60);
@@ -723,6 +724,28 @@ export function App() {
       if (preview.revoke) URL.revokeObjectURL(preview.url);
     });
   }, [images]);
+
+  const suiteRenderPending = (suiteProduction.scenes || []).some((scene) => (
+    scene?.renderStatus === 'queued' || scene?.sceneVideoStatus === 'queued'
+  ));
+  useEffect(() => {
+    if (!resolvedProjectId || !suiteRenderPending) return undefined;
+    let stopped = false;
+    const timer = setInterval(async () => {
+      try {
+        const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}`);
+        if (stopped) return;
+        setSuiteProduction(result.state?.suiteProduction || { scenes: [] });
+        setSuiteRenderVersion(Date.now());
+      } catch {
+        // Keep the scene card and try again on the next tick.
+      }
+    }, 2000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [resolvedProjectId, suiteRenderPending]);
 
   function headers(extra = {}) {
     return { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}), ...extra };
@@ -1384,12 +1407,22 @@ export function App() {
     }
   }
 
-  function blockoutUrlFor(production) {
-    if (production?.renderStatus !== 'rendered' || !production.renderFile) return '';
+  function motionAssetUrl(filename) {
+    if (!filename) return '';
     return apiUrl(
       apiBase,
-      `/v1/projects/${encodeURIComponent(resolvedProjectId)}/assets/motion/${encodeURIComponent(production.renderFile)}?v=${suiteRenderVersion}`,
+      `/v1/projects/${encodeURIComponent(resolvedProjectId)}/assets/motion/${encodeURIComponent(filename)}?v=${suiteRenderVersion}`,
     );
+  }
+
+  function blockoutUrlFor(production) {
+    if (production?.renderStatus !== 'rendered' || !production.renderFile) return '';
+    return motionAssetUrl(production.renderFile);
+  }
+
+  function sceneVideoUrlFor(production) {
+    if (production?.sceneVideoStatus !== 'ready' || !production.sceneVideoFile) return '';
+    return motionAssetUrl(production.sceneVideoFile);
   }
 
   async function refreshSuiteProduction() {
@@ -1407,6 +1440,8 @@ export function App() {
       let current = { status: 'QUEUED', progress: 0, stage: 'QUEUED' };
       while (current.status !== 'SUCCEEDED' && current.status !== 'FAILED') {
         current = await request(`/v1/jobs/${encodeURIComponent(jobId)}`);
+        const activity = `Creating the 3D render · ${Math.round((current.progress || 0) * 100)}%`;
+        setSuiteActivity(activity);
         setStatus(`Scene ${index + 1} 3D render: ${current.status} ${current.stage || ''} (${Math.round((current.progress || 0) * 100)}%)`);
         if (current.status === 'SUCCEEDED' || current.status === 'FAILED') break;
         await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -1418,6 +1453,7 @@ export function App() {
     } catch (err) {
       setError(err.message || 'Could not create the 3D render');
     } finally {
+      setSuiteActivity('');
       setSuiteBusy('');
     }
   }
@@ -1426,16 +1462,30 @@ export function App() {
     setError('');
     setSuiteBusy(`video-${index}`);
     try {
-      await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/scenes/${index + 1}/scene-video`, {
+      const queued = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/scenes/${index + 1}/scene-video`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ destination }),
       });
+      const jobId = queued.jobId;
+      if (!jobId) throw new Error('The scene video did not receive a job');
+      const provider = destination === 'grok' ? 'Grok' : 'Phronesis';
+      let current = { status: 'QUEUED', progress: 0, stage: 'QUEUED' };
+      while (current.status !== 'SUCCEEDED' && current.status !== 'FAILED') {
+        current = await request(`/v1/jobs/${encodeURIComponent(jobId)}`);
+        setSuiteActivity(`Making the scene with ${provider} · ${Math.round((current.progress || 0) * 100)}%`);
+        setStatus(`Scene ${index + 1} ${provider}: ${current.status} ${current.stage || ''} (${Math.round((current.progress || 0) * 100)}%)`);
+        if (current.status === 'SUCCEEDED' || current.status === 'FAILED') break;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      if (current.status === 'FAILED') throw new Error(current.error || 'The scene video failed');
       await refreshSuiteProduction();
-      setStatus(`Queued scene ${index + 1} with ${destination === 'grok' ? 'Grok' : 'Phronesis'}`);
+      setSuiteRenderVersion(Date.now());
+      setStatus(`Scene ${index + 1} is ready from ${provider}`);
     } catch (err) {
       setError(err.message || 'Could not make the scene video');
     } finally {
+      setSuiteActivity('');
       setSuiteBusy('');
     }
   }
@@ -2829,8 +2879,9 @@ export function App() {
                       <SceneProductionControls
                         production={(suiteProduction.scenes || [])[index]}
                         busy={Boolean(suiteBusy)}
-                        activity={suiteBusy === `3d-${index}` ? 'Creating the 3D render' : ''}
+                        activity={suiteBusy === `3d-${index}` || suiteBusy === `video-${index}` ? suiteActivity : ''}
                         blockoutUrl={blockoutUrlFor((suiteProduction.scenes || [])[index])}
+                        sceneVideoUrl={sceneVideoUrlFor((suiteProduction.scenes || [])[index])}
                         onApprove={() => approveSceneBlockout(index)}
                         onGenerate={(destination) => generateSceneVideo(index, destination)}
                       />

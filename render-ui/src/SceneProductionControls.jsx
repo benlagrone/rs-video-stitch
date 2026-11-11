@@ -1,4 +1,4 @@
-export function SceneProductionControls({ production, busy, activity, blockoutUrl, onApprove, onGenerate }) {
+export function SceneProductionControls({ production, busy, activity, blockoutUrl, sceneVideoUrl, onApprove, onGenerate }) {
   const plan = production?.motionPlan;
   const beats = Array.isArray(plan?.action_beats) ? plan.action_beats : [];
   const actors = Array.isArray(plan?.actors) ? plan.actors : [];
@@ -24,8 +24,13 @@ export function SceneProductionControls({ production, busy, activity, blockoutUr
       </div>
       {activity && <p className="hint">{activity}</p>}
       {blockoutUrl && (
-        <video className="suite-blockout" controls preload="metadata" src={blockoutUrl}>
+        <video key={blockoutUrl} className="suite-blockout" controls autoPlay muted playsInline preload="auto" src={blockoutUrl}>
           3D render
+        </video>
+      )}
+      {sceneVideoUrl && (
+        <video key={sceneVideoUrl} className="suite-blockout" controls playsInline preload="metadata" src={sceneVideoUrl}>
+          Scene video
         </video>
       )}
       {production?.renderFile && <p className="hint">3D render: {production.renderFile}</p>}
