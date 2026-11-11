@@ -337,6 +337,7 @@ export function App() {
   const [script, setScript] = useState('Welcome to this property. The opening view should establish the home and the neighborhood.\n\nStep inside to highlight the living spaces, natural light, and everyday comfort.\n\nFinish with the strongest selling points and a clear invitation to schedule a showing.');
   const [suiteProduction, setSuiteProduction] = useState({ scenes: [] });
   const [suiteBusy, setSuiteBusy] = useState('');
+  const [suiteRenderVersion, setSuiteRenderVersion] = useState(() => Date.now());
   const [originalScriptText, setOriginalScriptText] = useState('');
   const [targetSeconds, setTargetSeconds] = useState(60);
   const [sceneDurations, setSceneDurations] = useState([]);
@@ -1383,6 +1384,14 @@ export function App() {
     }
   }
 
+  function blockoutUrlFor(production) {
+    if (production?.renderStatus !== 'rendered' || !production.renderFile) return '';
+    return apiUrl(
+      apiBase,
+      `/v1/projects/${encodeURIComponent(resolvedProjectId)}/assets/motion/${encodeURIComponent(production.renderFile)}?v=${suiteRenderVersion}`,
+    );
+  }
+
   async function refreshSuiteProduction() {
     const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}`);
     setSuiteProduction(result.state?.suiteProduction || { scenes: [] });
@@ -1392,9 +1401,20 @@ export function App() {
     setError('');
     setSuiteBusy(`3d-${index}`);
     try {
-      await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/scenes/${index + 1}/3d-render`, { method: 'POST' });
+      const queued = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/scenes/${index + 1}/3d-render`, { method: 'POST' });
+      const jobId = queued.jobId;
+      if (!jobId) throw new Error('The 3D render did not receive a job');
+      let current = { status: 'QUEUED', progress: 0, stage: 'QUEUED' };
+      while (current.status !== 'SUCCEEDED' && current.status !== 'FAILED') {
+        current = await request(`/v1/jobs/${encodeURIComponent(jobId)}`);
+        setStatus(`Scene ${index + 1} 3D render: ${current.status} ${current.stage || ''} (${Math.round((current.progress || 0) * 100)}%)`);
+        if (current.status === 'SUCCEEDED' || current.status === 'FAILED') break;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      if (current.status === 'FAILED') throw new Error(current.error || 'The 3D render failed');
       await refreshSuiteProduction();
-      setStatus(`Approved the 3D plan for scene ${index + 1}. The render is queued.`);
+      setSuiteRenderVersion(Date.now());
+      setStatus(`Scene ${index + 1} 3D render is ready`);
     } catch (err) {
       setError(err.message || 'Could not create the 3D render');
     } finally {
@@ -2809,6 +2829,8 @@ export function App() {
                       <SceneProductionControls
                         production={(suiteProduction.scenes || [])[index]}
                         busy={Boolean(suiteBusy)}
+                        activity={suiteBusy === `3d-${index}` ? 'Creating the 3D render' : ''}
+                        blockoutUrl={blockoutUrlFor((suiteProduction.scenes || [])[index])}
                         onApprove={() => approveSceneBlockout(index)}
                         onGenerate={(destination) => generateSceneVideo(index, destination)}
                       />

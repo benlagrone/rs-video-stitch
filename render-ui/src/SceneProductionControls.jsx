@@ -1,4 +1,4 @@
-export function SceneProductionControls({ production, busy, onApprove, onGenerate }) {
+export function SceneProductionControls({ production, busy, activity, blockoutUrl, onApprove, onGenerate }) {
   const plan = production?.motionPlan;
   const beats = Array.isArray(plan?.action_beats) ? plan.action_beats : [];
   const actors = Array.isArray(plan?.actors) ? plan.actors : [];
@@ -13,7 +13,7 @@ export function SceneProductionControls({ production, busy, onApprove, onGenerat
       ) : <p className="hint">Write the scene package with Ollama before approving a 3D render.</p>}
       <div className="script-actions">
         <button type="button" onClick={onApprove} disabled={busy || !plan}>
-          {production?.renderStatus === 'rendered' ? '3D render created' : 'Approve and create 3D render'}
+          {activity || (production?.renderStatus === 'rendered' ? '3D render created' : 'Approve and create 3D render')}
         </button>
         <button type="button" onClick={() => onGenerate('phronesis')} disabled={busy || production?.renderStatus !== 'rendered'}>
           Make scene with Phronesis
@@ -22,6 +22,12 @@ export function SceneProductionControls({ production, busy, onApprove, onGenerat
           Make scene with Grok
         </button>
       </div>
+      {activity && <p className="hint">{activity}</p>}
+      {blockoutUrl && (
+        <video className="suite-blockout" controls preload="metadata" src={blockoutUrl}>
+          3D render
+        </video>
+      )}
       {production?.renderFile && <p className="hint">3D render: {production.renderFile}</p>}
       {production?.sceneVideoStatus === 'ready' && <p className="hint">Scene video ready via {production.sceneVideoProvider}.</p>}
     </div>

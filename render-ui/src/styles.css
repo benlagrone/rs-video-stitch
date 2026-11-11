@@ -2200,3 +2200,10 @@ progress {
     min-height: 220px;
   }
 }
+
+.suite-blockout {
+  display: block;
+  width: min(100%, 640px);
+  margin-top: 8px;
+  background: #111;
+}
