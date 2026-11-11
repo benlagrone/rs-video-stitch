@@ -18,6 +18,8 @@ from app.bible_workflow import (
     repair_and_animate_bible_scene,
     regenerate_bible_scene_stills,
 )
+from app.grok_video_workflow import run_grok_video_job
+from app.suite_workflow import run_suite_blockout, run_suite_scene_video
 from app.storage import ROOT as STORAGE_ROOT, job_log_path, p_input
 
 POLL_INTERVAL = 1.0
@@ -178,6 +180,10 @@ def loop(stop_event: Event | None = None) -> None:
                 is_scene_animation_repair = payload.get("workflow") == "scene-animation-repair"
                 is_scene_stills = payload.get("workflow") == "bible-scene-stills"
                 is_bible_title_card = payload.get("workflow") == "bible-title-card"
+                is_grok_video = payload.get("workflow") == "grok-video"
+                is_phronesis_video = payload.get("workflow") == "phronesis-video"
+                is_suite_blockout = payload.get("workflow") == "suite-3d-render"
+                is_suite_scene_video = payload.get("workflow") == "suite-scene-video"
                 if payload.get("workflow") == "tiktok-highlight":
                     final_path = render_highlight(
                         job.project_id, dict(payload.get("plan") or {}), progress=progress, log=log,
@@ -206,6 +212,28 @@ def loop(stop_event: Event | None = None) -> None:
                     final_path = regenerate_bible_scene_stills(
                         job.project_id,
                         [int(index) for index in (payload.get("sceneIndexes") or [])] or None,
+                        progress=progress,
+                        log=log,
+                    )
+                elif is_grok_video or is_phronesis_video:
+                    final_path = run_grok_video_job(
+                        job.project_id,
+                        payload,
+                        progress=progress,
+                        log=log,
+                    )
+                elif is_suite_blockout:
+                    final_path = run_suite_blockout(
+                        job.project_id,
+                        int(payload.get("sceneIndex") or 0),
+                        progress=progress,
+                        log=log,
+                    )
+                elif is_suite_scene_video:
+                    final_path = run_suite_scene_video(
+                        job.project_id,
+                        int(payload.get("sceneIndex") or 0),
+                        str(payload.get("destination") or "phronesis"),
                         progress=progress,
                         log=log,
                     )
@@ -266,6 +294,10 @@ def loop(stop_event: Event | None = None) -> None:
                     path=str(rel_path),
                     kind=(
                         "motion" if is_scene_animation or is_scene_animation_repair
+                        else "grok-video" if is_grok_video
+                        else "phronesis-video" if is_phronesis_video
+                        else "blockout" if is_suite_blockout
+                        else "scene-video" if is_suite_scene_video
                         else "still-image" if is_scene_stills
                         else "title-card" if is_bible_title_card and not payload.get("renderVideo", False)
                         else "video"

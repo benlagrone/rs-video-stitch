@@ -21,6 +21,7 @@ import { YouTubeChannelSelector } from './YouTubeChannelSelector.jsx';
 import { VoiceSamples } from './VoiceSamples.jsx';
 import { ThumbnailStyleSelector } from './ThumbnailStyleSelector.jsx';
 import { TikTokHighlightPanel } from './TikTokHighlightPanel.jsx';
+import { SceneProductionControls } from './SceneProductionControls.jsx';
 import { TikTokVideoPreview } from './TikTokVideoPreview.jsx';
 import { completedTikTokHighlight, refreshTikTokPreviewVideo, selectTikTokPreviewVideo } from './tiktokPreview.js';
 import { LECROWN_TIKTOK_DEFAULTS, resolvedTikTokAi, tikTokPreferences, tikTokVideoKey } from './tiktokSettings.js';
@@ -317,6 +318,7 @@ function projectStateFromValues(values) {
       width: 1080,
       height: 1920,
     } : undefined,
+    suiteProduction: values.suiteProduction,
   };
 }
 
@@ -333,6 +335,8 @@ export function App() {
   const [propertyAddress, setPropertyAddress] = useState('');
   const [projectId, setProjectId] = useState('');
   const [script, setScript] = useState('Welcome to this property. The opening view should establish the home and the neighborhood.\n\nStep inside to highlight the living spaces, natural light, and everyday comfort.\n\nFinish with the strongest selling points and a clear invitation to schedule a showing.');
+  const [suiteProduction, setSuiteProduction] = useState({ scenes: [] });
+  const [suiteBusy, setSuiteBusy] = useState('');
   const [originalScriptText, setOriginalScriptText] = useState('');
   const [targetSeconds, setTargetSeconds] = useState(60);
   const [sceneDurations, setSceneDurations] = useState([]);
@@ -927,6 +931,8 @@ export function App() {
     setSavedProjectId('');
     setVersions([]);
     setStatus('New project');
+    setSuiteProduction({ scenes: [] });
+    setSuiteBusy('');
     setView('editor');
   }
 
@@ -983,6 +989,7 @@ export function App() {
       const savedOriginalScript = String(state.originalScriptText || loadedScript).trim();
       setScript(loadedScript);
       setSceneTextDrafts(null);
+      setSuiteProduction(state.suiteProduction || { scenes: [] });
       setOriginalScriptText(savedOriginalScript);
       setTargetSeconds(state.targetSeconds || 60);
       setSceneDurations(savedSceneDurations);
@@ -1362,6 +1369,57 @@ export function App() {
     await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/assets`, { method: 'POST', body: form });
   }
 
+  async function writeSuitePackage() {
+    setError('');
+    setSuiteBusy('write');
+    try {
+      const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/suite-production/write`, { method: 'POST' });
+      setSuiteProduction(result.suiteProduction || { scenes: [] });
+      setStatus('Ollama wrote the scene prompts and 3D plans');
+    } catch (err) {
+      setError(err.message || 'Ollama could not write the scene package');
+    } finally {
+      setSuiteBusy('');
+    }
+  }
+
+  async function refreshSuiteProduction() {
+    const result = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}`);
+    setSuiteProduction(result.state?.suiteProduction || { scenes: [] });
+  }
+
+  async function approveSceneBlockout(index) {
+    setError('');
+    setSuiteBusy(`3d-${index}`);
+    try {
+      await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/scenes/${index + 1}/3d-render`, { method: 'POST' });
+      await refreshSuiteProduction();
+      setStatus(`Approved the 3D plan for scene ${index + 1}. The render is queued.`);
+    } catch (err) {
+      setError(err.message || 'Could not create the 3D render');
+    } finally {
+      setSuiteBusy('');
+    }
+  }
+
+  async function generateSceneVideo(index, destination) {
+    setError('');
+    setSuiteBusy(`video-${index}`);
+    try {
+      await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/scenes/${index + 1}/scene-video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ destination }),
+      });
+      await refreshSuiteProduction();
+      setStatus(`Queued scene ${index + 1} with ${destination === 'grok' ? 'Grok' : 'Phronesis'}`);
+    } catch (err) {
+      setError(err.message || 'Could not make the scene video');
+    } finally {
+      setSuiteBusy('');
+    }
+  }
+
   async function saveProject(overrides = {}) {
     if (overrides?.preventDefault) overrides = {};
     setError('');
@@ -1450,6 +1508,7 @@ export function App() {
             tiktokFramingMode,
             tiktokVariantMetadata: tiktokVariantMetadata.current,
             tiktokVariantFilename,
+            suiteProduction,
           }),
         }),
       });
@@ -2605,6 +2664,9 @@ export function App() {
             <button className="secondary-action" type="button" onClick={buildScenesFromRoomLabels} disabled={!script.trim() || images.length < 1}>
               Build scenes from room labels
             </button>
+            <button className="secondary-action" type="button" onClick={writeSuitePackage} disabled={suiteBusy === 'write' || !script.trim() || !savedProjectId}>
+              {suiteBusy === 'write' ? 'Writing with Ollama' : 'Write scene prompts and 3D plans'}
+            </button>
           </div>
           <p className="hint">Build scenes from room labels groups Room Renamer results into reviewable 1–3-photo scenes and splits the narration to match.</p>
           <section className="youtube-panel tiktok-caption-tool" aria-label="TikTok caption">
@@ -2721,6 +2783,12 @@ export function App() {
                         value={section}
                         onChange={(event) => updateSceneTextDraft(index, event.target.value)}
                         onBlur={commitSceneTextDrafts}
+                      />
+                      <SceneProductionControls
+                        production={(suiteProduction.scenes || [])[index]}
+                        busy={Boolean(suiteBusy)}
+                        onApprove={() => approveSceneBlockout(index)}
+                        onGenerate={(destination) => generateSceneVideo(index, destination)}
                       />
                       {nextScene && sceneTransitionMode === 'hyperframes' && (
                         <label className="hyperframes-transition-title">

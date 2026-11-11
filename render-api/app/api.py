@@ -29,6 +29,8 @@ from starlette.concurrency import run_in_threadpool
 
 from app.db import SessionLocal, init_db
 from app.gpu_admission import GpuAdmissionError, governed_post
+from app.grok_video_workflow import router as grok_video_router
+from app.suite_workflow import router as suite_production_router
 from app.models import Job, Project
 from app.schemas import (
     ProjectSpec,
@@ -192,6 +194,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(grok_video_router)
+app.include_router(suite_production_router)
 
 UI_DIST = Path(os.getenv("RENDER_UI_DIST", "/srv/render-ui"))
 BRAND_MEDIA_DIR = Path(os.getenv("BRAND_MEDIA_DIR", "/srv/media/brand"))
