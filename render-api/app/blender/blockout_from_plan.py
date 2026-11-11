@@ -20,7 +20,8 @@ frame_end = duration * fps
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
-scene.render.engine = "BLENDER_EEVEE_NEXT"
+engine_ids = {item.identifier for item in scene.render.bl_rna.properties["engine"].enum_items}
+scene.render.engine = "BLENDER_EEVEE_NEXT" if "BLENDER_EEVEE_NEXT" in engine_ids else "BLENDER_EEVEE"
 scene.render.resolution_x = 640
 scene.render.resolution_y = 360
 scene.render.fps = fps

@@ -101,6 +101,19 @@ def approve_plan(scene_production: dict[str, Any]) -> dict[str, Any]:
     return approved
 
 
+def _blender_binary(explicit: str | None) -> str:
+    candidates = [
+        explicit,
+        os.getenv("BLENDER_BIN"),
+        "/usr/bin/blender",
+        "/Applications/Blender.app/Contents/MacOS/Blender",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    return candidates[-1]
+
+
 def render_blockout(
     plan: dict[str, Any],
     destination: Path,
@@ -109,7 +122,7 @@ def render_blockout(
     runner: Callable[[list[str]], subprocess.CompletedProcess] | None = None,
 ) -> Path:
     """Render with the trusted blockout script. The model never supplies the Python."""
-    binary = blender_bin or os.getenv("BLENDER_BIN") or "/Applications/Blender.app/Contents/MacOS/Blender"
+    binary = _blender_binary(blender_bin)
     if not Path(binary).is_file():
         raise SuiteProductionError("Sextant Blender is not available to create this 3D render")
     script = Path(__file__).resolve().parent / "blender" / "blockout_from_plan.py"
