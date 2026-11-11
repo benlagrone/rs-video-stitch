@@ -1425,7 +1425,7 @@ export function App() {
     setError('');
     setIsSavingProject(true);
     try {
-      const sourceScript = originalScriptText || script;
+      const sourceScript = overrides.originalScriptText ?? (originalScriptText || script);
       const descriptionFromSource = youtubeDescription || sourceScript;
       if (!originalScriptText.trim()) setOriginalScriptText(sourceScript);
       if (!youtubeDescription.trim() && sourceScript.trim()) setYoutubeDescription(sourceScript);
@@ -1454,7 +1454,7 @@ export function App() {
             scriptTitle,
             propertyAddress,
             resolvedProjectId,
-            script,
+            script: overrides.script ?? script,
             originalScriptText: sourceScript,
             targetSeconds,
             sceneDurations,
@@ -1466,8 +1466,8 @@ export function App() {
             imageHeaders,
             imageLabelEnabled,
             imageRoomInfo,
-            useIntro,
-            introLines,
+            useIntro: overrides.useIntro ?? useIntro,
+            introLines: overrides.introLines ?? introLines,
             leaderImage,
             useLogo,
             logoChoice,
@@ -2035,21 +2035,42 @@ export function App() {
   }
 
   async function generateLeadCard() {
-    if (isGeneratingIntro || (!title.trim() && !script.trim())) return;
+    const hasFootage = sourceFootage.length > 0;
+    if (isGeneratingIntro || (!hasFootage && !title.trim() && !script.trim())) return;
 
     setError('');
     setIsGeneratingIntro(true);
-    setStatus('Generating lead card with Fortress Ollama');
+    setStatus(hasFootage
+      ? 'Transcribing the footage, then summarizing the lead card'
+      : 'Summarizing the lead card with Fortress Ollama');
     try {
       const result = await request('/v1/lead-card/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, script, currentLines: introLines }),
+        body: JSON.stringify({
+          title,
+          script: hasFootage ? '' : script,
+          projectId: hasFootage ? resolvedProjectId : '',
+          language,
+          currentLines: introLines,
+        }),
       });
       const lines = Array.isArray(result.lines) ? result.lines.slice(0, 6) : [];
-      setIntroLines(Array.from({ length: 6 }, (_, index) => lines[index] || ''));
+      const nextLines = Array.from({ length: 6 }, (_, index) => lines[index] || '');
+      const transcript = String(result.transcript || script || '').trim();
+      setIntroLines(nextLines);
       setUseIntro(true);
-      setStatus(`Lead card generated with ${result.model || 'Fortress Ollama'}`);
+      if (transcript) {
+        setScript(transcript);
+        setOriginalScriptText(transcript);
+      }
+      await saveProject({
+        introLines: nextLines,
+        script: transcript,
+        originalScriptText: transcript,
+        useIntro: true,
+      });
+      setStatus(`Lead card summarized from the transcript with ${result.model || 'Fortress Ollama'}`);
     } catch (err) {
       setError(err.message || String(err));
       setStatus('Lead card generation failed');
@@ -2571,10 +2592,11 @@ export function App() {
 
           <div className="settings-section-heading">
             <h2>Intro</h2>
-            <button type="button" onClick={generateLeadCard} disabled={isGeneratingIntro || (!title.trim() && !script.trim())}>
+            <button type="button" onClick={generateLeadCard} disabled={isGeneratingIntro || (!sourceFootage.length && !title.trim() && !script.trim())}>
               {isGeneratingIntro ? 'Generating' : 'Generate with Ollama'}
             </button>
           </div>
+          <p className="hint">Footage is transcribed first. Ollama only summarizes that transcript into the lead card title.</p>
           <div className="hyperframes-binding">
             <strong>Opening and transition style</strong>
             <label>Opening card

@@ -1170,21 +1170,128 @@ def _ollama_generate(
     return result
 
 
-def _lead_card_prompt(req: LeadCardGenerateRequest) -> str:
+def _lead_card_prompt(req: LeadCardGenerateRequest, transcript: str) -> str:
+    if re.search(r"[\u4e00-\u9fff]", transcript):
+        return (
+            "把口播转写总结成三行视频片头。\n"
+            "第一行是标题，最多18个字。\n"
+            "第二行概括说话人在讲什么，最多26个字。\n"
+            "第三行写地点或楼里的设施，最多26个字。\n"
+            "每一行都用简体中文，必须是完整的一句话。\n"
+            "只能使用转写里出现的事实。不要编造地名、活动或承诺。\n"
+            "不要写价格、租金或金额。\n"
+            "只返回JSON：{\"lines\":[\"第一行\",\"第二行\",\"第三行\"]}。\n\n"
+            f"转写：\n{transcript.strip()[:12000]}"
+        )
     current_lines = [str(line).strip() for line in req.currentLines if str(line).strip()]
     current_block = f"\nCurrent draft lines:\n{json.dumps(current_lines)}\n" if current_lines else ""
     return (
-        "Create a concise three-line leader card for this video.\n"
-        "Line 1 is the primary title, maximum 42 characters.\n"
-        "Line 2 is a descriptive subtitle, maximum 60 characters.\n"
-        "Line 3 is useful context such as translation, location, or a factual callout, maximum 60 characters.\n"
-        "Use only facts supported by the supplied title and script. Do not invent names, claims, prices, or theology.\n"
+        "Summarize the source transcript into a concise three-line leader card.\n"
+        "Line 1 is the title, maximum 42 characters.\n"
+        "Line 2 is a short summary of what the speaker says, maximum 60 characters.\n"
+        "Line 3 is one more fact from the transcript, maximum 60 characters.\n"
+        "Every line must be a complete phrase. Do not stop in the middle of a word.\n"
+        "Use only words and facts that appear in the source transcript. Do not invent names, places, events, titles, prices, or claims.\n"
+        "Leave prices, rents, and other amounts off the card.\n"
+        "If the transcript does not support a third line, repeat a short phrase that the speaker actually said.\n"
+        "Write every line in the same language as the transcript. Chinese transcript, Chinese card. English transcript, English card.\n"
+        "Do not include a price, rent, dollar amount, or monthly fee.\n"
         "For scripture, preserve the passage reference and translation when available.\n"
         "Return JSON only in exactly this shape: {\"lines\":[\"line 1\",\"line 2\",\"line 3\"]}.\n"
         f"\nVideo title:\n{req.title.strip()}\n"
         f"{current_block}"
-        f"Source script:\n{req.script.strip()[:6000]}"
+        f"Source transcript:\n{transcript.strip()[:12000]}"
     )
+
+
+def _cached_footage_transcript(work_dir: Path) -> str:
+    cache_dir = work_dir / "caption-cache"
+    if not cache_dir.is_dir():
+        return ""
+    candidates = [
+        path for path in cache_dir.glob("*.json")
+        if ".chunk-" not in path.name and path.name != "no-audio.json"
+    ]
+    if not candidates:
+        return ""
+    latest = max(candidates, key=lambda path: path.stat().st_mtime)
+    try:
+        saved = json.loads(latest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    cues = saved.get("cues") if isinstance(saved, dict) else None
+    if not isinstance(cues, list):
+        return ""
+    return " ".join(
+        str(item.get("text") or "").strip()
+        for item in cues
+        if isinstance(item, dict) and str(item.get("text") or "").strip()
+    ).strip()
+
+
+def _project_footage_transcript(project_id: str, language: str) -> str:
+    from app.storage import p_work, project_asset_path, read_project_state
+    from app.video_captions import CaptionError, transcribe_video
+
+    project_id = Path(project_id).name
+    state = read_project_state(project_id)
+    if not isinstance(state, dict):
+        raise HTTPException(status_code=404, detail="Project not found")
+    names: list[str] = []
+    for clip in state.get("sourceFootage") or []:
+        if not isinstance(clip, dict):
+            continue
+        name = str(clip.get("name") or clip.get("filename") or "").strip()
+        if name:
+            names.append(Path(name).name)
+    if not names:
+        raise HTTPException(status_code=400, detail="This project has no footage to transcribe.")
+    spoken_language = (language or str(state.get("language") or "")).strip()
+    parts: list[str] = []
+    work_root = p_work(project_id) / "lead-transcripts"
+    for name in names:
+        source = project_asset_path(project_id, "footage", name)
+        if not source.is_file():
+            raise HTTPException(status_code=400, detail=f"Footage file is missing: {name}")
+        work_dir = work_root / name
+        try:
+            cues = transcribe_video(source, work_dir, language=spoken_language or None)
+        except CaptionError as exc:
+            text = _cached_footage_transcript(work_dir)
+            if not text:
+                raise HTTPException(status_code=503, detail=f"Could not transcribe {name}: {exc}") from exc
+            parts.append(text)
+            continue
+        text = " ".join(cue.text.strip() for cue in cues if getattr(cue, "text", "").strip())
+        if text:
+            parts.append(text)
+    transcript = "\n\n".join(parts).strip()
+    if not transcript:
+        raise HTTPException(status_code=400, detail="The footage transcript is empty.")
+    return transcript
+
+
+def _lead_card_lines_are_usable(lines: list[str], transcript: str) -> bool:
+    if len(lines) < 3:
+        return False
+    transcript_is_chinese = bool(re.search(r"[\u4e00-\u9fff]", transcript))
+    lines_are_chinese = any(re.search(r"[\u4e00-\u9fff]", line) for line in lines)
+    if transcript_is_chinese != lines_are_chinese:
+        return False
+    if any("{" in line or "\"lines\"" in line for line in lines):
+        return False
+    return not any(
+        re.search(r"[$€£¥]|美元|美金|月租|a month|\d+\s*元|\d+\s*块", line, flags=re.IGNORECASE)
+        for line in lines
+    )
+
+
+def _fit_lead_card_line(value: str, limit: int) -> str:
+    line = " ".join(str(value).split())
+    if len(line) <= limit:
+        return line
+    trimmed = line[:limit].rsplit(" ", 1)[0].rstrip(" ,;:-")
+    return trimmed or line[:limit].rstrip()
 
 
 def _parse_lead_card_lines(value: str) -> list[str]:
@@ -1195,7 +1302,8 @@ def _parse_lead_card_lines(value: str) -> list[str]:
             payload = json.loads(json_match.group(0))
             lines = payload.get("lines") if isinstance(payload, dict) else None
             if isinstance(lines, list):
-                cleaned = [str(line).strip()[:60].rstrip() for line in lines if str(line).strip()]
+                cleaned = [_fit_lead_card_line(str(line), 42 if index == 0 else 60) for index, line in enumerate(lines)]
+                cleaned = [line for line in cleaned if line]
                 if len(cleaned) >= 3:
                     return cleaned[:3]
         except (TypeError, ValueError):
@@ -1205,18 +1313,64 @@ def _parse_lead_card_lines(value: str) -> list[str]:
     for line in raw.splitlines():
         line = re.sub(r"^\s*(?:[-*]|\d+[.)]|line\s*\d+\s*:)\s*", "", line, flags=re.IGNORECASE).strip()
         if line and not line.startswith("```"):
-            cleaned.append(line[:60].rstrip())
+            cleaned.append(_fit_lead_card_line(line, 42 if len(cleaned) == 0 else 60))
+    cleaned = [line for line in cleaned if line]
     if len(cleaned) < 3:
-        raise HTTPException(status_code=502, detail="Ollama did not return three usable lead-card lines")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Ollama did not return three usable lead-card lines: {raw[:300]}",
+        )
     return cleaned[:3]
 
 
 @app.post("/v1/lead-card/generate", response_model=LeadCardGenerateResponse)
 async def generate_lead_card(req: LeadCardGenerateRequest) -> LeadCardGenerateResponse:
-    if not f"{req.title} {req.script}".strip():
-        raise HTTPException(status_code=400, detail="Add a project title or script before generating a lead card")
-    result = _ollama_generate(_lead_card_prompt(req), temperature=0.35)
-    return LeadCardGenerateResponse(lines=_parse_lead_card_lines(result), model=OLLAMA_MODEL)
+    transcript = ""
+    if req.projectId.strip():
+        transcript = await run_in_threadpool(
+            _project_footage_transcript,
+            req.projectId.strip(),
+            req.language,
+        )
+    if not transcript:
+        transcript = req.script.strip()
+    if not transcript:
+        raise HTTPException(
+            status_code=400,
+            detail="A lead card has to come from the video transcript. Transcribe the footage before generating one.",
+        )
+    prompt = _lead_card_prompt(req, transcript)
+    lines: list[str] = []
+    for attempt in range(2):
+        try:
+            result = _ollama_generate(
+                prompt,
+                temperature=0.2,
+                num_predict=360,
+                json_output=True,
+            )
+        except GpuAdmissionError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Phronesis Ollama is waiting on Sextant scheduling: {exc}",
+            ) from exc
+        lines = _parse_lead_card_lines(result)
+        if _lead_card_lines_are_usable(lines, transcript):
+            return LeadCardGenerateResponse(lines=lines, model=OLLAMA_MODEL, transcript=transcript)
+        rejection = (
+            "上一张卡片被拒绝了。请改用简体中文重写，并且不要写价格。\n"
+            if re.search(r"[\u4e00-\u9fff]", transcript)
+            else "The previous card was rejected. Rewrite it in the transcript language and leave every price out.\n"
+        )
+        prompt = (
+            f"{_lead_card_prompt(req, transcript)}\n"
+            f"{rejection}"
+            f"Rejected card:\n{json.dumps(lines, ensure_ascii=False)}"
+        )
+    raise HTTPException(
+        status_code=502,
+        detail=f"Ollama summary did not stay in the transcript language without prices: {lines}",
+    )
 
 
 def _hyperframes_transition_title_prompt(req: HyperframesTransitionTitleRequest) -> str:

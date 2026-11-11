@@ -20,6 +20,12 @@ ADMISSION_REQUIRED = os.getenv(
 ).lower() not in {"0", "false", "off", "no"}
 ADMISSION_WAIT_SECONDS = float(os.getenv("FORTRESS_GPU_ADMISSION_WAIT_SECONDS", "900"))
 ADMISSION_HEARTBEAT_SECONDS = float(os.getenv("FORTRESS_GPU_ADMISSION_HEARTBEAT_SECONDS", "30"))
+ADMISSION_REQUEST_TIMEOUT_SECONDS = float(
+    os.getenv("FORTRESS_GPU_ADMISSION_REQUEST_TIMEOUT_SECONDS", "120")
+)
+ADMISSION_RELEASE_TIMEOUT_SECONDS = float(
+    os.getenv("FORTRESS_GPU_ADMISSION_RELEASE_TIMEOUT_SECONDS", "15")
+)
 
 
 class GpuAdmissionError(RuntimeError):
@@ -34,12 +40,12 @@ def _configured() -> bool:
     return bool(OPTIMIZATION_MCP_URL and OPTIMIZATION_MCP_TOKEN)
 
 
-def _post(path: str, payload: dict, *, timeout: float = 15):
+def _post(path: str, payload: dict, *, timeout: float | None = None):
     return requests.post(
         f"{OPTIMIZATION_MCP_URL}{path}",
         headers=_headers(),
         json=payload,
-        timeout=timeout,
+        timeout=ADMISSION_REQUEST_TIMEOUT_SECONDS if timeout is None else timeout,
     )
 
 
@@ -64,7 +70,10 @@ def _acquire(
         try:
             response = _post("/internal/v1/phronesis/admission/acquire", payload)
         except requests.RequestException as exc:
-            raise GpuAdmissionError(f"Sextant GPU admission is unavailable: {exc}") from exc
+            if time.monotonic() >= deadline:
+                raise GpuAdmissionError(f"Sextant GPU admission is unavailable: {exc}") from exc
+            time.sleep(2)
+            continue
         if response.status_code == 200:
             lease_id = str(response.json().get("leaseId") or "")
             if not lease_id:
@@ -86,6 +95,7 @@ def _heartbeat(lease_id: str, stop: threading.Event) -> None:
             response = _post(
                 "/internal/v1/phronesis/admission/heartbeat",
                 {"lease_id": lease_id},
+                timeout=ADMISSION_RELEASE_TIMEOUT_SECONDS,
             )
             if response.status_code != 200:
                 return
@@ -126,7 +136,11 @@ def admit_gpu(
         stop.set()
         thread.join(timeout=1)
         try:
-            _post("/internal/v1/phronesis/admission/release", {"lease_id": lease_id})
+            _post(
+                "/internal/v1/phronesis/admission/release",
+                {"lease_id": lease_id},
+                timeout=ADMISSION_RELEASE_TIMEOUT_SECONDS,
+            )
         except requests.RequestException:
             pass
 

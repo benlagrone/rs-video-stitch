@@ -251,12 +251,15 @@ class ScriptEnhanceResponse(BaseModel):
 class LeadCardGenerateRequest(BaseModel):
     title: str = ""
     script: str = ""
+    projectId: str = ""
+    language: str = ""
     currentLines: List[str] = Field(default_factory=list)
 
 
 class LeadCardGenerateResponse(BaseModel):
     lines: conlist(str, min_length=3, max_length=3)
     model: str
+    transcript: str = ""
 
 
 class HyperframesTransitionTitleRequest(BaseModel):

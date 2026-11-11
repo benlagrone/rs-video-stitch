@@ -1,6 +1,8 @@
 import unittest
 from unittest import mock
 
+import requests
+
 from app import gpu_admission
 
 
@@ -67,6 +69,27 @@ class GpuAdmissionTest(unittest.TestCase):
             json={"model": "test"},
             timeout=30,
         )
+
+    def test_acquire_retries_a_slow_scheduler_until_it_answers(self):
+        calls = {"acquire": 0}
+
+        def post(path, payload, timeout=None):
+            if path.endswith("/acquire"):
+                calls["acquire"] += 1
+                if calls["acquire"] == 1:
+                    raise requests.Timeout("read timed out")
+                return Response(200, {"leaseId": "lease-2"})
+            return Response(200, {"status": "released"})
+
+        with mock.patch.object(gpu_admission, "OPTIMIZATION_MCP_URL", "http://optimizer"), mock.patch.object(
+            gpu_admission, "OPTIMIZATION_MCP_TOKEN", "secret"
+        ), mock.patch.object(gpu_admission, "ADMISSION_WAIT_SECONDS", 30), mock.patch.object(
+            gpu_admission, "_post", side_effect=post
+        ), mock.patch.object(gpu_admission.time, "sleep"):
+            with gpu_admission.admit_gpu("ollama", workload_id="lead-card", vram_required_mb=8192) as lease:
+                self.assertEqual(lease, "lease-2")
+
+        self.assertEqual(calls["acquire"], 2)
 
 
 if __name__ == "__main__":

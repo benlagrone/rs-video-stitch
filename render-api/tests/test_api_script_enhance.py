@@ -341,11 +341,102 @@ class ScriptEnhanceApiTest(TestCase):
             )
 
         self.assertEqual(response.lines, ["Genesis 1", "The Beginning of Creation", "King James Version"])
+        self.assertIn("In the beginning God created the heaven and the earth.", response.transcript)
         payload = post.call_args.kwargs["json"]
         self.assertEqual(post.call_args.args[0], "http://ollama.local:11434/api/generate")
         self.assertEqual(payload["model"], "mixtral:latest")
+        self.assertIn("Summarize the source transcript", payload["prompt"])
         self.assertIn("three-line leader card", payload["prompt"])
         self.assertIn("Genesis 1 (KJV)", payload["prompt"])
+
+    def test_generate_lead_card_transcribes_footage_before_summarizing(self):
+        cue = mock.Mock(text="I highly recommend 9800 Richmond in Houston.")
+        source = mock.Mock()
+        source.is_file.return_value = True
+        with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(
+            api,
+            "OLLAMA_MODEL",
+            "mixtral:latest",
+        ), mock.patch.object(api.requests, "post", return_value=_FakeLeadCardResponse()) as post, mock.patch(
+            "app.storage.read_project_state",
+            return_value={"language": "en-US", "sourceFootage": [{"name": "clip.mov"}]},
+        ), mock.patch(
+            "app.storage.project_asset_path",
+            return_value=source,
+        ), mock.patch(
+            "app.storage.p_work",
+            return_value=Path("/tmp/lead-card-work"),
+        ), mock.patch(
+            "app.video_captions.transcribe_video",
+            return_value=[cue],
+        ) as transcribe:
+            response = asyncio.run(
+                api.generate_lead_card(
+                    LeadCardGenerateRequest(title="9800 Richmond", projectId="9800-english", language="en-US")
+                )
+            )
+
+        transcribe.assert_called_once()
+        self.assertEqual(transcribe.call_args.args[0], source)
+        self.assertEqual(transcribe.call_args.kwargs["language"], "en-US")
+        prompt = post.call_args.kwargs["json"]["prompt"]
+        self.assertIn("I highly recommend 9800 Richmond in Houston.", prompt)
+        self.assertEqual(response.transcript, "I highly recommend 9800 Richmond in Houston.")
+
+    def test_generate_lead_card_uses_a_cached_transcript_when_whisper_is_down(self):
+        from app.video_captions import CaptionError
+
+        work = Path("/tmp/lead-card-cache-test")
+        cache = work / "lead-transcripts" / "clip.mov" / "caption-cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        (cache / "saved.json").write_text(
+            '{"cues":[{"text":"I highly recommend 9800 Richmond."}]}',
+            encoding="utf-8",
+        )
+        source = mock.Mock()
+        source.is_file.return_value = True
+        with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(
+            api,
+            "OLLAMA_MODEL",
+            "mixtral:latest",
+        ), mock.patch.object(api.requests, "post", return_value=_FakeLeadCardResponse()), mock.patch(
+            "app.storage.read_project_state",
+            return_value={"language": "en-US", "sourceFootage": [{"name": "clip.mov"}]},
+        ), mock.patch("app.storage.project_asset_path", return_value=source), mock.patch(
+            "app.storage.p_work",
+            return_value=work,
+        ), mock.patch(
+            "app.video_captions.transcribe_video",
+            side_effect=CaptionError("gateway down"),
+        ):
+            response = asyncio.run(
+                api.generate_lead_card(
+                    LeadCardGenerateRequest(title="9800 Richmond", projectId="9800-english", language="en-US")
+                )
+            )
+
+        self.assertEqual(response.transcript, "I highly recommend 9800 Richmond.")
+
+    def test_chinese_transcript_rejects_an_english_priced_card(self):
+        self.assertFalse(api._lead_card_lines_are_usable(
+            ["9800 Richmond Offices", "Office tour", "Rent is $4.99 a month"],
+            "大家好，这是9800 Richmond的小型办公室。",
+        ))
+        self.assertTrue(api._lead_card_lines_are_usable(
+            ["9800 Richmond办公室", "休斯顿小型办公室", "靠近中国城和Galleria"],
+            "大家好，这是9800 Richmond的小型办公室。",
+        ))
+
+    def test_lead_card_line_trims_on_a_word_boundary(self):
+        fitted = api._fit_lead_card_line("Recommended office space at 9800 Richmond with amenities like a gym", 60)
+        self.assertLessEqual(len(fitted), 60)
+        self.assertFalse(fitted.endswith("lik"))
+        self.assertIn("9800 Richmond", fitted)
+
+    def test_generate_lead_card_rejects_an_empty_transcript(self):
+        with self.assertRaises(HTTPException) as caught:
+            asyncio.run(api.generate_lead_card(LeadCardGenerateRequest(title="9800 Richmond")))
+        self.assertEqual(caught.exception.status_code, 400)
 
     def test_generate_hyperframes_transition_title_uses_scene_context(self):
         with mock.patch.object(api, "OLLAMA_BASE_URL", "http://ollama.local:11434"), mock.patch.object(
