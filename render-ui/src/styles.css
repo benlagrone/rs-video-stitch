@@ -1162,6 +1162,37 @@ textarea {
   margin: 0 0 12px;
 }
 
+.virtual-staging {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 12px;
+}
+
+.virtual-staging h3,
+.virtual-staging h4,
+.virtual-staging p {
+  margin: 0;
+}
+
+.virtual-staging h3,
+.virtual-staging h4 {
+  font-size: 14px;
+}
+
+.virtual-staging-photo {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.virtual-staging textarea {
+  min-height: 72px;
+}
+
 .removed-images-panel,
 .version-panel {
   border: 1px solid var(--line);

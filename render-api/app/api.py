@@ -30,6 +30,7 @@ from starlette.concurrency import run_in_threadpool
 from app.db import SessionLocal, init_db
 from app.gpu_admission import GpuAdmissionError, governed_post
 from app.grok_video_workflow import router as grok_video_router
+from app.virtual_staging_workflow import router as virtual_staging_router
 from app.suite_workflow import router as suite_production_router
 from app.models import Job, Project
 from app.schemas import (
@@ -195,6 +196,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(grok_video_router)
+app.include_router(virtual_staging_router)
 app.include_router(suite_production_router)
 
 UI_DIST = Path(os.getenv("RENDER_UI_DIST", "/srv/render-ui"))
@@ -849,7 +851,7 @@ async def youtube_auth_callback(request: Request, code: str = "", state: str = "
         return HTMLResponse(_youtube_manual_callback_page(str(request.url)))
 
     try:
-        completed_profile = complete_youtube_auth(code, state)
+        completed_profile = await run_in_threadpool(complete_youtube_auth, code, state)
     except Exception as exc:  # noqa: BLE001
         return HTMLResponse(
             "<h1>YouTube authorization failed</h1>"
@@ -1388,12 +1390,12 @@ def _hyperframes_transition_title_prompt(req: HyperframesTransitionTitleRequest)
 
 
 def _parse_hyperframes_transition_title(value: str) -> str:
-    title = value.strip().splitlines()[0].strip()
-    title = re.sub(r"^(?:title|transition)\s*:\s*", "", title, flags=re.IGNORECASE)
-    title = title.strip(" `\"'*-:;,.!")
-    if not title:
-        raise HTTPException(status_code=502, detail="Ollama did not return a usable transition title")
-    return title[:80].rstrip()
+    from app.footage_copy import clean_transition_title
+
+    try:
+        return clean_transition_title(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Ollama did not return a usable transition title") from exc
 
 
 def _hyperframes_transition_titles_prompt(
@@ -2385,6 +2387,48 @@ async def upload_assets(
         count += 1
 
     return {"projectId": pid, "count": count, "subdir": subdir}
+
+
+@app.post("/v1/projects/{pid}/footage-copy")
+async def start_footage_copy(pid: str, db: Session = Depends(get_db)) -> dict:
+    """Queue transcript lead cards and transitions for a stitched footage project."""
+    from sqlalchemy import select
+
+    from app.footage_copy import FootageCopyError, copy_is_current, footage_names, footage_signature
+
+    state = read_project_state(pid) or {}
+    names = footage_names(state)
+    if not names:
+        raise HTTPException(status_code=400, detail="This project has no footage to transcribe.")
+    try:
+        signature = footage_signature(pid, names)
+    except FootageCopyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if copy_is_current(state, signature):
+        return {"projectId": pid, "status": "ready", "jobId": None}
+
+    existing = db.scalars(
+        select(Job).where(Job.project_id == pid, Job.status.in_(["QUEUED", "RUNNING"]))
+    ).all()
+    for job in existing:
+        if isinstance(job.payload, dict) and job.payload.get("workflow") == "footage-copy":
+            return {"projectId": pid, "status": str(job.status).lower(), "jobId": job.id}
+
+    project = db.get(Project, pid)
+    if project is None:
+        project = Project(id=pid)
+        db.add(project)
+    job_id = f"j_{uuid.uuid4().hex[:12]}"
+    db.add(Job(
+        id=job_id,
+        project_id=pid,
+        status="QUEUED",
+        payload={"workflow": "footage-copy", "outputName": "footage-copy.json", "renderOptions": {}},
+        progress=0.0,
+        stage="QUEUED",
+    ))
+    db.commit()
+    return {"projectId": pid, "status": "queued", "jobId": job_id}
 
 
 @app.post("/v1/projects/{pid}/render")

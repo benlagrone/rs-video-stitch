@@ -433,16 +433,24 @@ def transcribe_video(video_path: Path, work_dir: Path, language: str | None = No
                 fields = {"task": "transcribe", "word_timestamps": "true", "vad_filter": "true"}
                 if language:
                     fields["language"] = language
-                try:
-                    with chunk.open("rb") as handle:
-                        response = requests.post(endpoint, data=fields, files={"file": (chunk.name, handle, "audio/wav")}, headers=headers, timeout=(5, 60))
-                    response.raise_for_status()
-                    payload = response.json()
-                except requests.RequestException as exc:
-                    raise CaptionError(f"Whisper transcription failed through the central voice gateway on chunk {index + 1} of {count}") from exc
-                except ValueError as exc:
-                    raise CaptionError("Whisper returned invalid transcription JSON") from exc
+                payload = None
+                gateway_error: Exception | None = None
+                for attempt in range(3):
+                    try:
+                        with chunk.open("rb") as handle:
+                            response = requests.post(endpoint, data=fields, files={"file": (chunk.name, handle, "audio/wav")}, headers=headers, timeout=(5, 60))
+                        response.raise_for_status()
+                        payload = response.json()
+                        break
+                    except requests.RequestException as exc:
+                        gateway_error = exc
+                        if attempt < 2:
+                            time.sleep(1 + attempt)
+                    except ValueError as exc:
+                        raise CaptionError("Whisper returned invalid transcription JSON") from exc
                 if not isinstance(payload, dict):
+                    if gateway_error is not None:
+                        raise CaptionError(f"Whisper transcription failed through the central voice gateway on chunk {index + 1} of {count}") from gateway_error
                     raise CaptionError("Whisper returned invalid transcription data")
                 engine = str(payload.get("engine") or profile["engine"])
                 if "whisper" not in engine.lower():

@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse, urlunparse
@@ -41,12 +42,33 @@ YOUTUBE_CHANNEL_PROFILES = {
 YOUTUBE_PROFILES = {profile: details["label"] for profile, details in YOUTUBE_CHANNEL_PROFILES.items()}
 YOUTUBE_PROFILE_ALIASES = {"bible": "animals"}
 _CHANNEL_CATALOG_TTL_SECONDS = 300
+_GOOGLE_CALL_TIMEOUT_SECONDS = 45
 _channel_catalog_cache: tuple[float, list[dict[str, Any]]] = (0.0, [])
 _channel_catalog_lock = threading.Lock()
 
 
 class YouTubeUploadConfigurationError(RuntimeError):
     """Raised when the server is missing non-interactive YouTube credentials."""
+
+
+@contextmanager
+def _google_call_timeout() -> Any:
+    """Bound Google token and channel calls so a stalled API cannot hold the callback open."""
+    previous = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(_GOOGLE_CALL_TIMEOUT_SECONDS)
+    try:
+        yield
+    except YouTubeUploadConfigurationError:
+        raise
+    except Exception as exc:
+        text = str(exc).lower()
+        if isinstance(exc, (TimeoutError, socket.timeout)) or "timed out" in text or "timeout" in text:
+            raise YouTubeUploadConfigurationError(
+                "YouTube did not answer before the connection closed. Connect again."
+            ) from exc
+        raise
+    finally:
+        socket.setdefaulttimeout(previous)
 
 
 def normalize_youtube_profile(profile: str = DEFAULT_PROFILE) -> str:
@@ -409,7 +431,7 @@ def youtube_authorization_url(profile: str = DEFAULT_PROFILE) -> dict[str, Any]:
     _write_state(profile=profile, state=state, redirect_uri=redirect_uri, manual_callback=manual_callback)
     authorization_url, _ = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes="true",
+        include_granted_scopes="false",
         prompt="select_account consent",
         state=state,
     )
@@ -427,12 +449,18 @@ def _profile_from_state(state: str) -> str:
     return normalize_youtube_profile(prefix) if separator else DEFAULT_PROFILE
 
 
-def _channel_id_for_credentials(credentials: Any) -> str:
+def _channel_id_for_credentials(credentials: Any, *, expected_channel_id: str = "") -> str:
     google = _google_modules()
     youtube = google["build"]("youtube", "v3", credentials=credentials)
-    response = youtube.channels().list(part="id", mine=True).execute()
-    item = (response.get("items") or [None])[0]
-    return str((item or {}).get("id") or "")
+    response = youtube.channels().list(part="id", mine=True, maxResults=50).execute()
+    channel_ids = [
+        str(item.get("id") or "")
+        for item in (response.get("items") or [])
+        if item and item.get("id")
+    ]
+    if expected_channel_id and expected_channel_id in channel_ids:
+        return expected_channel_id
+    return channel_ids[0] if channel_ids else ""
 
 
 def complete_youtube_auth(code: str, state: str, profile: Optional[str] = None) -> str:
@@ -442,10 +470,14 @@ def complete_youtube_auth(code: str, state: str, profile: Optional[str] = None) 
     if not expected_state or state != expected_state:
         raise YouTubeUploadConfigurationError("YouTube OAuth state did not match")
     flow = _auth_flow(redirect_uri=state_payload.get("redirect_uri") or youtube_redirect_uri())
-    flow.fetch_token(code=code)
-    channel_id = _channel_id_for_credentials(flow.credentials)
     configured_identity = YOUTUBE_CHANNEL_PROFILES[profile]
     expected_channel_id = configured_identity["expectedChannelId"]
+    with _google_call_timeout():
+        flow.fetch_token(code=code)
+        channel_id = _channel_id_for_credentials(
+            flow.credentials,
+            expected_channel_id=expected_channel_id,
+        )
     if channel_id != expected_channel_id:
         raise YouTubeUploadConfigurationError(
             f"{configured_identity['label']} requires channel {expected_channel_id}, "

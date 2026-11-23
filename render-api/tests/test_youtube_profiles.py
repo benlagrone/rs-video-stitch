@@ -148,6 +148,7 @@ class YouTubeProfileTests(unittest.TestCase):
             self.assertTrue(saved_state.startswith("mandarin."))
             self.assertEqual(youtube_upload._profile_from_state(saved_state), "mandarin")
             self.assertEqual(auth_flow.return_value.authorization_url.call_args.kwargs["prompt"], "select_account consent")
+            self.assertEqual(auth_flow.return_value.authorization_url.call_args.kwargs["include_granted_scopes"], "false")
 
     def test_oauth_does_not_save_a_token_for_the_wrong_channel(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
@@ -200,6 +201,27 @@ class YouTubeProfileTests(unittest.TestCase):
             self.assertEqual(youtube_upload.complete_youtube_auth(code="code", state="english.state"), "english")
 
         save_credentials.assert_called_once_with(Path(temp_dir) / "youtube_token.json", credentials)
+
+    def test_channel_lookup_prefers_the_expected_channel_when_google_lists_another_first(self):
+        youtube = MagicMock()
+        youtube.channels.return_value.list.return_value.execute.return_value = {
+            "items": [
+                {"id": "UCn0cWV7cyNxzfXhUKgPcWeQ"},
+                {"id": "UC_grGcaDW3AUszA8_MVGyJg"},
+            ]
+        }
+        with patch.object(
+            youtube_upload,
+            "_google_modules",
+            return_value={"build": MagicMock(return_value=youtube)},
+        ):
+            channel_id = youtube_upload._channel_id_for_credentials(
+                MagicMock(),
+                expected_channel_id="UC_grGcaDW3AUszA8_MVGyJg",
+            )
+
+        self.assertEqual(channel_id, "UC_grGcaDW3AUszA8_MVGyJg")
+        youtube.channels.return_value.list.assert_called_once_with(part="id", mine=True, maxResults=50)
 
     def test_unknown_profile_is_rejected(self):
         with self.assertRaises(youtube_upload.YouTubeUploadConfigurationError):

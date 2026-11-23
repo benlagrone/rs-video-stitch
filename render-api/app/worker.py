@@ -18,9 +18,10 @@ from app.bible_workflow import (
     repair_and_animate_bible_scene,
     regenerate_bible_scene_stills,
 )
+from app.footage_copy import prepare_footage_copy, render_options_for_footage
 from app.grok_video_workflow import run_grok_video_job
 from app.suite_workflow import run_suite_blockout, run_suite_scene_video
-from app.storage import ROOT as STORAGE_ROOT, job_log_path, p_input
+from app.storage import ROOT as STORAGE_ROOT, job_log_path, p_input, p_work, read_project_state
 
 POLL_INTERVAL = 1.0
 JOB_LEASE_SECONDS = 120
@@ -184,6 +185,7 @@ def loop(stop_event: Event | None = None) -> None:
                 is_phronesis_video = payload.get("workflow") == "phronesis-video"
                 is_suite_blockout = payload.get("workflow") == "suite-3d-render"
                 is_suite_scene_video = payload.get("workflow") == "suite-scene-video"
+                is_footage_copy = payload.get("workflow") == "footage-copy"
                 if payload.get("workflow") == "tiktok-highlight":
                     final_path = render_highlight(
                         job.project_id, dict(payload.get("plan") or {}), progress=progress, log=log,
@@ -237,6 +239,9 @@ def loop(stop_event: Event | None = None) -> None:
                         progress=progress,
                         log=log,
                     )
+                elif is_footage_copy:
+                    prepare_footage_copy(job.project_id, progress=progress, log=log)
+                    final_path = p_work(job.project_id) / "footage-copy.json"
                 elif is_bible_title_card:
                     regenerate_image = bool(payload.get("regenerateImage", True))
                     render_video = bool(payload.get("renderVideo", False))
@@ -269,8 +274,21 @@ def loop(stop_event: Event | None = None) -> None:
                             progress=progress,
                             log=log,
                         )
+                    prepared = prepare_footage_copy(
+                        job.project_id,
+                        progress=lambda stage, value: progress(stage, value * 0.25),
+                        log=log,
+                    )
+                    if prepared.get("active"):
+                        options = render_options_for_footage(options, read_project_state(job.project_id) or {})
+
                     def render_progress(stage: str, value: float) -> None:
-                        progress(stage, 0.5 + value * 0.49 if is_bible_video else value)
+                        if is_bible_video:
+                            progress(stage, 0.5 + value * 0.49)
+                        elif prepared.get("generated"):
+                            progress(stage, 0.25 + value * 0.74)
+                        else:
+                            progress(stage, value)
 
                     final_path = render_project(
                         job.project_id,
@@ -300,6 +318,7 @@ def loop(stop_event: Event | None = None) -> None:
                         else "scene-video" if is_suite_scene_video
                         else "still-image" if is_scene_stills
                         else "title-card" if is_bible_title_card and not payload.get("renderVideo", False)
+                        else "footage-copy" if is_footage_copy
                         else "video"
                     ),
                     size=size,

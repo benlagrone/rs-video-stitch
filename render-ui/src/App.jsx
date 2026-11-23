@@ -22,6 +22,7 @@ import { VoiceSamples } from './VoiceSamples.jsx';
 import { ThumbnailStyleSelector } from './ThumbnailStyleSelector.jsx';
 import { TikTokHighlightPanel } from './TikTokHighlightPanel.jsx';
 import { SceneProductionControls } from './SceneProductionControls.jsx';
+import { VirtualStagingPanel } from './VirtualStagingPanel.jsx';
 import { TikTokVideoPreview } from './TikTokVideoPreview.jsx';
 import { completedTikTokHighlight, refreshTikTokPreviewVideo, selectTikTokPreviewVideo } from './tiktokPreview.js';
 import { LECROWN_TIKTOK_DEFAULTS, resolvedTikTokAi, tikTokPreferences, tikTokVideoKey } from './tiktokSettings.js';
@@ -355,6 +356,8 @@ export function App() {
   const [draggedImageName, setDraggedImageName] = useState('');
   const [selectedImageName, setSelectedImageName] = useState('');
   const [isClassifyingRooms, setIsClassifyingRooms] = useState(false);
+  const [virtualStagingPlan, setVirtualStagingPlan] = useState(null);
+  const [stagingPlanEpoch, setStagingPlanEpoch] = useState(0);
   const [correctingRoomName, setCorrectingRoomName] = useState('');
   const [useIntro, setUseIntro] = useState(true);
   const [introLines, setIntroLines] = useState(['', '', '', '', '', '']);
@@ -893,6 +896,8 @@ export function App() {
     setImageHeaders({});
     setImageLabelEnabled({});
     setImageRoomInfo({});
+    setVirtualStagingPlan(null);
+    setStagingPlanEpoch((current) => current + 1);
     setDraggedImageName('');
     setSelectedImageName('');
     setUseIntro(true);
@@ -1025,6 +1030,8 @@ export function App() {
       setImageHeaders(imageHeadersFromProject(state, persistedScenes));
       setImageLabelEnabled(state.imageLabelEnabled || {});
       setImageRoomInfo(state.imageRoomInfo || {});
+      setVirtualStagingPlan(state.photoEnhancement || null);
+      setStagingPlanEpoch((current) => current + 1);
       setUseIntro(state.useIntro ?? true);
       const parsedTitleCard = titleCardFromScript(scriptFromProject(state, persistedScenes), state.scriptTitle || state.title);
       const savedLeadLines = leadLinesFromState(state, '');
@@ -1584,6 +1591,23 @@ export function App() {
       });
       setLastSavedAt(new Date((result.state?.updatedAt || Date.now() / 1000) * 1000).toLocaleString());
       setSavedProjectId(resolvedProjectId);
+      if (sourceFootage.length) {
+        setStatus('Transcribing the footage and writing the lead card and transitions');
+        const copy = await request(`/v1/projects/${encodeURIComponent(resolvedProjectId)}/footage-copy`, { method: 'POST' });
+        if (copy.jobId) {
+          let copyJob = { status: 'QUEUED', progress: 0, stage: 'QUEUED' };
+          while (copyJob.status !== 'SUCCEEDED' && copyJob.status !== 'FAILED' && copyJob.status !== 'CANCELLED') {
+            copyJob = await request(`/v1/jobs/${encodeURIComponent(copyJob.jobId || copy.jobId)}`);
+            setStatus(`Writing the lead card and transitions: ${copyJob.stage || copyJob.status} (${Math.round((copyJob.progress || 0) * 100)}%)`);
+            if (copyJob.status === 'SUCCEEDED' || copyJob.status === 'FAILED' || copyJob.status === 'CANCELLED') break;
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+          }
+          if (copyJob.status !== 'SUCCEEDED') {
+            throw new Error(copyJob.error || 'The footage transcript could not be written');
+          }
+          await loadProject(resolvedProjectId);
+        }
+      }
       setStatus('Project saved');
       await refreshVersions({ force: true });
       await refreshProjects();
@@ -2918,7 +2942,7 @@ export function App() {
             <section className="footage-panel" aria-label="Source footage">
               <div className="loading-zone-heading">
                 <h3>Source Footage</h3>
-                <span>Leader, text, transitions, and logo apply to this sequence</span>
+                <span>Saving transcribes the clips and writes the lead card, transitions, and descriptions</span>
               </div>
               <div className="footage-list">
                 {sourceFootage.map((clip, index) => (
@@ -2955,6 +2979,24 @@ export function App() {
                 Save room info
               </button>
             </div>
+            <VirtualStagingPanel
+              key={`${resolvedProjectId}:${stagingPlanEpoch}`}
+              images={images}
+              propertyAddress={propertyAddress}
+              initialPlan={virtualStagingPlan}
+              request={request}
+              projectId={resolvedProjectId}
+              onEnsureUploaded={() => uploadAssetItems(images, 'images')}
+              onPlan={setVirtualStagingPlan}
+              onStaged={(staged) => {
+                setImages((current) => (
+                  current.some((image) => image.name === staged.filename)
+                    ? current
+                    : [...current, { name: staged.filename, url: apiUrl(apiBase, staged.url), persisted: true }]
+                ));
+                setStatus(`Enhanced ${staged.source}`);
+              }}
+            />
             {unassignedImagePreviews.length > 0 ? <>
               <div className="loading-zone-heading">
                 <h3>Image Loading Zone</h3>
